@@ -39,8 +39,8 @@ from openai import AsyncOpenAI, OpenAI
 from pydantic import BaseModel, Field
 
 DEFAULT_OPENROUTER_HEADERS: dict[str, str] = {
-    "HTTP-Referer": "https://github.com/arterm-sedov/cmw-platform-agent",
-    "X-Title": "CMW Platform Agent",
+    "HTTP-Referer": "https://github.com/arterm-sedov/materials-kg",
+    "X-Title": "Materials Knowledge Graph Agent",
 }
 
 

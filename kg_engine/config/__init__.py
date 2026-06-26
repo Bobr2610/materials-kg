@@ -1,4 +1,4 @@
-"""Configuration package for rag_engine."""
+"""Configuration package for kg_engine."""
 
 from kg_engine.config.schemas import (
     DirectEmbeddingConfig,

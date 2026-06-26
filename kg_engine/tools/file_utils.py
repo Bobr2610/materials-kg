@@ -228,7 +228,7 @@ class FileUtils:
 
         try:
             headers = {
-                "User-Agent": "CMW-RAG-Engine/1.0 (+https://github.com/arterm-sedov/cmw-rag) Mozilla/5.0"
+                "User-Agent": "Materials-KG/1.0 (+https://github.com/arterm-sedov/materials-kg) Mozilla/5.0"
             }
 
             response = requests.get(url, headers=headers, stream=True, timeout=60, allow_redirects=True)

@@ -327,7 +327,7 @@ class FileUtils:
         try:
             # Add polite bot identification headers
             headers = {
-                "User-Agent": "CMW-Platform-Agent/1.0 (+https://github.com/arterm-sedov/cmw-platform-agent) Mozilla/5.0"
+                "User-Agent": "Materials-KG/1.0 (+https://github.com/arterm-sedov/materials-kg) Mozilla/5.0"
             }
 
             # First make a HEAD request to get Content-Type
