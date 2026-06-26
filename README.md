@@ -1,431 +1,50 @@
----
-emoji: 🕵🏻‍♂️
-colorFrom: blue
-colorTo: blue
-sdk: gradio
-sdk_version: 6.10.0
-app_file: agent_ng/app_ng_modular.py
-pinned: true
-hf_oauth: true
-hf_oauth_expiration_minutes: 480
-license: mit
-title: CMW Copilot
-python_version: 3.12
----
+# Materials Knowledge Graph
 
-# Comindware Analyst Copilot
+Knowledge graph + search-analytics system for materials science. Links articles, experiments, materials, properties, modes, equipment, research teams, and conclusions into a queryable graph with LLM-powered entity extraction.
 
-**Authors:**  
+### Architecture
 
-- [**Arte(r)m Sedov**](https://github.com/arterm-sedov/)
-- [**Marat Mutalimov**](https://github.com/Dagdaf)
-
-**Repository:** [https://github.com/arterm-sedov/cmw-platform-agent](https://github.com/arterm-sedov/cmw-platform-agent)
-
-[Ask DeepWiki](https://deepwiki.com/arterm-sedov/cmw-platform-agent)
-
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/arterm-sedov/cmw-platform-agent)
-
-## Overview
-
-The Comindware Analyst Copilot is a LangChain-native AI agent designed for creating and managing entities within the CMW Platform. It translates natural language requests into CMW Platform API calls, enabling users to create templates, attributes, workflows, and business processes through conversational AI.
+```
+materials-kg/
+  kg_engine/
+    graph/          # Knowledge graph: entities, relations, extraction, query, tools
+    retrieval/      # Vector search (ChromaDB, reranking, embeddings)
+    llm/            # LLM manager, agent factory, fallback
+    agent/          # LangChain agent, streaming, session management
+    api/            # Gradio UI + REST API
+    core/           # Document processing, chunking, indexing
+    storage/        # Vector store adapters
+    tools/          # LangChain tools for RAG
+    config/         # Settings, model registry
+    utils/          # Shared utilities
+    tests/          # Test suite
+```
 
 ### Key Capabilities
 
-- **CMW Platform Integration**: Create and manage templates, attributes, forms, and business processes
-- **Multi-Provider LLM Support**: Support for 6 LLM providers with manual selection
-- **Multi-Turn Conversations**: Maintains context and tool call history across conversation turns
-- **Real-Time Streaming**: Live response streaming with tool usage visualization
-- **Session Isolation**: Each user gets isolated agent instances with proper cleanup
-- **Internationalization**: Full support for English and Russian UI
-- **Comprehensive Tool Suite**: 71 specialized tools
+- **Entity extraction**: Regex + LLM extraction of materials, properties, experiments, modes, equipment, teams
+- **Graph query**: `query_by_material_and_mode("Ti6Al4V", "annealing")` → properties, experiments, conclusions
+- **Hybrid search**: Combine vector similarity with graph traversal for enriched results
+- **Data gap analysis**: Identify materials without measured properties or missing mode combinations
+- **5 LangChain tools**: `query_material`, `query_property`, `query_related`, `graph_data_gaps`, `graph_stats`
+- **RAG pipeline**: Full retrieval-augmented generation over materials documents
+
+### Quick Start
 
-### Target Use Cases
-
-- **Platform Configuration**: Automate CMW Platform setup through natural language
-- **Entity Management**: Batch creation and management of platform entities
-- **Developer Evaluation**: Assess agent capabilities for CMW Platform integration
-- **Manager Assessment**: Evaluate AI agent technology for business process automation
-
-## Architecture
-
-The system uses a LangChain-native modular architecture designed for reliability and maintainability:
-
-```mermaid
-graph TD
-    subgraph "UI Layer"
-        A1[Gradio Tabs]
-        A2[UI Manager]
-    end
-    
-    subgraph "Agent Core"
-        B1["CmwAgent<br/>Orchestrator"]
-        B2["LLMManager<br/>Multi-LLM"]
-        B3["SessionManager<br/>Isolation"]
-        B4["ErrorHandler<br/>Recovery"]
-    end
-    
-    subgraph "Tools (71)"
-        C1["CMW Platform<br/>47 tools"]
-        C2["Utility Tools<br/>24 tools"]
-    end
-    
-    subgraph "APIs"
-        D1["CMW Platform APIs"]
-    end
-    
-    A1 --> B1
-    A2 --> B1
-    B1 --> B2
-    B1 --> B3
-    B1 --> B4
-    B1 --> C1
-    B1 --> C2
-    C1 --> D1
-    C2 --> D1
-```
-
-### Core Components
-
-- **CmwAgent** (`langchain_agent.py`) - Main orchestrator using pure LangChain patterns
-- **LLMManager** (`llm_manager.py`) - Multi-provider management with persistent instances
-- **Tool System** (`tools/`) - LangChain tools
-- **UI Layer** (`tabs/`) - Gradio modular tabs with real-time updates
-- **Session Management** (`session_manager.py`) - User isolation and cleanup
-- **Error Handler** (`error_handler.py`) - Vector similarity error classification
-- **Memory Management** (`langchain_memory.py`) - LangChain-native conversation memory
-- **Streaming System** (`native_langchain_streaming.py`) - Token-by-token streaming
-- **History Compression** (`history_compression.py`) - Semantic compression to prevent context overflow
-
-### Key Design Decisions
-
-- **LangChain-Native**: Pure LangChain patterns ensure compatibility and future-proofing
-- **Multi-Provider Support**: Support for 6 LLM providers with manual selection and context preservation
-- **Session Isolation**: User data separation and clean conversation contexts
-- **Modular Architecture**: Clear separation of concerns for maintainability
-
-## CMW Platform Integration
-
-The agent provides comprehensive integration with the CMW Platform through specialized tools:
-
-### Tool Categories
-
-**CMW Platform Tools**
-
-- **Applications & Templates**: List/create applications, manage templates, ontology/schema helpers, entity URLs, import/export
-- **Attributes**: All supported attribute types (Text, Boolean, DateTime, Decimal, Document, Drawing, Duration, Image, Record, Role, Account, Enum) plus get, create, edit, delete, archive
-- **Templates, forms, toolbars, buttons, records**: Template and record CRUD, datasets, forms, toolbars, buttons, record files
-
-**Utility Tools**
-
-- **Search & Research**: Web search, Wikipedia, ArXiv, deep research
-- **Code Execution**: Multi-language support (Python, Bash, SQL, C, Java)
-- **File Analysis**: CSV, Excel, images, PDFs; image text via vision models (`analyze_image_ai`), not local OCR
-- **Image/Video Processing**: Analysis, transformation, generation, combination
-- **Mathematical Operations**: Basic arithmetic and advanced functions
-
-### Example Workflows
-
-1. **Create Customer Template**: "Create a customer template with name, email, phone, and address fields"
-2. **Set Up Workflow**: "Create a workflow for customer onboarding with approval steps"
-3. **Bulk Data Import**: "Import customer data from CSV and create records"
-
-## LLM Provider System
-
-The agent supports multiple LLM providers with manual selection:
-
-### Supported Providers
-
-- **OpenRouter** (Default) - Multiple models with 100K-2M token limits, full tool support
-- **Google Gemini** - 1M+ token limits, excellent reasoning, full tool support  
-- **Groq** - Fast inference, 131K token limits, full tool support
-- **HuggingFace** - Local and cloud-based models, 1K-3K token limits, no tool support
-- **Mistral** - European AI models with tool support
-- **GigaChat** - Russian language models with tool support
-
-### Provider Management
-
-- Manual provider selection through UI
-- Context preservation when switching providers
-- Sophisticated error classification and recovery suggestions
-- Provider-specific error handling and retry timing
-- Session-based provider state management
-
-## Getting Started
-
-### Prerequisites
-
-- Python 3.12+
-- CMW Platform access credentials
-- At least one LLM provider API key
-
-### Installation
-
-1. **Clone and setup**:
-
-   ```bash
-   git clone https://github.com/arterm-sedov/cmw-platform-agent
-   cd cmw-platform-agent
-   pip install -r requirements.txt
-   ```
-
-2. **Configure environment**:
-
-   ```bash
-   export GEMINI_KEY="your_gemini_key"
-   export OPENROUTER_API_KEY="your_openrouter_key"
-   export CMW_DEFAULT_LANGUAGE="en"
-   ```
-
-3. **Run the application**:
-
-   ```bash
-   python agent_ng/app_ng_modular.py
-   ```
-
-### Basic Configuration
-
-Set up your CMW Platform connection in the Config tab:
-- Platform URL
-- Username and password
-- Test connection
-
-## Key Features
-
-### Multi-Turn Conversations
-
-- LangChain-native memory management with `ConversationBufferMemory`
-- Tool call context preservation across conversation turns
-- Session-specific memory instances with automatic cleanup
-
-### Real-Time Streaming
-
-- Token-by-token streaming using LangChain's `astream()` and `astream_events()`
-- Tool usage visualization with real-time updates
-- No artificial delays - uses LangChain's built-in streaming capabilities
-
-### Session Isolation
-
-- User-specific agent instances with proper isolation
-- Session-based file handling and resource management
-- Automatic cleanup and memory management
-
-### File Upload & Analysis
-
-The agent supports uploading and analyzing various file types through Gradio's MultimodalTextbox:
-
-- **Documents**: PDF, DOCX, XLSX, PPTX, TXT, Markdown, HTML
-- **Data**: CSV, TSV, Excel (with pandas-powered analysis)
-- **Media**: Images (PNG, JPG, etc.), video, audio
-- **Code**: Python, JavaScript, SQL, and other text-based formats
-
-Files are automatically registered in a session-isolated registry and accessible to analysis tools (`read_text_based_file`, `analyze_csv_file`, `analyze_excel_file`, `analyze_image`, etc.). See `docs/20260423_FILE_HANDLING_FIX_AND_TOOL_SCHEMA_ANALYSIS.md` for implementation details.
-
-### Internationalization
-
-- Full support for English and Russian languages
-- Dynamic language switching using Gradio's I18n system
-- Complete UI component translations
-
-### Error Recovery
-
-- Vector similarity for error pattern matching
-- Sophisticated error classification and recovery suggestions
-- Manual provider switching with context preservation
-- Graceful degradation when components fail
-
-### Token Budget Tracking & Cost Management
-
-- **Accurate Token Counting**: Uses `tiktoken` with `cl100k_base` encoding, with API-reported tokens prioritized as ground truth
-- **Real-Time Budget Snapshots**: Computed at key decision points for immediate visibility
-- **Token Breakdown Display**: Three components shown:
-  - **Context**: Conversation messages (system, user, assistant) - excludes tool results
-  - **Tools**: Tool result messages (ToolMessage content) returned by executed tools
-  - **Overhead**: Tool schemas sent with every LLM call (constant per tool set, ~600 tokens per tool)
-- **Cost Tracking**: For OpenRouter models, cost is computed from token counts and prices fetched at startup via the endpoints API (`/models/{author}/{slug}/endpoints`). The API returns prices per token, which we convert to per 1K tokens: `cost = (input_tokens/1000)*prompt_price_per_1k + (output_tokens/1000)*completion_price_per_1k`
-- **Multi-Level Statistics**: 
-  - Per-turn cost and token counts (displayed in chat after each QA turn, including zero cost)
-  - Per-conversation totals (session-scoped) with integrated cost display
-  - Overall totals (across all conversations) with cost tracking
-- **Input/Output Breakdown**: Token counts separated by input/output in stats pane
-- **Overhead Adjustment Factor** (`OVERHEAD_ADJUSTMENT_FACTOR = 0.8`): Heuristic factor applied to tool schema overhead to better match API-reported tokens, compensating for differences between `tiktoken` and provider tokenization
-- **Event-Driven UI Updates**: Immediate budget and cost visibility without polling
-
-**Note**: The estimate may differ from actual API tokens due to provider-specific tokenization. The overhead adjustment factor (0.8) brings estimates within 1-2% of API-reported values by accounting for these differences. See also `docs/OPENROUTER_PRICING.md` for OpenRouter-specific details.
-
-### History Compression
-
-- **Semantic Compression**: Automatically compresses conversation history when token usage approaches critical thresholds (≥90%)
-- **Proactive Compression**: Mid-turn compression prevents context overflow before it occurs
-- **UI Safety**: Compression only affects agent memory (for LLM context), not UI display or downloaded history files
-- **Smart Preservation**: Keeps recent conversation turns uncompressed to maintain context
-- **User Notifications**: Gradio popups show compression status and token savings
-- **Compression Stats**: Track compression count and total tokens saved per conversation
-- **Error Handling**: Graceful degradation - continues with uncompressed history on failure
- - **Configurable**: History compression can be toggled per-session in the sidebar and globally via `HISTORY_COMPRESSION_ENABLED` env flag (see `.env.example`)
-
-### Debug System
-
-- Real-time debug output with categorized logging
-- Performance metrics and usage analytics
-- LangSmith tracing integration for observability
-
-## Technical Stack
-
-### Core Framework
-
-- **LangChain** - AI framework with native conversation management
-- **Gradio** - Modern web UI with modular tab architecture
-- **Pydantic** - Data validation and serialization
-
-### Observability
-
-- **LangSmith** - Primary tracing and debugging
-- **Langfuse** - Alternative observability platform
-
-### Key Libraries
-
-- `requests` - HTTP client for API calls
-- `pandas` - Data analysis and CSV processing
-- `pillow` - Image processing and manipulation
-- `tiktoken` - Token counting and optimization
-- `python-dotenv` - Environment variable management
-
-## Troubleshooting
-
-### Common Issues
-
-1. **LLM Not Loading**
-   - Check API keys in environment variables
-   - Verify provider availability and rate limits
-   - Check network connectivity
-
-2. **Tool Calls Failing**
-   - Verify CMW Platform connection in Config tab
-   - Check tool permissions and platform access
-   - Review error logs in Logs tab
-
-3. **Session Issues**
-   - Clear browser cache and restart application
-   - Check session isolation in debug logs
-   - Verify proper cleanup in session manager
-
-4. **Memory Issues**
-   - Check session-specific memory instances
-   - Verify conversation context preservation
-   - Monitor token usage and limits
-
-5. **Streaming Problems**
-   - Verify LangChain version compatibility
-   - Check streaming configuration
-   - Monitor real-time debug output
-
-### Debug Mode
-
-Enable detailed logging:
 ```bash
-export CMW_DEBUG_MODE=true
-export CMW_VERBOSE_LOGGING=true
+# Install
+pip install -r kg_engine/requirements.txt
+
+# Build knowledge graph from document chunks
+python kg_engine/scripts/build_knowledge_graph.py --source chunks.json --output graph.json
+
+# Run tests
+python -m pytest kg_engine/tests/test_graph.py -v
 ```
 
-Check logs in the Logs tab or console output for detailed error traces and execution flow.
+### Questions it answers
 
-## Development
-
-### Adding New Tools
-1. Create tool function in appropriate category directory
-2. Add Pydantic models for parameters in `tools/models.py`
-3. Register tool in `tools/tools.py`
-4. Test with various LLM providers
-
-### Adding New LLM Providers
-1. Add provider enum to `LLMProvider` in `llm_manager.py`
-2. Add configuration to `LLM_CONFIGS`
-3. Implement provider-specific initialization
-4. Test with tool calling and streaming
-
-### Code Style
-- Follow LangChain patterns and conventions
-- Use Pydantic for data validation
-- Run linter: `ruff check agent_ng/ tools/`
-- Fix all linting issues: `ruff check --fix --unsafe-fixes agent_ng/ tools/`
-
-## Documentation
-
-- **[API Schemas](cmw_open_api/)** - Complete OpenAPI specifications for CMW Platform integration
-- **[Implementation Reports](docs/)** - Detailed progress reports and technical analysis
-
-## Contributing
-
-This is an experimental research project. Contributions are welcome in the form of:
-
-- **Bug Reports** - Issues with agent reasoning or tool usage
-- **Feature Requests** - New tools or capabilities for CMW Platform integration
-- **Performance Improvements** - Optimizations for speed or accuracy
-- **Documentation** - Improvements to guides and code comments
-
-### Development Setup
-
-1. **Create and activate virtual environment**:
-
-   Linux / Mac:
-   ```bash
-   python3 -m venv .venv
-   source .venv/bin/activate
-   ```
-
-   WSL (separate venv so Windows and WSL can run in parallel):
-   ```bash
-   python3 -m venv .venv-wsl   # or .venv-ubuntu
-   source .venv-wsl/bin/activate
-   ```
-
-   Windows (PowerShell):
-   ```powershell
-   python -m venv .venv
-   .venv\Scripts\Activate.ps1
-   ```
-
-2. **Install dependencies**:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-3. **Configure environment**:
-   ```bash
-   cp .env.example .env
-   # Edit .env and set at least one LLM provider API key
-   ```
-
-4. **Run the application**:
-   ```bash
-   python agent_ng/app_ng_modular.py
-   # Gradio UI starts on the port configured by GRADIO_DEFAULT_PORT in .env (default 7860)
-   ```
-   The app starts even without valid API keys (the UI is fully functional; chat requests return auth errors until a valid key is configured).
-
-5. **Run linter**:
-   ```bash
-   ruff check agent_ng/ tools/      # Lint core directories
-   python lint.py                    # Lint only changed files vs HEAD
-   python lint.py --all              # Lint entire repo
-   ```
-
-6. **Run tests**:
-   ```bash
-   python -m pytest agent_ng/_tests/           # All tests
-   python -m pytest agent_ng/_tests/test_x.py  # Single file
-   python -m pytest -k "pattern"               # Filter by name
-   ```
-   Integration tests require `CMW_INTEGRATION_TESTS=1` plus a live CMW Platform server and are skipped by default.
-
-7. **Typecheck**:
-   ```bash
-   mypy agent_ng/
-   ```
-
-### External Services
-
-- **LLM providers**: At least one API key is needed for chat functionality (`OPENROUTER_API_KEY`, `GEMINI_KEY`, `GROQ_API_KEY`, `MISTRAL_API_KEY`, `GIGACHAT_API_KEY`, or `HUGGINGFACE_API_KEY`). See `.env.example` for all options.
-- **CMW Platform** (optional): Platform integration tools require `CMW_BASE_URL`, `CMW_LOGIN`, `CMW_PASSWORD`. Utility tools work without it.
-- **No Docker, databases, or message queues** are required. The app is a single Python process.
+- *What has been done on alloy X under processing mode Y and what was the effect on property Z?*
+- *Which materials have been tested for property P with value > V?*
+- *What related entities exist for material M?*
+- *Where are the data gaps — which material-mode combinations are unexplored?*

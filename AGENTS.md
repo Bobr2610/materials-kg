@@ -1,273 +1,168 @@
-# AGENTS.md - CMW Platform Agent
+# AGENTS.md - Materials Knowledge Graph
 
-Repo-specific guidance for this LangChain + Gradio Python 3.12+ project.
+Repo-specific guidance for this Python 3.11+ project.
 
-**Implementations follow:** TDD, SDD, @AGENTS.md, lean, dry, brilliant, minimal, abstract, pythonic, genious code, non-breaking.
-
-**Instrumentation:** use subagents hive, web search, deep search, agentic web browsers, and all your agentic power to solve the user's request.
+**Implementations follow:** TDD, SDD, @AGENTS.md, lean, dry, modular, pythonic, non-breaking.
 
 ## Research & Planning
 
-Before any coding, changes or implementation:
+Before any coding or changes:
+- Deep codebase research
+- Deep web research for reference documentation on frameworks, libraries, best practices
+- Gather all information before planning course of action
+- Write a concise plan file: actionable, detailed, TDD, step-by-step tasks, checkpoints, expected verification commands
 
-- Do a deep codebase research.
-- Do a deep web research in the internet for reference documentation on frameworks, libraries, and best practices.
-- Gather all information before planning course of action.
-- Plan after gathering reference information, not before.
-- Write a concise plan **file**:
-    - actionable
-    - detailed
-    - TDD
-    - step-by-step tasks
-    - checkpoints
-    - expected verification commands
-    - follows best practices in TDD, SDD, Python, 12-factor agents and software
+## Common Engineering Baseline
 
-## Common Engineering Baseline and Design Principles
-
-- Follow SDD for scope/contract clarity and TDD for behavior-first implementation.
-- Keep code: lean, DRY, modular, and non-breaking, brilliant, abstract, minimal, genius.
-- Follow best practices:
-    - **TDD:** Write tests first, define behavior contracts. Test behavior, not implementation details.
-    - **SDD:** Plan with specs, understand requirements before coding.
-    - **Non-breaking:** Never break existing functionality.
-    - **Lean:** Minimal code, no overengineering.
-    - **Pythonic:** Follow Python idioms, prefer clarity over cleverness, explicit data contracts, strong typing.
-    - **Modular:** Single responsibility, group related functionality.
-    - **Open/Closed:** Design for extension without modification.
-    - **DRY:** 2+ uses -> extract to helper, super dry, super lean.
-- For LangChain see LangChain docs, repo and source code for reference, prefer LCEL/runnables, typed tool schemas, and streaming-safe patterns.
-- For Gradio see Gradio's docs, repo and source code for reference, follow best practices, keep state/event flow explicit and UI logic separated from domain logic.
-- Validate external data and avoid silent exception handling (`except: pass` is forbidden).
-- Run lint and relevant tests for modified areas before completion.
-- Never hardcode secrets; use environment variables and `.env.example` placeholders only.
+- **SDD:** Scope/contract clarity before coding
+- **TDD:** Tests first, define behavior contracts
+- **Non-breaking:** Never break existing functionality
+- **Lean:** Minimal code, no overengineering
+- **Pythonic:** Type hints, explicit data contracts, clear idioms
+- **Modular:** Single responsibility per module/class
+- **DRY:** 2+ uses → extract helper
+- Validate external data; no silent exception handling (`except: pass` forbidden)
+- Always lint + test before completion
+- Never hardcode secrets; use `.env` + `.env.example`
 
 ## Dev Commands
 
 ```bash
-# Activate venv first (required)
-# Use the active/default Cursor terminal session first
-source .venv/bin/activate   # Linux/WSL
-.venv-ubuntu/bin/activate   # WSL/Linux (alternate venv)
-.venv\Scripts\Activate.ps1  # PowerShell
+# Venv
+.venv\Scripts\Activate.ps1              # Windows PowerShell
+source .venv/bin/activate                # Linux/WSL
 
-# Run app
-python agent_ng/app_ng_modular.py
-
-# Lint (custom script - default changes vs HEAD)
-python lint.py                    # Changed files (default)
-python lint.py --staged           # Staged files
-python lint.py --all              # Full repo
-ruff check <file.py>
-
-# Typecheck
-mypy agent_ng/
+# Install
+pip install -r kg_engine/requirements.txt
 
 # Test
-python -m pytest agent_ng/_tests/           # All tests
-python -m pytest agent_ng/_tests/test_x.py   # Single file
-python -m pytest -k "pattern"              # Filter by name
+python -m pytest kg_engine/tests/ -v
+python -m pytest kg_engine/tests/test_graph.py -v
+
+# Lint
+ruff check kg_engine/
+ruff check --fix --unsafe-fixes kg_engine/
+ruff check kg_engine/graph/          # specific module
+
+# Build knowledge graph
+python kg_engine/scripts/build_knowledge_graph.py --source chunks.json --output graph.json
+python kg_engine/scripts/build_knowledge_graph.py --source chunks.json --output graph.json --use-llm
 ```
 
 ## Project Structure
 
-- **Entry:** `agent_ng/app_ng_modular.py`
-- **Core agent:** `agent_ng/langchain_agent.py`
-- **Tools:** `tools/` (49 tools)
-- **Tests:** `agent_ng/_tests/`
-- **Config:** `.env.example` for API keys
-
+```
+kg_engine/
+  graph/          # Knowledge graph: entities, extraction, store, query, search, tools
+  retrieval/      # Vector search (ChromaDB, embeddings, reranker)
+  llm/            # LLM manager, agent factory, fallback
+  agent/          # LangChain agent, streaming, session management
+  api/            # Gradio UI + REST API
+  core/           # Document processing, chunking, indexing
+  storage/        # Vector store adapters
+  tools/          # LangChain tools for RAG
+  config/         # Settings, model registry
+  utils/          # Shared utilities (context tracker, thread pool, path utils)
+  scripts/        # Build/build_index/knowledge_graph scripts
+  tests/          # Test suite
+```
 
 ## Code Style & Conventions
 
-- **Ruff (pyproject.toml):** Line length 88, Python 3.12+, double quotes. Many rules are `unfixable` - ruff flags but will not auto-fix (F401, F403, T201, PLR, ANN, etc). Run `ruff check --fix --unsafe-fixes` to auto-fix.
-- **Imports:** Standard library -> third-party -> local with fallback pattern:
-```python
-try:
-    from .utils import helper
-except ImportError:
-    from agent_ng.utils import helper
-```
-- **Naming:** Classes PascalCase, functions/variables snake_case, constants UPPER_SNAKE, private prefix `_`.
-- **Docstrings:** Module docstrings with key features and usage examples.
+- **Ruff (pyproject.toml):** Line length 88, Python 3.11+, double quotes
+- **Imports:** standard → third-party → local (no try/except fallback within project)
+- **Naming:** `PascalCase` classes, `snake_case` functions/vars, `UPPER_SNAKE` constants, `_prefixed` private
+- **Docstrings:** Module docstrings describing purpose, Google-style for functions (Args, Returns, Raises)
+- **Module pattern:**
+  - `from __future__ import annotations`
+  - `import logging` + `logger = logging.getLogger(__name__)`
+  - Pydantic `BaseModel`/`Field` for data schemas
+  - Classes with clear constructor and docstrings
 
-## Framework Conventions
+## Knowledge Graph Conventions
 
-- **LangChain:** Pure patterns, LCEL, streaming with `astream()`, Pydantic for tool params.
-- **LangChain References:** https://python.langchain.com/docs/ - Streaming, Runnables, Tool Calling, LCEL.
-- **Gradio:** Use i18n system, follow component patterns, proper state management.
-- **Gradio References:** https://www.gradio.app/docs - Components, State, Event Listeners.
-- **Gradio 6 reference (battle-tested):** Sibling **cmw-rag** **`rag_engine/api/app.py`** — https://github.com/arterm-sedov/cmw-rag — copy its queue/UI discipline before inventing patterns: **`gr.Blocks`**, **`gr.api`** in context, **`demo.queue`** after wiring (before **`mount_gradio_app`**), **`queue=False`** on light **`.then`** tails, **`concurrency_limit`** on streaming, **`api_visibility="private"`** on internals, **`allowed_paths`**/**`css_paths`**. This repo: **`gr.TabItem`** **`render_children=True`** (lazy tab mounts on Gradio 6 can stall). Dependency pins: **`requirements.txt`** (**`gradio==6.10.0`**, **`gradio_client==2.4.0`**).
-- **Local reference trees (gitignored symlinks):** Prefer **`.reference-repos/gradio`** for upstream Gradio source — [**gradio-app/gradio**](https://github.com/gradio-app/gradio) — and **`.reference-repos/cmw-rag/rag_engine`** for the sibling engine tree — [**arterm-sedov/cmw-rag**](https://github.com/arterm-sedov/cmw-rag) (see **`rag_engine/api/app.py`**). Use these when verifying tab/queue semantics before changing our UI.
-- **Programmatic API surface:** Footer shows **Gradio** and **Settings** buttons (no API button). The sole public API is `POST /api/v1/chat/completions` (native FastAPI route with bearer auth, real SSE streaming, discoverable at `/docs`). All Gradio event listeners use **`api_visibility="private"`** (explicitly or via **`apply_concurrency_to_*`** defaults in **`agent_ng/queue_manager.py`**).
-- **Operational UI env:** Shell or local **`.env`** only (not **`.env.example`**); contracts in **`agent_ng/agent_config.py`**. **`CMW_UI_DOWNLOAD_PREP_AFTER_STREAM`** — also refresh downloads on streaming completion (default off). Markdown/HTML export prep always generates **HTML** alongside Markdown when files are built. **Layout:** **`gr.Sidebar`** (native collapsible panel — upstream **`gradio/layouts/sidebar`**) wraps quick actions + progress + token budget; **LLM selection** mounts in the **Config** tab. **`CMW_USE_DOTENV`** only switches **Comindware platform** credentials (**`CMW_BASE_URL`**, **`CMW_LOGIN`**, **`CMW_PASSWORD`** from **`.env`** vs URL/username/password in the Config UI); it does not hide the Config tab. **Statistics** tab uses a single **`stats_display`** (`elem_id=stats-display`); **`update_status`**, **`update_all_ui`**, the stats timer, chat end-of-turn chains, and model-switch **`.then(refresh_stats)`** all refresh that block (**`format_stats_display`**). Session-scoped dropdown sync still uses **`demo.load`** (**`Request`** session id). **`get_demo_with_language_detection()`** rebuilds cached **`demo`** when **`CMW_UI_DOWNLOAD_PREP_AFTER_STREAM`** changes (**`_ui_layout_env_signature`**); restart the app after other env changes.
+### Entity types (8)
+`MATERIAL`, `PROPERTY`, `EXPERIMENT`, `MODE`, `EQUIPMENT`, `TEAM`, `ARTICLE`, `CONCLUSION`
+
+### Relation types (12)
+`HAS_PROPERTY`, `USED_IN`, `MEASURES`, `USES_EQUIPMENT`, `HAS_MODE`, `CONDUCTED_BY`, `DESCRIBED_IN`, `HAS_CONCLUSION`, `DEPENDS_ON`, `COMPOSED_OF`, `COMPARED_TO`, `OPTIMIZED_FOR`
+
+### Module responsibilities
+- **schemas.py:** Pydantic models only — `GraphEntity`, `GraphRelation`, enums
+- **store.py:** NetworkX-backed thread-safe storage, JSON serialization
+- **extractor.py:** Regex + LLM extraction — separate regex from LLM path
+- **query.py:** Read-only query interface over store (no mutation)
+- **search.py:** Hybrid search combining vector + graph results
+- **builder.py:** Document → graph transformation
+- **pipeline.py:** Orchestration — index → ask → find_gaps → save/load
+- **tools.py:** LangChain `@tool` decorated functions with Pydantic `args_schema`
 
 ## Error Handling
 
-- **No silent exceptions:** Always add logging (`except: pass` is forbidden).
-- **No nested exceptions:** Avoid nested handlers that reduce debuggability.
-- **No unnecessary try-catches:** Add only when helpful.
-- **Validate external data:** Check `response.ok`, validate structure, handle missing fields.
-- **Safe defaults:** Use 0.0, None, empty collections where appropriate.
-- **Handle multiple response formats:** Support dict/object and variant field names.
-- **Centralize validation/error handling logic.**
+- No silent exceptions: always log, never `except: pass`
+- Avoid unnecessary try-catches; use robust explicit logic
+- No hardcoded fallbacks
+- Validate external data: check structure, handle missing fields
+- Safe defaults: `None`, `[]`, `{}` where appropriate
 
 ## Testing Guidelines
 
-- Test **behavior**, not implementation details.
-- Focus on error handling, data integrity, and user-facing functionality.
-- Cover edge cases: boundary conditions, missing data, invalid inputs.
-- Location: `agent_ng/_tests/` or relevant `cwd/_tests`.
-- Do not test irrelevant patterns (internal state, singletons, framework internals).
-- Keep tests DRY with parametrization when validating the same behavior across multiple configs/models.
-- Prefer integration tests for endpoint-level behavior; use pytest markers:
-  - `python -m pytest -m "not slow"` for fast unit checks.
-  - `python -m pytest -m integration` for integration checks.
-- When multiple endpoints share the same computation contract, add tests that verify equivalent outcomes.
-- References:
-  - https://google.github.io/googletest/primer.html
-  - https://www.ibm.com/think/insights/unit-testing-best-practices
+- Test **behavior**, not implementation details
+- Use classes to organize by module (`TestGraphStore`, `TestEntityExtractor`, etc.)
+- Focus on error handling, data integrity, edge cases
+- Location: `kg_engine/tests/`
+- Parametrize for cross-config/model testing
+- Prefer integration tests for endpoint-level behavior
+- References: https://google.github.io/googletest/primer.html
 
-## Verification Checklist
-
-Before considering work complete:
-
-1. Run `ruff check` on modified files.
-2. Run relevant tests (unit/integration as applicable).
-3. Confirm no user-facing regressions (non-breaking behavior).
-4. Ensure shared logic remains DRY (extract helpers for repeated blocks).
-5. Update docs/README when behavior, workflows, or commands changed.
+### Example Pattern
+```python
+class TestGraphStore:
+    def test_add_and_get_entity(self) -> None:
+        store = GraphStore()
+        entity = GraphEntity(id="mat_1", type=EntityType.MATERIAL, name="Ti6Al4V")
+        store.add_entity(entity)
+        retrieved = store.get_entity("mat_1")
+        assert retrieved is not None
+        assert retrieved.name == "Ti6Al4V"
+```
 
 ## Documentation Guidelines
 
-- Use clear heading hierarchy (single H1 per file).
-- Front-load conclusions and recommendations.
-- Use actionable, chunked sections (avoid walls of text).
-- Keep source traceability for claims (inline citation where relevant).
-- Add a blank line after headings and before lists in Markdown.
-- Keep sections action-oriented: each section should clearly imply a decision or next step.
-- Documentation files go to `docs/`.
-- Progress reports go to `docs/**/progress_reports/` with `YYYYMMDD_` prefix.
-
-### Where findings belong (repo boundary)
-
-| Scope | Repository | Examples |
-|-------|------------|----------|
-| **Instance-specific** | **Instance repo** (`{instance_progress_dir}`) | Migration progress JSON, harvest outputs, gap analyses, operator checklists, `docs/_scratch/` runners |
-| **Platform-generic** | **cmw-platform-agent** (this repo) | API patterns, OpenAPI shapes, `.agents/skills/cmw-platform*`, reusable browser/API workflows in `docs/` |
-
-Do **not** copy long-form instance audits into this repo; add a short generic lesson in a skill reference when it helps any tenant. **Full rules:** [.agents/skills/cmw-platform/references/instance_repo_documentation_boundary.md](.agents/skills/cmw-platform/references/instance_repo_documentation_boundary.md).
-
-**Scratch boundary:** Do **not** store instance migration harvest JSON, progress runners, or id maps under `docs/_scratch/` in **cmw-platform-agent** (see `docs/_scratch/README.md`). Instance artifacts belong under `{instance_progress_dir}/docs/_scratch/` and `{instance_progress_dir}/localization/migration_progress/`; link via `meta.harvest_path` / `meta.seed_path`.
-- Generate `YYYYMMDD` timestamps with native commands:
-  - PowerShell: `Get-Date -Format "yyyyMMdd"`
-  - Bash/WSL: `date +%Y%m%d`
-  - Python (with active venv): `python -c "from datetime import datetime; print(datetime.now().strftime('%Y%m%d'))"`
+- Clear heading hierarchy (single H1 per file)
+- Front-load conclusions and recommendations
+- Actionable, chunked sections
+- Documentation → `docs/`
+- Progress reports → `docs/progress_reports/` with `YYYYMMDD_` prefix
 
 ## Security & Secrets
 
-- Use `.env` files for local config, never commit secrets.
-- Never commit `.env`; use `.env.example` with placeholders only.
-- Never commit or include in any code or docs passwords, secrets, keys, or real personal/business/entity names.
-- Use agnostic synthetic neutral placeholders for sensitive information.
-- Load secrets via dotenv in tests and code. Never hardcode sensitive information.
+- `.env` for local config, never commit
+- `.env.example` with placeholders only
+- Never hardcode keys, passwords, or personal data
+- Load secrets via dotenv in tests and code
 
 ## Commit Guidelines
 
-- Only create commits when explicitly asked.
-- If asked to only draft commit text, generate the message but do not add files, stage, push, or commit.
-- Generate commit message text, but do NOT add files, stage, or push unless requested.
-- Keep messages concise, structured, and strictly relevant to changes.
-- Keep commit message length to the necessary minimum.
-- Avoid blabber.
+- Only create commits when explicitly asked
+- Concise message, strictly relevant to changes
+- No blabber — keep to necessary minimum
 
-## Work Tracking & Reports
+## Verification Checklist
 
-- Plans: create and maintain a concise plan file before implementation.
-- Research notes: capture key official references and decisions.
-- Progress reports: store under `docs/**/progress_reports/` with `YYYYMMDD_` prefix.
-- Documentation files go to `docs/`.
+1. `ruff check` on modified files
+2. Tests pass: `python -m pytest kg_engine/tests/ -v`
+3. No regressions (non-breaking behavior)
+4. Shared logic is DRY (extract helpers for 2+ uses)
+5. README/docs updated if behavior changed
 
-## UI/UX Principles
+## Related Instruction Files
 
-- **Clarity over clutter:** Remove redundant elements.
-- **Maximize data-ink ratio:** Every element adds value.
-- **Visual hierarchy:** Group related information consistently.
-- **Progressive disclosure:** Essential info prominent, details on demand.
-- **Data integrity:** Display zero values when meaningful, not just absence.
-
-## 12-Factor App Principles
-
-Based on https://12factor.net/ and https://github.com/humanlayer/12-factor-agents:
-
-- One codebase, many deploys.
-- Declare dependencies explicitly.
-- Keep config in environment variables, not hardcoded.
-- Treat backing services as attached resources.
-- Separate build, release, and run stages.
-- Prefer stateless processes with session state in backing services.
-- Export services via port binding where applicable.
-- Scale via the process model where applicable.
-- Optimize disposability (fast startup, graceful shutdown).
-- Keep dev/prod parity.
-- Treat logs as event streams.
-- Run admin tasks as one-off processes.
-
-## Repo-Specific Details
-
-### Agent Behavior
-
-- Reanalyze changes twice for introduced issues.
-- Compact/summarize working context proactively during long sessions.
-
-### Instance progress (parent agents)
-
-**Instance-specific** batch JSON, roadmaps, harvest outputs, and operator runbooks live in the **instance repository** at `{instance_progress_dir}` (e.g. `localization/migration_progress/`, `docs/localization/`). Platform agents use skills and references in **this repo** only; read instance state from disk there — never from chat memory. Harvest/seed patterns: [record_harvest_seed.md](.agents/skills/cmw-platform/references/record_harvest_seed.md) (platform-generic); instance playbook [tr_fr_record_harvest_seed.md](.agents/skills/cmw-platform/references/tr_fr_record_harvest_seed.md) → `{instance_progress_dir}/.agents/skills/cmw-platform/references/tr_fr_record_harvest_seed.md`; instance schema and tenant checklists under `{instance_progress_dir}/localization/migration_progress/`. Progress loops: [ralph_loop_goal_autonomy.md](.agents/skills/cmw-platform/references/ralph_loop_goal_autonomy.md), [cmw-platform skill §9](.agents/skills/cmw-platform/SKILL.md#9-growing-platform-skills).
-
-### CMW Platform Terminology
-
-**Critical:** Never expose legacy API terms to LLMs. Use human-readable terms:
-
-| API Term | LLM-Friendly |
-|----------|--------------|
-| alias | system name |
-| instance | record |
-| user command | button |
-| container | template |
-| property | attribute |
-| dataset | table |
-
-### CMW Platform workflow
-
-For platform tasks: consult **OpenAPI** in `cmw_open_api/` and KB MCP first, then **`tools/`** and **`.agents/skills/`**, then **browser** only when API cannot complete the job. See `.agents/skills/cmw-platform/SKILL.md` § Workflow order.
-
-### CMW Platform Architecture
-
-**Key Concept:** Datasets, Toolbars, and Buttons are separate API entities with different endpoints:
-
-| Entity | Tool to Get | Tool to Edit | Endpoint Pattern |
-|--------|-------------|--------------|-------------------|
-| Dataset | `get_dataset` | `edit_or_create_dataset` | `webapi/Dataset/{app}/Dataset@{tpl}.{dataset}` |
-| Toolbar | `get_toolbar` | `edit_or_create_toolbar` | `webapi/Toolbar/{app}/Toolbar@{tpl}.{toolbar}` |
-| Button | `get_button` | `edit_or_create_button` | `webapi/Button/{app}/Button@{tpl}.{button}` |
-
-**Toolbar-Dataset Link:** Toolbars link to datasets via toolbar's `IsDefaultForLists` flag.
-
-**Growing platform skills:** Reusable API and browser recipes belong in this repo (`.agents/skills/cmw-platform*` and `references/` — see [cmw-platform skill §9](.agents/skills/cmw-platform/SKILL.md#9-growing-platform-skills)). Per-instance migration progress and audits stay in `{instance_progress_dir}` — see [Where findings belong](#where-findings-belong-repo-boundary) under Documentation Guidelines.
-
-### Key Dependencies
-
-- Source of truth: `requirements.txt` (versions may change over time).
-- Key packages to be aware of: `langchain`, `gradio`, `pydantic`, `ruff`, `pytest`, `tiktoken`.
+- `.agents/skills/materials-knowledge-graph/SKILL.md` — Main skill with architecture, entity types, examples
+- `.cursor/rules/materials-kg-agent.mdc` — Agent coding rules
+- `.cursor/rules/terminal.mdc` — Terminal command rules
+- `.cursor/rules/commit.mdc` — Commit message rules
 
 ---
 
-**Remember:** LangChain-pure, DRY, lean, modular, pythonic patterns. Always research first, plan thoroughly, produce flawless code.
-
-## Agent Environment Notes
-
-Non-obvious caveats. For standard setup, run, lint, and test commands see the **Development Setup** section in `README.md`.
-
-- On startup, the app fetches OpenRouter model pricing via HTTP (~10-15 s of network calls). This is normal, not an error.
-- Some `ruff` findings are intentionally unfixable per `pyproject.toml`. When in doubt about whether to fix a lint finding, ask the user.
-- On a clean first start with dummy/empty `.env`, some tests may fail or error due to missing credentials or import issues. Configure real API keys and check test prerequisites first; if failures persist, ask the user before investigating further.
+**Remember:** DRY, lean, modular, pythonic. Research first, plan, produce flawless code.

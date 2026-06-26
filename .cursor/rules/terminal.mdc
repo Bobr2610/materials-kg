@@ -1,0 +1,26 @@
+---
+description: Rules for running terminal commands
+alwaysApply: true
+---
+
+When running commands in the terminal:
+
+1. ALWAYS activate venv:
+    - `.venv\Scripts\Activate.ps1` - PowerShell
+    - `.venv/bin/activate` - Linux/WSL
+
+2. Understand what is the default terminal in Cursor and use it
+3. Initialize the venv using appropriate commands for PowerShell or WSL depending on the terminal
+4. Then execute the commands
+
+Common commands:
+```bash
+# Test graph module
+python -m pytest kg_engine/tests/test_graph.py -v
+
+# Lint
+ruff check kg_engine/graph/
+
+# Build knowledge graph
+python kg_engine/scripts/build_knowledge_graph.py --source chunks.json --output graph.json
+```
