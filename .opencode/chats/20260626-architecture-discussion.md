@@ -1,6 +1,6 @@
 # Architecture Discussion — Materials Knowledge Graph
 
-> **⚠️ This is `materials-kg` repository. References to `cmw-rag` and `cmw-platform-agent` below are ONLY historical context — comparisons with those projects informed decisions. This repo is fully standalone under `kg_engine/`.**
+> **⚠️ This is `materials-kg` repository. References to source codebases below are generic examples — comparisons with those projects informed decisions. This repo is fully standalone under `kg_engine/`.**
 
 > **Date:** 2026-06-26  
 > **Context:** Выбор архитектуры для материаловедческого knowledge graph  
@@ -16,7 +16,7 @@
 
 | Approach | Pros | Cons |
 |----------|------|------|
-| Pure RAG (cmw-rag style) | Уже есть инфраструктура | Не связывает сущности, нет графовых запросов |
+| Pure RAG (vector search only) | Уже есть инфраструктура | Не связывает сущности, нет графовых запросов |
 | Pure Graph DB (Neo4j) | Естественные графовые запросы | Нужен отдельный сервер, нет текстового поиска |
 | **Hybrid (NetworkX + ChromaDB)** | **Лучшее из двух миров, in-memory, портативно** | **NetworkX не production-ready** |
 
@@ -44,7 +44,7 @@
 
 **Problem:** Как интегрировать графовые запросы в существующего LangChain-агента?
 
-**Decision:** Использовать `@tool` декоратор с Pydantic `args_schema` (как в `cmw-platform-agent`). 5 tools:
+**Decision:** Использовать `@tool` декоратор с Pydantic `args_schema` (паттерн из исходного agent-проекта). 5 tools:
 1. `query_material` — основной запрос по материалу и режиму
 2. `query_property` — поиск по свойству с фильтром значений
 3. `query_related` — связанные сущности через BFS
@@ -68,7 +68,7 @@ gaps = pipeline.find_gaps()
 
 ## References
 
-- cmw-rag: `rag_engine/` — RAG pipeline, ChromaDB storage
-- cmw-platform-agent: `agent_ng/` — LangChain agent, tools, streaming
+- Source RAG project: `rag_engine/` — RAG pipeline, ChromaDB storage (for reference)
+- Source agent project: `agent_ng/` — LangChain agent, tools, streaming (for reference)
 - NetworkX docs: https://networkx.org/documentation/stable/
 - Pydantic v2: https://docs.pydantic.dev/latest/

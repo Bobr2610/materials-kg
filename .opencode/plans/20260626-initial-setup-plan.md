@@ -1,6 +1,6 @@
 # План: Настройка проекта Materials Knowledge Graph
 
-> **⚠️ This is `materials-kg` repository. References to `cmw-rag` and `cmw-platform-agent` below are ONLY historical context — the code was ported from those projects but this repo is fully standalone. All paths, imports, and conventions use `kg_engine/`, not `rag_engine/` or `agent_ng/`.**
+> **⚠️ This is `materials-kg` repository. References to source codebases below are generic examples — the code was ported from internal RAG/agent projects but this repo is fully standalone under `kg_engine/`.**
 
 > **Created:** 2026-06-26  
 > **Status:** ✅ COMPLETE  
@@ -10,7 +10,7 @@
 
 ## Executive Summary
 
-Проект `materials-kg` создан на основе кода из `cmw-rag` (RAG engine) и `cmw-platform-agent` (LangChain agent infrastructure). Задача — сделать его самостоятельным, независимым проектом с собственной документацией, git-историей и правилами для агентов.
+Проект `materials-kg` создан на основе кода из внутренних RAG и agent-проектов. Задача — сделать его самостоятельным, независимым проектом с собственной документацией, git-историей и правилами для агентов.
 
 ### Что сделано
 
@@ -26,7 +26,7 @@
 | `.cursor/rules/` (3 rules files) | ✅ | `541ceff` |
 | `.cursor/plans/README.md` | ✅ | `3cdae51` |
 | `.opencode/.gitignore`, `plans/`, `chats/` | ✅ | `3cdae51` |
-| Удалён `.git` из `cmw-platform-agent` и `cmw-rag` | ✅ | direct |
+| Удалён `.git` из исходных проектов | ✅ | direct |
 
 ### Структура проекта
 
@@ -88,7 +88,7 @@ git commit -m "Initial commit: Materials Knowledge Graph engine"
 - `tools.py` — 5 LangChain tools
 
 ### Правила для агентов
-Созданы по образу `cmw-rag` и `cmw-platform-agent`:
+Созданы по образу исходных проектов:
 - `AGENTS.md` — comprehensive guide
 - `.agents/skills/` — skill definition
 - `.cursor/rules/` — cursor-specific rules
