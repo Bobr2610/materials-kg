@@ -31,6 +31,7 @@ materials-kg/
     tools/          # LangChain tools for RAG
     config/         # Settings, model registry
     utils/          # Shared utilities
+    scripts/        # Build scripts for knowledge graph
     tests/          # Test suite
 ```
 
@@ -116,3 +117,4 @@ ruff check --fix --unsafe-fixes kg_engine/graph/
 - `kg_engine/graph/extractor.py` — Regex + LLM extraction
 - `kg_engine/graph/query.py` — Query engine
 - `kg_engine/graph/tools.py` — LangChain tools
+- [`AGENTS.md`](./AGENTS.md) — Full project conventions, entity/relation types, dev commands

@@ -1,12 +1,12 @@
 ---
-description: Apply this rule to git commit messages.
+description: Git commit message format for materials-kg
 ---
 
-This rule applies to git commit messages in the version control pane and in the terminal.
-
-Generate the commit message text, but do not add files, stage or push the commit.
+Generate the commit message text. Do not add files, stage, or push the commit.
 
 ## Commit Message Requirements
 
-- The message must be concise, structured, and strictly relevant to the changes in the commit.
-- Keep the length to the necessary minimum. Avoid blabber.
+- Concise, structured, strictly relevant to the changes
+- Keep length to necessary minimum. No blabber.
+- Example: `"Add hybrid search module with vector + graph traversal"` / `"Fix builder entity type enum usage"`
+- See [`AGENTS.md`](./AGENTS.md) for full commit guidelines

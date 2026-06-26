@@ -10,7 +10,6 @@ from langchain.tools import ToolRuntime, tool
 from pydantic import BaseModel, Field
 
 from kg_engine.graph.pipeline import GraphPipeline
-from kg_engine.graph.schemas import EntityType, RelationType
 from kg_engine.utils.context_tracker import AgentContext
 
 logger = logging.getLogger(__name__)

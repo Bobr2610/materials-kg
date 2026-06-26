@@ -44,7 +44,7 @@ class KnowledgeGraphQuery:
                         if max_value is not None and num_val > max_value:
                             continue
                     except (ValueError, TypeError):
-                        pass
+                        logger.warning("Could not convert property value '%s' to float for '%s'", val, prop.name)
                 material = self._store.get_entity(rel.source_id)
                 results.append({
                     "material": material.name if material else rel.source_id,

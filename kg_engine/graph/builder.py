@@ -7,9 +7,11 @@ from typing import Any
 
 from kg_engine.graph.extractor import EntityExtractor
 from kg_engine.graph.schemas import (
+    EntityType,
     ExtractionResult,
     GraphEntity,
     GraphRelation,
+    RelationType,
 )
 from kg_engine.graph.store import GraphStore
 
@@ -42,7 +44,7 @@ class KnowledgeGraphBuilder:
 
         article_entity = GraphEntity(
             id=source or f"doc_{hash(text) % 10**8}",
-            type="article",  # type: ignore
+            type=EntityType.ARTICLE,
             name=metadata.get("title", source or "Unknown") if metadata else (source or "Unknown"),
             properties=metadata or {},
             source=source,
@@ -56,7 +58,7 @@ class KnowledgeGraphBuilder:
                 GraphRelation(
                     source_id=article_entity.id,
                     target_id=entity.id,
-                    type="described_in",  # type: ignore
+                    type=RelationType.DESCRIBED_IN,
                     properties={},
                     source=source,
                     confidence=0.8,

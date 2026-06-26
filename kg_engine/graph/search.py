@@ -6,7 +6,6 @@ import logging
 from typing import Any
 
 from kg_engine.graph.query import KnowledgeGraphQuery
-from kg_engine.graph.schemas import GraphEntity
 from kg_engine.graph.store import GraphStore
 
 logger = logging.getLogger(__name__)

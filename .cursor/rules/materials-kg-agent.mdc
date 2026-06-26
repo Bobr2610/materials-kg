@@ -1,45 +1,36 @@
 ---
+description: Agent rules for Materials Knowledge Graph — связывает статьи, эксперименты, материалы, свойства, режимы, оборудование, команды и выводы
 alwaysApply: true
 ---
 
-- Before any coding gather information:
-    - search internet for reference documentation on the frameworks and libraries to use
-    - then go to the official documentation sources you found and digest the best practices
-    - do not read just a page or two, scan the docs and links and doc hierarchy
-    - gather all the information to base your actions on ground truth
-- PLAN your course of action after gathering the reference info.
-- Code style: super dry, super lean, abstract, modular, pythonic, smart, linted, deduplicated, pydantic
-- Always run linter after making any changes:
-    - Use Ruff: `ruff check <file_path>` for specific files
-    - Run Ruff before committing: `ruff check <file_path>` for changed files only
-    - Be critical about Ruff reports, implement only necessary changes
-    - Only lint files that were modified, not the entire codebase
-- Ensure testability and extensibility.
-- Avoid unnecessary try-catches.
-- When refactoring code, change only the relevant parts.
-- Follow LangChain's best practices:
-    - https://python.langchain.com/docs/
-    - https://docs.langchain.com/oss/python/langchain/agents
-    - https://docs.langchain.com/oss/python/langchain/tools
-    - https://docs.langchain.com/oss/python/langchain/streaming
-- Follow Python's best practices:
-    - https://peps.python.org/pep-0008/
-    - https://peps.python.org/pep-0257/
-    - https://google.github.io/styleguide/pyguide.html
-- Group and isolate code based on its function in different files to avoid clutter.
-- Do not duplicate code, encapsulate any reused code in methods/functions.
-- Never break existing code.
-- Do not delete logging, but update it.
-- Do not delete comments, rather update them.
-- Produce flawless code.
-- Reanalyze your changes twice for any issues you might have introduced.
-- Place imports always on top.
-- Do not add orphan spaces on empty lines.
-- Use environment variables for secrets.
-- Put tests to `kg_engine/tests/`.
-- Always update and run tests after any changes:
-    - `python -m pytest kg_engine/tests/test_graph.py -v`
-- Always update README after any changes that affect it.
-- Avoid try/except-heavy code and hardcoded fallbacks. Prefer robust, explicit logic.
-- For knowledge graph: prefer NetworkX for in-memory, Pydantic for schemas, composition over inheritance.
-- For LLM extraction: provide clear structured prompts with JSON output format.
+- Always research & plan before coding: search docs, digest hierarchy, base on ground truth
+- PLAN course of action after gathering reference info
+- Code style: super dry, lean, modular, pythonic, pydantic, NetworkX for in-memory graph
+- Lint with Ruff after changes: `ruff check <file_path>` — only changed files
+- Always run tests after changes: `python -m pytest kg_engine/tests/ -v`
+- Never break existing code; avoid unnecessary try-catches and hardcoded fallbacks
+
+## Domain: Materials Knowledge Graph
+
+Architecture: hybrid graph + vector search (NetworkX in-memory + embeddings for semantic retrieval)
+Answer queries like: "что уже делали по сплавам X при режиме Y и какой был эффект на свойство Z"
+
+### 8 Entity Types
+MATERIAL, PROPERTY, EXPERIMENT, MODE, EQUIPMENT, TEAM, ARTICLE, CONCLUSION
+
+### 12 Relation Types
+HAS_PROPERTY, USED_IN, MEASURES, USES_EQUIPMENT, HAS_MODE, CONDUCTED_BY,
+DESCRIBED_IN, HAS_CONCLUSION, DEPENDS_ON, COMPOSED_OF, COMPARED_TO, OPTIMIZED_FOR
+
+### Key Patterns
+- Extraction: regex first, LLM fallback for complex relations
+- Storage: NetworkX Graph, Pydantic schemas, JSON serialization
+- Query: read-only query interface, hybrid search (vector + graph traversal)
+- Pipeline: index → ask → find_gaps → save/load
+- Tools: LangChain @tool decorated with Pydantic args_schema
+- Gap analysis: find missing relations, unconnected entities, sparse subgraphs
+
+## References
+- AGENTS.md — full project conventions, entity types, relation types, dev commands
+- .agents/skills/materials-knowledge-graph/SKILL.md — architecture details, examples
+- Python: https://peps.python.org/pep-0008/ | https://google.github.io/styleguide/pyguide.html

@@ -2,6 +2,7 @@
 
 from kg_engine.graph.builder import KnowledgeGraphBuilder
 from kg_engine.graph.extractor import EntityExtractor
+from kg_engine.graph.pipeline import GraphPipeline
 from kg_engine.graph.query import KnowledgeGraphQuery
 from kg_engine.graph.schemas import (
     EntityType,
@@ -22,4 +23,5 @@ __all__ = [
     "KnowledgeGraphBuilder",
     "KnowledgeGraphQuery",
     "HybridSearch",
+    "GraphPipeline",
 ]

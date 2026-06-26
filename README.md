@@ -17,12 +17,13 @@ materials-kg/
     tools/          # LangChain tools for RAG
     config/         # Settings, model registry
     utils/          # Shared utilities
+    scripts/        # Build/build_index/knowledge_graph scripts
     tests/          # Test suite
 ```
 
 ### Key Capabilities
 
-- **Entity extraction**: Regex + LLM extraction of materials, properties, experiments, modes, equipment, teams
+- **Entity extraction**: Regex + LLM extraction of materials, properties, experiments, modes, equipment, teams, articles, conclusions
 - **Graph query**: `query_by_material_and_mode("Ti6Al4V", "annealing")` → properties, experiments, conclusions
 - **Hybrid search**: Combine vector similarity with graph traversal for enriched results
 - **Data gap analysis**: Identify materials without measured properties or missing mode combinations
@@ -48,3 +49,7 @@ python -m pytest kg_engine/tests/test_graph.py -v
 - *Which materials have been tested for property P with value > V?*
 - *What related entities exist for material M?*
 - *Where are the data gaps — which material-mode combinations are unexplored?*
+
+### References
+
+See [AGENTS.md](./AGENTS.md) for full conventions, entity/relation types, dev commands, and [`.agents/skills/materials-knowledge-graph/SKILL.md`](./.agents/skills/materials-knowledge-graph/SKILL.md) for architecture details.

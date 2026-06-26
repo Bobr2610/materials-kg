@@ -1,4 +1,4 @@
-"""LLM-powered entity and relationship extraction from materials science texts."""
+"""Regex and LLM-powered entity and relationship extraction from materials science texts."""
 
 from __future__ import annotations
 
