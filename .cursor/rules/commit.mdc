@@ -2,11 +2,29 @@
 description: Git commit message format for materials-kg
 ---
 
-Generate the commit message text. Do not add files, stage, or push the commit.
+Generate the commit message text. Do **not** add files, stage, or push the commit — only output the message.
 
 ## Commit Message Requirements
 
-- Concise, structured, strictly relevant to the changes
+- Concise, structured, strictly relevant to the changes in the commit
 - Keep length to necessary minimum. No blabber.
-- Example: `"Add hybrid search module with vector + graph traversal"` / `"Fix builder entity type enum usage"`
-- See [`AGENTS.md`](./AGENTS.md) for full commit guidelines
+- Only create commits when explicitly asked by the user
+
+### Examples
+```
+Add hybrid search module with vector + graph traversal
+Fix builder entity type enum usage
+Update README with scripts/ directory in project structure
+```
+
+## Agent Files Reference
+
+All 5 agent-facing files must stay consistent. If one is overwritten, check the others:
+
+| File | Purpose |
+|------|---------|
+| [`AGENTS.md`](./AGENTS.md) | **Source of truth** — full conventions, dev commands, structure |
+| [`.agents/skills/materials-knowledge-graph/SKILL.md`](../.agents/skills/materials-knowledge-graph/SKILL.md) | Domain skill — architecture, entity/relation types, query examples |
+| [`.cursor/rules/materials-kg-agent.mdc`](./materials-kg-agent.mdc) | Coding rules, domain overview, key patterns |
+| [`.cursor/rules/terminal.mdc`](./terminal.mdc) | Terminal setup, venv, common commands |
+| `.cursor/rules/commit.mdc` (this file) | Commit message format and guidelines |

@@ -1,11 +1,42 @@
 ---
-description: Terminal command execution rules for materials-kg
+description: Terminal command execution and venv setup for materials-kg
 alwaysApply: true
 ---
 
-1. Always activate venv before running Python:
-   - PowerShell: `.venv\Scripts\Activate.ps1`
-   - WSL/Linux: `source .venv/bin/activate`
-2. Detect default terminal (PowerShell vs WSL) and use the correct activation command
-3. Only then execute Python or pytest commands
-4. See [`AGENTS.md`](./AGENTS.md) for full dev commands (install, test, lint, build)
+## Venv Activation
+
+Always activate venv before running Python. Detect OS first:
+
+- **PowerShell (Windows):** `.venv\Scripts\Activate.ps1`
+- **Git Bash / WSL / Linux:** `source .venv/bin/activate`
+
+## Common Dev Commands (after venv)
+
+```bash
+# Install
+pip install -r kg_engine/requirements.txt
+
+# Test
+python -m pytest kg_engine/tests/ -v
+python -m pytest kg_engine/tests/test_graph.py -v
+
+# Lint
+ruff check kg_engine/
+ruff check kg_engine/graph/
+ruff check --fix --unsafe-fixes kg_engine/graph/
+
+# Build knowledge graph
+python kg_engine/scripts/build_knowledge_graph.py --source chunks.json --output graph.json
+```
+
+## Agent Files Reference
+
+All 5 agent-facing files must stay consistent. If one is overwritten, check the others:
+
+| File | Purpose |
+|------|---------|
+| [`AGENTS.md`](./AGENTS.md) | **Source of truth** — full conventions, dev commands, structure |
+| [`.agents/skills/materials-knowledge-graph/SKILL.md`](../.agents/skills/materials-knowledge-graph/SKILL.md) | Domain skill — architecture, entity/relation types, query examples |
+| [`.cursor/rules/materials-kg-agent.mdc`](./materials-kg-agent.mdc) | Coding rules, domain overview, key patterns |
+| `.cursor/rules/terminal.mdc` (this file) | Terminal setup, venv, common commands |
+| [`.cursor/rules/commit.mdc`](./commit.mdc) | Commit message format and guidelines |

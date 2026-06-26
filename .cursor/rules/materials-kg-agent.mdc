@@ -30,7 +30,14 @@ DESCRIBED_IN, HAS_CONCLUSION, DEPENDS_ON, COMPOSED_OF, COMPARED_TO, OPTIMIZED_FO
 - Tools: LangChain @tool decorated with Pydantic args_schema
 - Gap analysis: find missing relations, unconnected entities, sparse subgraphs
 
-## References
-- AGENTS.md — full project conventions, entity types, relation types, dev commands
-- .agents/skills/materials-knowledge-graph/SKILL.md — architecture details, examples
-- Python: https://peps.python.org/pep-0008/ | https://google.github.io/styleguide/pyguide.html
+## Agent Files Reference
+
+All 5 agent-facing files in this project must stay consistent. If one is overwritten, check the others:
+
+| File | Purpose |
+|------|---------|
+| [`AGENTS.md`](./AGENTS.md) | **Source of truth** — full conventions, dev commands, structure |
+| [`.agents/skills/materials-knowledge-graph/SKILL.md`](../.agents/skills/materials-knowledge-graph/SKILL.md) | Domain skill — architecture, entity/relation types, query examples |
+| `.cursor/rules/materials-kg-agent.mdc` (this file) | Coding rules, domain overview, key patterns |
+| `.cursor/rules/terminal.mdc` | Terminal setup, venv, common commands |
+| `.cursor/rules/commit.mdc` | Commit message format and guidelines |

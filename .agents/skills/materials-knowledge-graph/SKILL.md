@@ -110,11 +110,22 @@ ruff check kg_engine/graph/
 ruff check --fix --unsafe-fixes kg_engine/graph/
 ```
 
-## References
+## Code References
 
 - `kg_engine/graph/schemas.py` — Entity/relation type definitions
 - `kg_engine/graph/store.py` — Graph storage with NetworkX
 - `kg_engine/graph/extractor.py` — Regex + LLM extraction
 - `kg_engine/graph/query.py` — Query engine
 - `kg_engine/graph/tools.py` — LangChain tools
-- [`AGENTS.md`](./AGENTS.md) — Full project conventions, entity/relation types, dev commands
+
+## Agent Files Reference
+
+All 5 agent-facing files in this project must stay consistent. If one is overwritten, check the others:
+
+| File | Purpose |
+|------|---------|
+| [`AGENTS.md`](./AGENTS.md) | **Source of truth** — full conventions, dev commands, structure |
+| `.agents/skills/materials-knowledge-graph/SKILL.md` (this file) | Domain skill — architecture, entity/relation types, query examples |
+| [`.cursor/rules/materials-kg-agent.mdc`](../../.cursor/rules/materials-kg-agent.mdc) | Coding rules, domain overview, key patterns |
+| [`.cursor/rules/terminal.mdc`](../../.cursor/rules/terminal.mdc) | Terminal setup, venv, common commands |
+| [`.cursor/rules/commit.mdc`](../../.cursor/rules/commit.mdc) | Commit message format and guidelines |

@@ -156,12 +156,17 @@ class TestGraphStore:
 4. Shared logic is DRY (extract helpers for 2+ uses)
 5. README/docs updated if behavior changed
 
-## Related Instruction Files
+## Agent Files Reference
 
-- `.agents/skills/materials-knowledge-graph/SKILL.md` — Main skill with architecture, entity types, examples
-- `.cursor/rules/materials-kg-agent.mdc` — Agent coding rules
-- `.cursor/rules/terminal.mdc` — Terminal command rules
-- `.cursor/rules/commit.mdc` — Commit message rules
+All 5 agent-facing files in this project must stay consistent. If one is overwritten, check the others:
+
+| File | Purpose |
+|------|---------|
+| `AGENTS.md` (this file) | **Source of truth** — full conventions, dev commands, structure |
+| `.agents/skills/materials-knowledge-graph/SKILL.md` | Domain skill — architecture, entity/relation types, query examples |
+| `.cursor/rules/materials-kg-agent.mdc` | Coding rules, domain overview, key patterns |
+| `.cursor/rules/terminal.mdc` | Terminal setup, venv, common commands |
+| `.cursor/rules/commit.mdc` | Commit message format and guidelines |
 
 ---
 
