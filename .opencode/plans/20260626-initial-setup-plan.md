@@ -52,7 +52,7 @@ materials-kg/
       README.md
     chats/
       README.md
-  kg_engine/
+    kg_engine/
     graph/          # Знаниевый граф (schemas, store, extractor, query, search, tools)
     retrieval/      # Векторный поиск (ChromaDB)
     agent/          # LangChain-агент
@@ -61,6 +61,9 @@ materials-kg/
     llm/            # LLM manager
     tools/          # LangChain tools
     config/         # Настройки
+    utils/          # Shared utilities
+    storage/        # Vector store adapters
+    scripts/        # Build scripts
     tests/          # Тесты
 ```
 

@@ -27,15 +27,16 @@ ruff check --fix --unsafe-fixes kg_engine/graph/
 
 # Build knowledge graph
 python kg_engine/scripts/build_knowledge_graph.py --source chunks.json --output graph.json
+python kg_engine/scripts/build_knowledge_graph.py --source chunks.json --output graph.json --use-llm
 ```
 
 ## Agent Files Reference
 
-All 5 agent-facing files must stay consistent. If one is overwritten, check the others:
+All 5 agent-facing files in this project must stay consistent. If one is overwritten, check the others:
 
 | File | Purpose |
 |------|---------|
-| [`AGENTS.md`](./AGENTS.md) | **Source of truth** — full conventions, dev commands, structure |
+| [`AGENTS.md`](../AGENTS.md) | **Source of truth** — full conventions, dev commands, structure |
 | [`.agents/skills/materials-knowledge-graph/SKILL.md`](../.agents/skills/materials-knowledge-graph/SKILL.md) | Domain skill — architecture, entity/relation types, query examples |
 | [`.cursor/rules/materials-kg-agent.mdc`](./materials-kg-agent.mdc) | Coding rules, domain overview, key patterns |
 | `.cursor/rules/terminal.mdc` (this file) | Terminal setup, venv, common commands |

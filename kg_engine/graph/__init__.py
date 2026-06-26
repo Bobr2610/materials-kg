@@ -1,6 +1,12 @@
 """Knowledge graph module for materials science entities and relationships."""
 
+from __future__ import annotations
+
+import logging
+
 from kg_engine.graph.builder import KnowledgeGraphBuilder
+
+logger = logging.getLogger(__name__)
 from kg_engine.graph.extractor import EntityExtractor
 from kg_engine.graph.pipeline import GraphPipeline
 from kg_engine.graph.query import KnowledgeGraphQuery

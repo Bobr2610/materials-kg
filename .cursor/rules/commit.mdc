@@ -19,11 +19,11 @@ Update README with scripts/ directory in project structure
 
 ## Agent Files Reference
 
-All 5 agent-facing files must stay consistent. If one is overwritten, check the others:
+All 5 agent-facing files in this project must stay consistent. If one is overwritten, check the others:
 
 | File | Purpose |
 |------|---------|
-| [`AGENTS.md`](./AGENTS.md) | **Source of truth** — full conventions, dev commands, structure |
+| [`AGENTS.md`](../AGENTS.md) | **Source of truth** — full conventions, dev commands, structure |
 | [`.agents/skills/materials-knowledge-graph/SKILL.md`](../.agents/skills/materials-knowledge-graph/SKILL.md) | Domain skill — architecture, entity/relation types, query examples |
 | [`.cursor/rules/materials-kg-agent.mdc`](./materials-kg-agent.mdc) | Coding rules, domain overview, key patterns |
 | [`.cursor/rules/terminal.mdc`](./terminal.mdc) | Terminal setup, venv, common commands |

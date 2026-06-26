@@ -1,9 +1,9 @@
 # App bootstrap script for RAG engine (Windows PowerShell)
-# Run from project root: .\rag_engine\scripts\start_app.ps1
+# Run from project root: .\kg_engine\scripts\start_app.ps1
 
 $ErrorActionPreference = "Stop"
 
-Write-Host "=== RAG Engine App Bootstrap ===" -ForegroundColor Cyan
+Write-Host "=== Materials KG App Bootstrap ===" -ForegroundColor Cyan
 Write-Host ""
 
 # Check if .env exists
@@ -22,14 +22,14 @@ if (Test-Path ".venv") {
     exit 1
 } else {
     Write-Host "Error: No virtual environment found. Run test setup first:" -ForegroundColor Red
-    Write-Host "  .\rag_engine\tests\scripts\setup_and_test.ps1" -ForegroundColor Red
+    Write-Host "  python -m pytest kg_engine/tests/ -v" -ForegroundColor Red
     exit 1
 }
 
 # Start the app
-Write-Host "2. Starting RAG engine app..." -ForegroundColor Yellow
+Write-Host "2. Starting Materials KG app..." -ForegroundColor Yellow
 Write-Host "  Access at: http://localhost:7860" -ForegroundColor Green
 Write-Host ""
 # Set PYTHONPATH to project root
 $env:PYTHONPATH = "$PWD;$env:PYTHONPATH"
-python rag_engine\api\app.py
+python kg_engine\api\app.py

@@ -12,10 +12,19 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
-from kg_engine.cmw_platform.category_enum import (
-    get_category_choices_with_descriptions,
-    load_category_enum,
-)
+try:
+    from kg_engine.cmw_platform.category_enum import (
+        get_category_choices_with_descriptions,
+        load_category_enum,
+    )
+except ImportError:
+    def get_category_choices_with_descriptions() -> list[tuple[str, str]]:  # type: ignore[unused-ignore]
+        return []
+    def load_category_enum() -> type:  # type: ignore[unused-ignore]
+        from enum import Enum
+        class _EmptyCategory(str, Enum):
+            uncategorized = "uncategorized"
+        return _EmptyCategory
 
 
 class SGRAction(str, Enum):

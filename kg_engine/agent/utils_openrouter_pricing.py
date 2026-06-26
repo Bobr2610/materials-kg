@@ -592,24 +592,12 @@ def main() -> None:
     base_url = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
     # Simple CLI helper: fetch pricing for configured OpenRouter models (if available)
     try:
-        # Add agent_ng to path for proper imports
-        agent_ng_path = Path(_REPO_ROOT) / "agent_ng"
-        if str(agent_ng_path) not in sys.path:
-            sys.path.insert(0, str(agent_ng_path))
         if str(_REPO_ROOT) not in sys.path:
             sys.path.insert(0, str(_REPO_ROOT))
 
-        # Import directly (path is set up)
-        try:
-            from kg_engine.agent.llm_manager import LLMProvider
-            from kg_engine.agent.llm_configs import get_default_llm_configs
-        except ImportError:
-            # Fallback: try importing as module
-            import importlib
-            llm_manager_module = importlib.import_module("agent_ng.llm_manager")
-            llm_configs_module = importlib.import_module("agent_ng.llm_configs")
-            LLMProvider = llm_manager_module.LLMProvider
-            get_default_llm_configs = llm_configs_module.get_default_llm_configs
+        # Import directly
+        from kg_engine.agent.llm_manager import LLMProvider
+        from kg_engine.agent.llm_configs import get_default_llm_configs
 
         llm_configs = get_default_llm_configs()
         config = llm_configs.get(LLMProvider.OPENROUTER)
@@ -633,7 +621,7 @@ def main() -> None:
     print(generate_llm_config_update(pricing_map))
 
     # Also write a JSON snapshot for convenience (not used by runtime)
-    output_file = Path(_REPO_ROOT) / "agent_ng" / "openrouter_pricing.json"
+    output_file = Path(_REPO_ROOT) / "kg_engine" / "agent" / "openrouter_pricing.json"
     output_file.parent.mkdir(parents=True, exist_ok=True)
     with output_file.open("w", encoding="utf-8") as f:
         json.dump(pricing_map, f, indent=2, ensure_ascii=False)

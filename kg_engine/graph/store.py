@@ -75,7 +75,7 @@ class GraphStore:
             data = dict(self._graph.nodes[entity_id])
             return GraphEntity(
                 id=entity_id,
-                type=EntityType(data.get("type", data.get("entity_type", "material"))),
+                type=EntityType(data.get("type", data.get("entity_type", EntityType.MATERIAL.value))),
                 name=data.get("name", ""),
                 aliases=data.get("aliases", []),
                 properties=data.get("properties", {}),
@@ -105,7 +105,7 @@ class GraphStore:
                 results.append(
                     GraphEntity(
                         id=node_id,
-                        type=EntityType(data.get("entity_type", "material")),
+                        type=EntityType(data.get("entity_type", EntityType.MATERIAL.value)),
                         name=data.get("name", ""),
                         aliases=data.get("aliases", []),
                         properties=data.get("properties", {}),
@@ -176,7 +176,7 @@ class GraphStore:
                     GraphRelation(
                         source_id=u,
                         target_id=v,
-                        type=RelationType(d.get("relation_type", "depends_on")),
+                        type=RelationType(d.get("relation_type", RelationType.DEPENDS_ON.value)),
                         properties=d.get("properties", {}),
                         source=d.get("source"),
                         confidence=d.get("confidence", 1.0),
@@ -217,7 +217,7 @@ class GraphStore:
                     results.append(
                         GraphEntity(
                             id=current_id,
-                            type=EntityType(data.get("entity_type", "material")),
+                            type=EntityType(data.get("entity_type", EntityType.MATERIAL.value)),
                             name=data.get("name", ""),
                             aliases=data.get("aliases", []),
                             properties=data.get("properties", {}),
@@ -309,7 +309,7 @@ class GraphStore:
             for node_id, node_data in self._graph.nodes(data=True):
                 data["entities"].append({
                     "id": node_id,
-                    "type": node_data.get("entity_type", "material"),
+                    "type": node_data.get("entity_type", EntityType.MATERIAL.value),
                     "name": node_data.get("name", ""),
                     "aliases": node_data.get("aliases", []),
                     "properties": node_data.get("properties", {}),
@@ -320,7 +320,7 @@ class GraphStore:
                 data["relations"].append({
                     "source_id": u,
                     "target_id": v,
-                    "type": edge_data.get("relation_type", "depends_on"),
+                    "type": edge_data.get("relation_type", RelationType.DEPENDS_ON.value),
                     "properties": edge_data.get("properties", {}),
                     "source": edge_data.get("source"),
                     "confidence": edge_data.get("confidence", 1.0),

@@ -148,7 +148,7 @@ class EntityExtractor:
             entities = [
                 GraphEntity(
                     id=e.get("id", self._next_id("llm")),
-                    type=EntityType(e.get("type", "material")),
+                    type=EntityType(e.get("type", EntityType.MATERIAL.value)),
                     name=e.get("name", ""),
                     aliases=e.get("aliases", []),
                     properties=e.get("properties", {}),
@@ -161,7 +161,7 @@ class EntityExtractor:
                 GraphRelation(
                     source_id=r["source_id"],
                     target_id=r["target_id"],
-                    type=RelationType(r.get("type", "depends_on")),
+                    type=RelationType(r.get("type", RelationType.DEPENDS_ON.value)),
                     properties=r.get("properties", {}),
                     source=source or r.get("source"),
                     confidence=r.get("confidence", 0.7),

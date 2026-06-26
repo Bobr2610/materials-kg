@@ -36,7 +36,7 @@ All 5 agent-facing files in this project must stay consistent. If one is overwri
 
 | File | Purpose |
 |------|---------|
-| [`AGENTS.md`](./AGENTS.md) | **Source of truth** — full conventions, dev commands, structure |
+| [`AGENTS.md`](../AGENTS.md) | **Source of truth** — full conventions, dev commands, structure |
 | [`.agents/skills/materials-knowledge-graph/SKILL.md`](../.agents/skills/materials-knowledge-graph/SKILL.md) | Domain skill — architecture, entity/relation types, query examples |
 | `.cursor/rules/materials-kg-agent.mdc` (this file) | Coding rules, domain overview, key patterns |
 | `.cursor/rules/terminal.mdc` | Terminal setup, venv, common commands |

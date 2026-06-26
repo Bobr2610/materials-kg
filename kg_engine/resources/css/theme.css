@@ -92,7 +92,7 @@
     --cmw-white: #ffffff;
 
     /* Assets (optional; set to your local resources if available) */
-    --cmw-logo-url: url('/gradio_api/file=rag_engine/resources/img/comindware_logo.svg');
+    --cmw-logo-url: url('/gradio_api/file=kg_engine/resources/img/comindware_logo.svg');
     --cmw-logo-height: 1.6em;
     --cmw-logo-gap: var(--cmw-space-3);
     --cmw-logo-shadow: drop-shadow(0 1px 0 rgba(0, 0, 0, 0.06));
@@ -216,7 +216,7 @@
 }
 
 /* Open Sans – self-hosted via Gradio static file access.
- * Files are stored under rag_engine/resources/fonts/OpenSans and served via
+ * Files are stored under kg_engine/resources/fonts/OpenSans and served via
  * /gradio_api/file=... according to Gradio's file access rules:
  * https://www.gradio.app/guides/file-access
  */
@@ -224,7 +224,7 @@
     font-family: OpenSans;
     src:
         local('Open Sans Light'),
-        url('/gradio_api/file=rag_engine/resources/fonts/OpenSans/OpenSans-Light.ttf') format('truetype');
+        url('/gradio_api/file=kg_engine/resources/fonts/OpenSans/OpenSans-Light.ttf') format('truetype');
     font-weight: 300;
     font-style: normal;
     font-display: fallback;
@@ -234,7 +234,7 @@
     font-family: OpenSans;
     src:
         local('Open Sans'),
-        url('/gradio_api/file=rag_engine/resources/fonts/OpenSans/OpenSans-Regular.ttf') format('truetype');
+        url('/gradio_api/file=kg_engine/resources/fonts/OpenSans/OpenSans-Regular.ttf') format('truetype');
     font-weight: 400;
     font-style: normal;
     font-display: fallback;
@@ -244,7 +244,7 @@
     font-family: OpenSans;
     src:
         local('Open Sans Italic'),
-        url('/gradio_api/file=rag_engine/resources/fonts/OpenSans/OpenSans-Italic.ttf') format('truetype');
+        url('/gradio_api/file=kg_engine/resources/fonts/OpenSans/OpenSans-Italic.ttf') format('truetype');
     font-weight: 400;
     font-style: italic;
     font-display: fallback;
@@ -254,7 +254,7 @@
     font-family: OpenSans;
     src:
         local('Open Sans Medium'),
-        url('/gradio_api/file=rag_engine/resources/fonts/OpenSans/OpenSans-Medium.ttf') format('truetype');
+        url('/gradio_api/file=kg_engine/resources/fonts/OpenSans/OpenSans-Medium.ttf') format('truetype');
     font-weight: 500;
     font-style: normal;
     font-display: fallback;
@@ -264,7 +264,7 @@
     font-family: OpenSans;
     src:
         local('Open Sans Bold'),
-        url('/gradio_api/file=rag_engine/resources/fonts/OpenSans/OpenSans-Bold.ttf') format('truetype');
+        url('/gradio_api/file=kg_engine/resources/fonts/OpenSans/OpenSans-Bold.ttf') format('truetype');
     font-weight: 600;
     font-style: normal;
     font-display: fallback;
@@ -516,13 +516,13 @@ body {
 
 /* Font Awesome 6 Pro Light — self-hosted for chat download icon (fa-light fa-download).
  * Unicode f019 is shared across FA styles; weight 300 selects the light glyph.
- * Source: rag_engine/resources/fonts/FontAwesome/fa-light-300.ttf (FA Pro 6.2.1).
+ * Source: kg_engine/resources/fonts/FontAwesome/fa-light-300.ttf (FA Pro 6.2.1).
  */
 @font-face {
     font-family: 'Font Awesome 6 Pro';
     src:
         local('Font Awesome 6 Pro Light'),
-        url('/gradio_api/file=rag_engine/resources/fonts/FontAwesome/fa-light-300.ttf') format('truetype');
+        url('/gradio_api/file=kg_engine/resources/fonts/FontAwesome/fa-light-300.ttf') format('truetype');
     font-weight: 300;
     font-style: normal;
     font-display: block;

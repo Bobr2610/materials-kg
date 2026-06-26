@@ -92,6 +92,7 @@ gaps = pipeline.find_gaps()
 ```bash
 # Venv
 .venv\Scripts\Activate.ps1                   # Windows PowerShell
+source .venv/bin/activate                     # Linux/WSL
 
 # Install
 pip install -r kg_engine/requirements.txt
@@ -124,7 +125,7 @@ All 5 agent-facing files in this project must stay consistent. If one is overwri
 
 | File | Purpose |
 |------|---------|
-| [`AGENTS.md`](./AGENTS.md) | **Source of truth** — full conventions, dev commands, structure |
+| [`AGENTS.md`](../../AGENTS.md) | **Source of truth** — full conventions, dev commands, structure |
 | `.agents/skills/materials-knowledge-graph/SKILL.md` (this file) | Domain skill — architecture, entity/relation types, query examples |
 | [`.cursor/rules/materials-kg-agent.mdc`](../../.cursor/rules/materials-kg-agent.mdc) | Coding rules, domain overview, key patterns |
 | [`.cursor/rules/terminal.mdc`](../../.cursor/rules/terminal.mdc) | Terminal setup, venv, common commands |

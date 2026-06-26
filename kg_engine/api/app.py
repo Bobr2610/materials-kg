@@ -4634,8 +4634,11 @@ with gr.Blocks(
                 logger.warning("Invalid API key attempt to CMW endpoint")
                 return {"success": False, "message": None, "error": "Invalid API key"}
 
-        from kg_engine.cmw_platform.connector import PlatformConnector
-
+        try:
+            from kg_engine.cmw_platform.connector import PlatformConnector
+        except ImportError:
+            logger.error("PlatformConnector not available (cmw_platform module missing)")
+            return {"success": False, "message": None, "error": "Platform connector not available"}
         connector = PlatformConnector()
         result = connector.start_request(str(request_id))
 
@@ -4729,7 +4732,11 @@ if __name__ == "__main__":
                 logger.warning("Invalid API key attempt to summarize-document endpoint")
                 return {"success": False, "message": None, "error": "Invalid API key"}
 
-        from kg_engine.cmw_platform.summary_connector import DocumentSummaryConnector
+        try:
+            from kg_engine.cmw_platform.summary_connector import DocumentSummaryConnector
+        except ImportError:
+            logger.error("DocumentSummaryConnector not available (cmw_platform module missing)")
+            return {"success": False, "message": None, "error": "Summary connector not available"}
 
         try:
             connector = DocumentSummaryConnector(platform="secondary")

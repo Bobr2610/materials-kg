@@ -18,7 +18,7 @@ def test_cross_encoder_reranker_uses_model(monkeypatch):
     fake_model = MagicMock()
     fake_model.predict.return_value = [0.9, 0.1]
 
-    monkeypatch.setattr("rag_engine.retrieval.reranker.CrossEncoder", lambda name, device=None: fake_model)
+    monkeypatch.setattr("kg_engine.retrieval.reranker.CrossEncoder", lambda name, device=None: fake_model)
 
     reranker = CrossEncoderReranker(model_name="fake/model")
     candidates = [(MagicMock(page_content="doc1", metadata={}), 0.0), (MagicMock(page_content="doc2", metadata={}), 0.0)]
@@ -39,7 +39,7 @@ def test_cross_encoder_reranker_device_parameter(monkeypatch):
         captured_device.append(device)
         return fake_model
 
-    monkeypatch.setattr("rag_engine.retrieval.reranker.CrossEncoder", mock_cross_encoder)
+    monkeypatch.setattr("kg_engine.retrieval.reranker.CrossEncoder", mock_cross_encoder)
 
     # Test explicit device
     CrossEncoderReranker(model_name="fake/model", device="cuda")
@@ -54,7 +54,7 @@ def test_build_reranker_falls_back_to_identity(monkeypatch):
     def raise_error(name, device=None):  # noqa: ANN001
         raise RuntimeError("Model unavailable")
 
-    monkeypatch.setattr("rag_engine.retrieval.reranker.CrossEncoder", raise_error)
+    monkeypatch.setattr("kg_engine.retrieval.reranker.CrossEncoder", raise_error)
 
     reranker = build_reranker([{"model_name": "missing/model"}])
 
@@ -71,7 +71,7 @@ def test_build_reranker_passes_device(monkeypatch):
         captured_devices.append(device)
         return fake_model
 
-    monkeypatch.setattr("rag_engine.retrieval.reranker.CrossEncoder", mock_cross_encoder)
+    monkeypatch.setattr("kg_engine.retrieval.reranker.CrossEncoder", mock_cross_encoder)
 
     # Test default device (auto)
     build_reranker([{"model_name": "fake/model"}])

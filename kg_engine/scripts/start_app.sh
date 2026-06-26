@@ -1,10 +1,10 @@
 #!/bin/bash
 # App bootstrap script for RAG engine (WSL/Linux)
-# Run from project root: bash rag_engine/scripts/start_app.sh
+# Run from project root: bash kg_engine/scripts/start_app.sh
 
 set -e  # Exit on error
 
-echo "=== RAG Engine App Bootstrap ==="
+echo "=== Materials KG App Bootstrap ==="
 echo ""
 
 # Check if .env exists
@@ -22,14 +22,14 @@ elif [ -d ".venv" ]; then
     source .venv/bin/activate
 else
     echo "Error: No virtual environment found. Run test setup first:"
-    echo "  bash rag_engine/tests/scripts/setup_and_test.sh"
+    echo "  python -m pytest kg_engine/tests/ -v"
     exit 1
 fi
 
 # Start the app
-echo "2. Starting RAG engine app..."
+echo "2. Starting Materials KG app..."
 echo "  Access at: http://localhost:7860"
 echo ""
 # Set PYTHONPATH to project root
 export PYTHONPATH="$(pwd):${PYTHONPATH:-}"
-python rag_engine/api/app.py
+python kg_engine/api/app.py
