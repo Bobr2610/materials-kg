@@ -1,0 +1,7 @@
+INHERIT: mkdocs_guide_complete_ru.yml
+site_dir: compiled_md_for_rag
+hooks:
+  - rag_engine/rag_indexing_hook.py
+plugins:
+  - search: false
+

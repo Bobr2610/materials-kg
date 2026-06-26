@@ -1,0 +1,2137 @@
+"""
+LangChain-Native Gradio App - Modularized
+=========================================
+
+A modern Gradio application using pure LangChain patterns with modular tab architecture.
+This version uses separate tab modules for better organization and maintainability.
+
+Key Features:
+- Modular tab architecture (Chat, Logs, Stats)
+- Pure LangChain conversation chains and memory
+- Multi-turn conversation support with tool calls
+- Real-time streaming with metadata
+- Native LangChain tool calling
+- Modern Gradio UI with comprehensive monitoring
+- Tool usage visualization
+- Debug logging and statistics
+- Responsive design with custom CSS
+
+Based on LangChain's official documentation and best practices.
+"""
+
+import asyncio
+from collections.abc import AsyncGenerator
+import json
+import logging
+import os
+from pathlib import Path
+from queue import Empty, Queue
+import threading
+import time
+from typing import Any, Dict, List, Optional, Tuple
+import uuid
+
+from dotenv import load_dotenv
+import gradio as gr
+
+# Load .env early so Gradio picks up env settings
+load_dotenv()
+
+# Initialize logging early (idempotent)
+try:
+    from kg_engine.agent.logging_config import setup_logging
+
+    setup_logging()
+    _logger = logging.getLogger(__name__)
+except Exception:
+    _logger = logging.getLogger(__name__)
+
+# Import configuration with fallback for direct execution
+try:
+    from kg_engine.agent.agent_config import config, get_language_settings, get_port_settings
+except ImportError:
+    # Fallback for direct execution
+    from pathlib import Path
+    import sys
+
+    sys.path.append(str(Path(__file__).parent))
+    from agent_config import (  # type: ignore[no-redef]
+        config,
+        get_language_settings,
+        get_port_settings,
+    )
+
+
+# Local imports with robust fallback handling
+import sys
+
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+
+# Set LangChain verbose mode using new pattern (suppresses deprecation warning)
+try:
+    from langchain.globals import set_verbose
+
+    set_verbose(False)  # Set to True for debugging if needed
+except ImportError:
+    logging.debug(
+        "langchain.globals.set_verbose not available (older LangChain version)"
+    )
+
+# Add current directory to path for imports
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(current_dir)
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
+
+# Import session manager after path setup
+from kg_engine.agent.session_manager import set_session_config
+
+# Import session context setter with robust fallback
+try:
+    from kg_engine.agent.session_manager import set_current_session_id
+except ImportError:
+    try:
+        from .session_manager import set_current_session_id
+    except Exception:  # pragma: no cover - ultimate fallback
+
+        def set_current_session_id(_session_id):  # type: ignore[no-redef]
+            return None
+
+
+try:
+    from kg_engine.agent._file_attachment import build_file_bubbles
+except ImportError:
+    try:
+        from ._file_attachment import build_file_bubbles  # type: ignore[no-redef]
+    except Exception:  # pragma: no cover
+
+        def build_file_bubbles(_att):  # type: ignore[no-redef]
+            return []
+
+
+try:
+    from kg_engine.agent.chat_stream_ui import (
+        begin_turn_with_generating_answer,
+        complete_generating_answer_bubble,
+        complete_reasoning_bubble,
+        complete_tool_call_bubble,
+        short_uid,
+        update_reasoning_bubble,
+        upsert_generating_answer_bubble,
+        upsert_tool_call_bubble,
+    )
+except ImportError:
+    from .chat_stream_ui import (  # type: ignore[no-redef]
+        begin_turn_with_generating_answer,
+        complete_generating_answer_bubble,
+        complete_reasoning_bubble,
+        complete_tool_call_bubble,
+        short_uid,
+        update_reasoning_bubble,
+        upsert_generating_answer_bubble,
+        upsert_tool_call_bubble,
+    )
+
+
+# Import image URL rewriter for LLM inline image references
+from kg_engine.agent._image_url_rewriter import rewrite_llm_inline_images
+
+try:
+    from kg_engine.utils.file_utils import FileUtils as _FileUtils
+
+    _GRADIO_CACHE_DIR = _FileUtils.get_gradio_cache_path()
+except Exception:  # pragma: no cover
+    import tempfile
+
+    _GRADIO_CACHE_DIR = tempfile.gettempdir()
+
+# Static theme assets (logo, fonts) are loaded via `/gradio_api/file=...` in CSS.
+# Passing `allowed_paths` to `launch()` replaces `GRADIO_ALLOWED_PATHS`, so the cache
+# dir alone would block `resources/` and break hero logo + @font-face URLs.
+_GRADIO_RESOURCES_DIR = Path(__file__).resolve().parent.parent / "resources"
+
+# Try absolute imports first (works from root directory)
+try:
+    from langsmith import traceable
+
+    from kg_engine.agent.debug_streamer import (
+        LogCategory,
+        LogLevel,
+        get_debug_streamer,
+        get_log_handler,
+    )
+    from kg_engine.agent.i18n_translations import (
+        create_i18n_instance,
+        format_translation,
+        get_translation_key,
+    )
+    from kg_engine.agent.langchain_agent import ChatMessage
+    from kg_engine.agent.langchain_agent import CmwAgent as NextGenAgent
+    from kg_engine.agent.llm_manager import get_llm_manager
+    from kg_engine.agent.openai_compat import (
+        register_agent_completions_on_fastapi,
+        register_agent_completions_route,
+    )
+
+    # from kg_engine.agent.streaming_chat import get_chat_interface  # Module moved to .unused
+    from kg_engine.agent.tabs import (
+        ChatTab,
+        ConfigTab,
+        DownloadsTab,
+        HomeTab,
+        LogsTab,
+        Sidebar,
+        StatsTab,
+    )
+    from kg_engine.agent.ui_manager import get_ui_manager
+    from kg_engine.agent.utils import safe_string
+
+    _logger.info("Successfully imported all modules using absolute imports")
+except ImportError as e1:
+    _logger.warning("Absolute imports failed: %s", e1)
+    # Fallback to relative imports (when running as module)
+    try:
+        from langsmith import traceable
+
+        from .debug_streamer import (
+            LogCategory,
+            LogLevel,
+            get_debug_streamer,
+            get_log_handler,
+        )
+        from .i18n_translations import (
+            create_i18n_instance,
+            format_translation,
+            get_translation_key,
+        )
+        from .langchain_agent import ChatMessage
+        from .langchain_agent import CmwAgent as NextGenAgent
+        from .llm_manager import get_llm_manager
+        from .openai_compat import (
+            register_agent_completions_on_fastapi,
+            register_agent_completions_route,
+        )
+
+        # from .streaming_chat import get_chat_interface  # Module moved to .unused
+        from .tabs import (
+            ChatTab,
+            ConfigTab,
+            DownloadsTab,
+            HomeTab,
+            LogsTab,
+            Sidebar,
+            StatsTab,
+        )
+        from .ui_manager import get_ui_manager
+
+        _logger.info("Successfully imported all modules using relative imports")
+    except ImportError as e2:
+        _logger.critical(
+            "Both absolute and relative imports failed. Absolute: %s | Relative: %s",
+            e1,
+            e2,
+        )
+        _logger.exception(
+            "Please check: 1) requirements_ng.txt installed 2) PYTHONPATH 3) circular imports 4) modules exist 5) working directory"
+        )
+        msg = f"Failed to import required modules. Absolute: {e1}, Relative: {e2}"
+        raise ImportError(msg)
+
+
+class NextGenApp:
+    """LangChain-native Gradio application with modular tab architecture and i18n support"""
+
+    def __init__(self, language: str = "en"):
+        # No global agent - only session-specific agents
+        self.llm_manager = get_llm_manager()
+        self.initialization_logs = []
+        self.is_initializing = False
+        self.initialization_complete = False
+        # REMOVED: self.session_id = "default"  # This was causing data leakage between users!
+        self._ui_update_needed = False
+        self.language = language
+        # Session-aware turn snapshots for analytics/logs (non-persistent)
+        self.session_turn_snapshots = {}  # session_id -> turn_snapshot
+
+        # Initialize concurrency management
+        try:
+            from .concurrency_config import get_concurrency_config
+            from .queue_manager import create_queue_manager
+
+            self.concurrency_config = get_concurrency_config()
+            self.queue_manager = create_queue_manager(self.concurrency_config)
+            _logger.debug(f"Queue manager created: {self.queue_manager is not None}")
+            _logger.debug(
+                f"Queue manager has config: {hasattr(self.queue_manager, 'config') if self.queue_manager else False}"
+            )
+        except ImportError:
+            # Fallback for when running as script
+            from kg_engine.agent.concurrency_config import get_concurrency_config
+            from kg_engine.agent.queue_manager import create_queue_manager
+
+            self.concurrency_config = get_concurrency_config()
+            self.queue_manager = create_queue_manager(self.concurrency_config)
+            _logger.debug(
+                f"Queue manager created (fallback): {self.queue_manager is not None}"
+            )
+            _logger.debug(
+                f"Queue manager has config: {hasattr(self.queue_manager, 'config') if self.queue_manager else False}"
+            )
+
+        # Session Management - Clean modular approach
+        # Use the process-wide SessionManager singleton to avoid
+        # duplicate per-session initializations when multiple app
+        # instances are constructed (e.g. for language detection).
+        try:
+            from .session_manager import get_session_manager
+        except ImportError:
+            # Fallback for when running as script
+            from kg_engine.agent.session_manager import get_session_manager
+
+        self.session_manager = get_session_manager(language)
+
+        # Create i18n instance for the specified language
+        self.i18n = create_i18n_instance()
+
+        # Initialize debug system - create a temporary debug streamer for initialization
+        self.debug_streamer = get_debug_streamer("app_init")
+        self.log_handler = get_log_handler("app_init")
+
+        # Initialize session-aware logging
+        try:
+            from .debug_streamer import set_session_context
+        except ImportError:
+            # Fallback for when running as script
+            from kg_engine.agent.debug_streamer import set_session_context
+        self.set_session_context = set_session_context
+        # self.chat_interface = get_chat_interface("app_ng")  # Dead code - never used
+
+        # Initialize UI manager with i18n support
+        try:
+            self.ui_manager = get_ui_manager(language=language, i18n_instance=self.i18n)
+            if not self.ui_manager:
+                msg = "UI Manager not available"
+                raise ValueError(msg)
+        except Exception as e:
+            _logger.exception("Failed to initialize UI Manager: %s", e)
+            self.ui_manager = None
+
+        # Initialize tab modules
+        self.tabs = {}
+        self.tab_instances = {}  # Store tab instances for event handlers
+        self.components = {}
+
+        # Processing state for UI feedback
+        self.is_processing = False
+        # Per-session stop timestamps for delayed transition to ready
+        self._session_stop_times: dict[str, float] = {}
+        # Per-session last rendered progress string to reduce UI churn
+        self._progress_cache: dict[str, str] = {}
+
+        # Persistent background asyncio loop for streaming to avoid closing gRPC/Gemini loop between turns
+        self._stream_loop = None
+        self._stream_loop_thread = None
+        self._stream_queue_timeout_s = 0.1
+        self._ensure_stream_loop()
+
+        # Initialize synchronously first, then start async initialization
+        self._start_async_initialization()
+
+    def get_user_session_id(self, request: gr.Request = None) -> str:
+        """Get session ID using clean session manager"""
+        return self.session_manager.get_session_id(request)
+
+    def get_user_agent(self, session_id: str) -> NextGenAgent:
+        """Get agent instance using clean session manager"""
+        return self.session_manager.get_agent(session_id)
+
+    def _start_async_initialization(self):
+        """Start async initialization in a new event loop"""
+        try:
+            # Try to get the current event loop
+            loop = asyncio.get_running_loop()
+            # If we're in an event loop, schedule the task
+            loop.create_task(self._initialize_agent())
+        except RuntimeError:
+            # No event loop running, start a new one
+
+            def run_async_init():
+                asyncio.run(self._initialize_agent())
+
+            thread = threading.Thread(target=run_async_init, daemon=True)
+            thread.start()
+
+    def _ensure_stream_loop(self):
+        """Ensure a persistent background event loop exists and is running."""
+        try:
+            if self._stream_loop is not None and self._stream_loop.is_running():
+                return
+        except Exception:
+            # Recreate loop if previous loop errored out
+            self._stream_loop = None
+            self._stream_loop_thread = None
+
+        self._stream_loop = asyncio.new_event_loop()
+
+        def _run_loop_forever():
+            asyncio.set_event_loop(self._stream_loop)
+            self._stream_loop.run_forever()
+
+        self._stream_loop_thread = threading.Thread(
+            target=_run_loop_forever, daemon=True
+        )
+        self._stream_loop_thread.start()
+
+    def _submit_stream_task(self, message, history, request, out_queue):
+        """Submit the async streaming producer to the background loop and feed results into out_queue."""
+
+        async def _producer():
+            try:
+                async for result in self.stream_chat_with_agent(
+                    message, history, request
+                ):
+                    out_queue.put(result)
+            except Exception as e:
+                # Propagate errors to the consumer
+                out_queue.put(
+                    {"type": "error", "content": f"{e}", "metadata": {"error": str(e)}}
+                )
+            finally:
+                # Sentinel to indicate completion
+                out_queue.put(StopIteration)
+
+        return asyncio.run_coroutine_threadsafe(_producer(), self._stream_loop)
+
+    async def _initialize_agent(self):
+        """Initialize the session manager (no global agent needed)"""
+        self.is_initializing = True
+        self.debug_streamer.info(
+            "Starting session manager initialization", LogCategory.INIT
+        )
+        self.initialization_logs.append(
+            "🚀 " + get_translation_key("logs_initializing", self.language)
+        )
+
+        try:
+            await self.llm_manager.load_mcp_tools_if_enabled()
+            # Initialize session manager (creates agents on-demand per session)
+            self.debug_streamer.info("Session manager ready", LogCategory.INIT)
+
+            self.initialization_logs.append(
+                "✅ " + get_translation_key("session_manager_ready", self.language)
+            )
+            self.initialization_complete = True
+
+            # Trigger UI update after initialization
+            self._trigger_ui_update()
+
+        except Exception as e:
+            try:
+                self.debug_streamer.error(
+                    f"Initialization failed: {str(e)}", LogCategory.INIT
+                )
+            except:
+                # If debug streamer fails, just continue
+                pass
+            self.initialization_logs.append(
+                format_translation(
+                    "error_initialization_failed", self.language, error=str(e)
+                )
+            )
+
+        self.is_initializing = False
+
+    def get_conversation_summary(self, session_id: str, markdown: bool = False) -> str:
+        """
+        Generate unified conversation summary for logs and download frontmatter.
+
+        Args:
+            session_id: Session ID to get summary for
+            markdown: If True, format for markdown (download). If False, format for plain text (logs).
+
+        Returns:
+            Formatted conversation summary string
+        """
+        try:
+            from datetime import datetime
+
+            # Get session-specific agent and stats
+            agent = self.session_manager.get_session_agent(session_id)
+            if not agent:
+                # Use session-specific debug streamer
+                session_debug = get_debug_streamer(session_id)
+                session_debug.debug(f"No agent found for session: {session_id}")
+                return ""
+
+            # Get conversation stats
+            stats = agent.get_stats()
+            conversation_stats = stats.get("conversation_stats", {})
+            llm_info = stats.get("llm_info", {})
+
+            # Get tool information from session-aware turn snapshot
+            tool_names = set()
+            tool_calls_count = 0
+            snapshot = self.session_turn_snapshots.get(session_id)
+            if snapshot and isinstance(snapshot, list):
+                for msg in snapshot:
+                    if msg.get("role") == "tool" and msg.get("name"):
+                        tool_names.add(msg["name"])
+                    elif msg.get("role") == "assistant" and msg.get("tool_calls"):
+                        tool_calls_count += len(msg["tool_calls"])
+
+            # Get roles sequence from snapshot
+            roles_seq = []
+            if snapshot:
+                roles_seq = [m.get("role", "?") for m in snapshot]
+
+            # Get provider/model info
+            provider = llm_info.get("provider", "unknown")
+            model = llm_info.get("model", "unknown")
+
+            # Format timestamp
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+            # Format tool information with total count
+            if tool_names:
+                tool_counts = {}
+                for msg in snapshot:
+                    if msg.get("role") == "tool" and msg.get("name"):
+                        tool_name = msg["name"]
+                        tool_counts[tool_name] = tool_counts.get(tool_name, 0) + 1
+                tools_text = ", ".join(
+                    [f"{name} ({count})" for name, count in sorted(tool_counts.items())]
+                )
+                total_tools = len(tool_counts)
+            else:
+                tools_text = "None"
+                total_tools = 0
+
+            # Get all used provider/model combinations from conversation history
+            provider_models = set()
+            if agent and hasattr(agent, "memory_manager"):
+                memory = agent.memory_manager.get_memory(session_id)
+                if (
+                    memory
+                    and hasattr(memory, "chat_memory")
+                    and hasattr(memory.chat_memory, "messages")
+                ):
+                    messages = memory.chat_memory.messages
+                    for msg in messages:
+                        if (
+                            hasattr(msg, "__class__")
+                            and msg.__class__.__name__ == "AIMessage"
+                        ):
+                            # Check if this message has LLM info in metadata
+                            if (
+                                hasattr(msg, "additional_kwargs")
+                                and "llm_provider" in msg.additional_kwargs
+                            ):
+                                provider = msg.additional_kwargs.get(
+                                    "llm_provider", "unknown"
+                                )
+                                model = msg.additional_kwargs.get(
+                                    "llm_model", "unknown"
+                                )
+                                provider_models.add(f"{provider} / {model}")
+
+            # If no provider/model info found in messages, use current
+            if not provider_models:
+                provider_models.add(f"{provider} / {model}")
+
+            # Format provider/model information
+            if len(provider_models) == 1:
+                providers_text = next(iter(provider_models))
+                total_models = 1
+            else:
+                providers_text = ", ".join(sorted(provider_models))
+                total_models = len(provider_models)
+
+            # Build summary based on format
+            if markdown:
+                # Markdown format for download
+                summary = f"## {self._get_translation('conversation_summary')} ({timestamp})\n\n"
+                summary += f"**{self._get_translation('total_messages_label')}:** {conversation_stats.get('message_count', 0)} ({conversation_stats.get('user_messages', 0)} user, {conversation_stats.get('assistant_messages', 0)} assistant)\n\n"
+                summary += f"**{self._get_translation('roles_sequence')}:** {' → '.join(roles_seq)}\n\n"
+                summary += f"**{self._get_translation('tools_used_total')} ({total_tools}):** {tools_text}\n\n"
+                summary += f"**{self._get_translation('providers_models_total')} ({total_models}):** {providers_text}\n\n"
+            else:
+                # Plain text format for logs
+                summary = f"--- {self._get_translation('conversation_summary')} ({timestamp}) ---\n"
+                summary += f"Сеанс: {session_id}\n"
+                summary += f"{self._get_translation('total_messages_label')}: {conversation_stats.get('message_count', 0)} ({conversation_stats.get('user_messages', 0)} user, {conversation_stats.get('assistant_messages', 0)} assistant)\n"
+                summary += f"{self._get_translation('roles_sequence')}: {' → '.join(roles_seq)}\n"
+                summary += f"{self._get_translation('tools_used_total')} ({total_tools}): {tools_text}\n"
+                summary += f"{self._get_translation('providers_models_total')} ({total_models}): {providers_text}\n"
+                # Add token statistics if available
+                total_tokens = conversation_stats.get("total_tokens", 0)
+                avg_tokens = conversation_stats.get("avg_tokens", 0)
+                if total_tokens > 0:
+                    summary += f"Total conversation tokens: {total_tokens:,}\n"
+                if avg_tokens > 0:
+                    summary += f"Average tokens per conversation: {avg_tokens:,.0f}\n"
+
+            # Add newline for logs format
+            if not markdown:
+                summary += "\n"
+
+            return summary
+
+        except Exception as e:
+            # Use app-level debug streamer for errors
+            self.debug_streamer.warning(f"Failed to generate conversation summary: {e}")
+            return ""
+
+    def _get_translation(self, key: str) -> str:
+        """Get translation for a key using the current language"""
+        from .i18n_translations import get_translation_key
+
+        return get_translation_key(key, self.language)
+
+    def is_ready(self) -> bool:
+        """Check if the app is ready (session-based pattern)"""
+        return self.initialization_complete and self.session_manager is not None
+
+    def clear_conversation(
+        self, request: gr.Request = None
+    ) -> tuple[list[dict[str, str]], str]:
+        """Clear the conversation history (LangChain-native pattern) - now properly session-aware"""
+        if request:
+            # Use clean session manager for session-aware clearing
+            session_id = self.session_manager.get_session_id(request)
+            self.session_manager.clear_conversation(session_id)
+            # Use session-specific debug streamer
+            session_debug = get_debug_streamer(session_id)
+            session_debug.info(f"Conversation cleared for session: {session_id}")
+        else:
+            # Fallback for non-session requests - use default session
+            session_id = "default"
+            if hasattr(self, "session_manager"):
+                session_data = self.session_manager.get_session_data(session_id)
+                if session_data and session_data.agent:
+                    session_data.agent.clear_conversation(session_id)
+                    if hasattr(session_data.agent, "token_tracker"):
+                        session_data.agent.token_tracker.start_new_conversation()
+                    self.debug_streamer.info("Conversation cleared (default session)")
+
+        # Reset progress status for all sessions
+        # Progress status is now managed per-session through session manager
+        return [], ""
+
+    def get_progress_status(self, request: gr.Request = None) -> str:
+        """Get the current progress status for the UI - now properly session-aware"""
+        if request:
+            session_id = self.session_manager.get_session_id(request)
+            return self.session_manager.get_status(session_id)
+        # Fallback to default status if no request available
+        return get_translation_key("progress_ready", self.language)
+
+    def update_progress_display(self, request: gr.Request = None) -> str:
+        """Update progress display: session-aware, low-churn, delayed ready after completion."""
+        # No session context → show ready (avoid cross-session leakage)
+        if not request:
+            return get_translation_key("progress_ready", self.language)
+
+        session_id = self.session_manager.get_session_id(request)
+        status = self.session_manager.get_status(session_id)
+
+        # While processing, show rotating icon + current session status
+        if self.is_processing:
+            if status:
+                icon = self.session_manager.get_clock_icon()
+                rendered = f"{icon} {status}"
+            else:
+                rendered = get_translation_key("progress_ready", self.language)
+        else:
+            # After processing ends, keep last status briefly, then switch to ready
+            stop_ts = self._session_stop_times.get(session_id, 0.0)
+            elapsed = time.time() - stop_ts if stop_ts else 999.0
+            if elapsed < 2.0 and status and "ready" not in status.lower():
+                rendered = status
+            else:
+                rendered = get_translation_key("progress_ready", self.language)
+                # Ensure session status converges to ready to prevent stale text
+                try:
+                    self.session_manager.set_status(session_id, rendered)
+                except Exception as e:
+                    logging.debug(
+                        f"Failed to set session status to ready for session {session_id}: {e}"
+                    )
+
+        # Reduce UI churn with a small cache
+        last = self._progress_cache.get(session_id)
+        if last == rendered:
+            return last
+        self._progress_cache[session_id] = rendered
+        return rendered
+
+    def start_processing(self):
+        """Mark that processing has started"""
+        self.is_processing = True
+
+    def stop_processing(self, session_id: str | None = None):
+        """Mark that processing has stopped and record stop time for the session."""
+        self.is_processing = False
+        if session_id:
+            self._session_stop_times[session_id] = time.time()
+
+    def get_conversation_history(
+        self, session_id: str = "default"
+    ) -> list[BaseMessage]:
+        """Get the current conversation history (session-based pattern)"""
+        if hasattr(self, "session_manager"):
+            session_data = self.session_manager.get_session_data(session_id)
+            if session_data and session_data.agent:
+                return session_data.agent.get_conversation_history(session_id)
+        return []
+
+    async def stream_chat_with_agent(
+        self, message: str, history: list[dict[str, str]], request: gr.Request = None
+    ) -> AsyncGenerator[tuple[list[dict[str, str]], str], None]:
+        """
+        Stream chat with the agent using LangChain-native streaming patterns.
+
+        Args:
+            message: User message
+            history: Chat history
+            progress: Optional Gradio Progress tracker
+
+        Yields:
+            Updated history and empty message
+        """
+        if not self.is_ready():
+            error_msg = get_translation_key("agent_not_ready", self.language)
+            history.append({"role": "user", "content": message})
+            history.append({"role": "assistant", "content": error_msg})
+            yield history, ""
+            return
+
+        if not message.strip():
+            yield history, ""
+            return
+
+        # Track execution time
+        start_time = time.time()
+
+        try:
+            # Extract session ID from Gradio request for user isolation
+            session_id = self.get_user_session_id(request)
+            user_agent = self.get_user_agent(session_id)
+
+            # Set session context for logging and request config resolution
+            self.set_session_context(session_id)
+            set_current_session_id(session_id)
+
+            # Reset session-level cancellation flag so a new message after stop
+            # is not immediately cancelled (different from Gradio State cancel_state
+            # which is reset by the UI pipeline).
+            self.session_manager.set_cancellation_state(session_id, False)
+
+            # Debug: Check which LLM instance is being used
+            if (
+                user_agent
+                and hasattr(user_agent, "llm_instance")
+                and user_agent.llm_instance
+            ):
+                llm_info = user_agent.get_llm_info()
+                session_debug = get_debug_streamer(session_id)
+                session_debug.debug(
+                    f"Using session agent with LLM: {llm_info.get('provider', 'unknown')}/{llm_info.get('model_name', 'unknown')}"
+                )
+            else:
+                session_debug = get_debug_streamer(session_id)
+                session_debug.warning("Session agent has no LLM instance!")
+
+            # Use session-specific debug streamer
+            session_debug = get_debug_streamer(session_id)
+            session_debug.info(
+                f"Streaming message for session {session_id}: {message[:50]}..."
+            )
+
+            # Initialize response
+            # Per-turn accumulator for tool costs (e.g. image generation).
+            # Added to session/conversation totals via add_tool_cost() and
+            # displayed alongside LLM cost in the stats bubble.
+            tool_costs_this_turn: float = 0.0
+
+            # User message + generating-answer bubble (first visible status UI).
+            generating_answer_id = short_uid()
+            working_history, generating_answer_id = begin_turn_with_generating_answer(
+                history,
+                message,
+                bubble_id=generating_answer_id,
+                title=format_translation("generating_answer", self.language),
+                content=format_translation("generating_answer_subtitle", self.language),
+            )
+            generating_answer_pending = True
+
+            # Get prompt token count for user message (will be displayed below assistant response)
+            # History is already in Gradio 6 messages format: list[dict[str, str]]
+            prompt_tokens = None
+            if user_agent:
+                try:
+                    prompt_tokens = user_agent.count_prompt_tokens_for_chat(
+                        history, message
+                    )
+                except Exception as e:
+                    # Use session-specific debug streamer
+                    session_debug = get_debug_streamer(session_id)
+                    session_debug.warning(f"Failed to get prompt token count: {e}")
+
+            yield working_history, ""
+
+            # Stream response using simple streaming
+            response_content = (
+                ""  # Initialize as empty string to prevent None concatenation
+            )
+            tool_usage = ""
+            assistant_message_index = (
+                -1
+            )  # Track the index of the assistant message in working_history
+            # Tool messages are now added immediately to working_history during streaming
+            streaming_error_handled = (
+                False  # Flag to track if streaming error was handled
+            )
+            reasoning_bubble_id: str | None = None
+            reasoning_buffer = ""
+            # generating_answer_id / pending initialized at turn start above
+
+            # print(f"🔍 DEBUG: Starting streaming for session {session_id}")
+            # print(f"🔍 DEBUG: Working history length before streaming: {len(working_history)}")
+
+            # Helper to check if cancellation was requested (following reference repo pattern)
+            def is_cancelled() -> bool:
+                try:
+                    cancel_state = self.session_manager.get_cancellation_state(
+                        session_id
+                    )
+                    return cancel_state is not None and cancel_state.get(
+                        "cancelled", False
+                    )
+                except Exception:
+                    return False
+
+            try:
+                # Pass app's language for proper i18n (iteration messages should match UI language)
+                _stream = user_agent.stream_message(
+                    message, session_id, language=self.language
+                )
+                async for event in _stream:
+                    # Check for cancellation at each iteration (following reference repo pattern)
+                    if is_cancelled():
+                        logging.getLogger(__name__).info(
+                            "Streaming cancelled during execution - stopping"
+                        )
+                        break
+
+                    # Safety check for None event
+                    if event is None:
+                        # print("🔍 DEBUG: Received None event, skipping...")
+                        continue
+
+                    try:
+                        event_type = event.get("type", "unknown")
+                        content = event.get("content", "")
+                        metadata = event.get("metadata", {})
+                        # print(f"🔍 DEBUG: Processing event - type: {event_type}, content length: {len(str(content))}")
+                    except Exception:
+                        import traceback
+
+                        # print(f"🔍 DEBUG: Error processing event: {e}")
+                        # print(f"🔍 DEBUG: Event data: {event}")
+                        # print(f"🔍 DEBUG: Event type: {type(event)}")
+                        # print(f"🔍 DEBUG: Event traceback:")
+                        # traceback.print_exc()
+                        streaming_error_handled = True
+                        # print(f"🔍 DEBUG: Set streaming_error_handled to True in event processing")
+                        continue
+
+                    if event_type == "thinking":
+                        # UI-only thinking bubble. Agent memory is maintained
+                        # inside native_langchain_streaming.py, not Gradio history.
+                        if reasoning_bubble_id is None:
+                            reasoning_bubble_id = short_uid()
+                        reasoning_buffer += safe_string(content)
+                        update_reasoning_bubble(
+                            working_history,
+                            bubble_id=reasoning_bubble_id,
+                            content=reasoning_buffer,
+                            title=metadata.get("title", "Thinking")
+                            if metadata
+                            else "Thinking",
+                        )
+                        yield working_history, ""
+
+                    elif event_type == "iteration_progress":
+                        # Iteration progress - update progress display in sidebar
+                        # Store progress status for UI update - session-specific
+                        self.session_manager.set_status(session_id, content)
+                        if (
+                            metadata
+                            and metadata.get("completed")
+                            and not generating_answer_pending
+                            and not response_content.strip()
+                        ):
+                            generating_answer_id = upsert_generating_answer_bubble(
+                                working_history,
+                                bubble_id=generating_answer_id or short_uid(),
+                                title=format_translation(
+                                    "generating_answer", self.language
+                                ),
+                                content=format_translation(
+                                    "generating_answer_subtitle", self.language
+                                ),
+                            )
+                            generating_answer_pending = True
+                        # If this is an early-finish hint, unlock UI now while we wait for finalization
+                        try:
+                            if metadata and metadata.get("early_finish"):
+                                # Stop processing to hide stop button and enable download UI
+                                self.stop_processing(session_id)
+                        except Exception as e:
+                            logging.warning(
+                                f"Failed to stop processing on early finish for session {session_id}: {e}"
+                            )
+                        yield working_history, ""
+
+                    elif event_type == "completion":
+                        # Final completion message - update progress display
+                        self.session_manager.set_status(session_id, content)
+                        if generating_answer_pending:
+                            complete_generating_answer_bubble(
+                                working_history, generating_answer_id
+                            )
+                            generating_answer_pending = False
+                        if reasoning_bubble_id is not None:
+                            complete_reasoning_bubble(
+                                working_history, reasoning_bubble_id
+                            )
+                        yield working_history, ""
+
+                    elif event_type == "budget_update":
+                        # Budget snapshot was refreshed - token budget display will update via timer
+                        # Why timer instead of immediate update?
+                        # - Budget snapshots are computed at specific "budget moments" (pre-iteration, post-tool),
+                        #   not on every streaming chunk, so updates are infrequent enough that timer is efficient
+                        # - Timer interval (UI_REFRESH_INTERVAL, typically 2-5s) ensures prompt updates
+                        #   without overwhelming the UI with too frequent updates
+                        # - To update immediately, we'd need to add token_budget_display as an output to the
+                        #   streaming generator, which would require significant refactoring of the generator signature
+                        # - Timer approach matches Gradio 5 behavior and provides good UX with minimal complexity
+                        # Continue streaming - timer will pick up the updated snapshot within 2-5 seconds
+                        yield working_history, ""
+                        continue
+
+                    elif event_type == "turn_complete":
+                        # Store session-aware turn snapshot for analytics/logs (non-persistent)
+                        ordered = metadata.get("ordered_messages") if metadata else None
+                        conversation_id = (
+                            metadata.get("conversation_id") if metadata else session_id
+                        )
+                        if ordered and conversation_id:
+                            self.session_turn_snapshots[conversation_id] = ordered
+                            # Use session-specific debug streamer
+                            session_debug = get_debug_streamer(session_id)
+                            session_debug.info(
+                                f"Turn snapshot stored for session {conversation_id} with {len(ordered)} messages"
+                            )
+                        if generating_answer_pending:
+                            complete_generating_answer_bubble(
+                                working_history, generating_answer_id
+                            )
+                            generating_answer_pending = False
+                        if reasoning_bubble_id is not None:
+                            complete_reasoning_bubble(
+                                working_history, reasoning_bubble_id
+                            )
+                        yield working_history, ""
+
+                    elif event_type == "tool_start":
+                        # generating_answer survives tool calls; cleanup at turn end only.
+                        tool_name = (
+                            metadata.get("tool_name", "unknown")
+                            if metadata
+                            else "unknown"
+                        )
+                        tool_call_id = (
+                            metadata.get("tool_call_id") if metadata else None
+                        )
+                        tool_title = (
+                            metadata.get(
+                                "title",
+                                format_translation(
+                                    "tool_called", self.language, tool_name=tool_name
+                                ),
+                            )
+                            if metadata
+                            else format_translation(
+                                "tool_called", self.language, tool_name="unknown"
+                            )
+                        )
+
+                        upsert_tool_call_bubble(
+                            working_history,
+                            tool_name,
+                            tool_call_id,
+                            title=tool_title,
+                            content=safe_string(content) or tool_title,
+                        )
+                        yield working_history, ""
+
+                    elif event_type == "tool_end":
+                        # Tool completed - update the pending bubble in place.
+                        tool_name = (
+                            metadata.get("tool_name", "unknown")
+                            if metadata
+                            else "unknown"
+                        )
+                        tool_call_id = (
+                            metadata.get("tool_call_id") if metadata else None
+                        )
+                        tool_title = (
+                            metadata.get(
+                                "title",
+                                format_translation(
+                                    "tool_called", self.language, tool_name=tool_name
+                                ),
+                            )
+                            if metadata
+                            else format_translation(
+                                "tool_called", self.language, tool_name="unknown"
+                            )
+                        )
+
+                        complete_tool_call_bubble(
+                            working_history,
+                            tool_name=tool_name,
+                            tool_call_id=tool_call_id,
+                            content=safe_string(content),
+                            title=tool_title,
+                            metadata={
+                                key: value
+                                for key, value in {
+                                    "duration": metadata.get("duration")
+                                    if metadata
+                                    else None,
+                                    "duplicate": metadata.get("duplicate")
+                                    if metadata
+                                    else None,
+                                    "duplicate_count": metadata.get("duplicate_count")
+                                    if metadata
+                                    else None,
+                                    "tool_cost": metadata.get("tool_cost")
+                                    if metadata
+                                    else None,
+                                    "tool_output": metadata.get("tool_output")
+                                    if metadata
+                                    else None,
+                                }.items()
+                                if value is not None
+                            },
+                        )
+
+                        # If the tool registered a file, append an inline
+                        # preview bubble + caption directly in the chat.
+                        file_att = metadata.get("file_attachment") if metadata else None
+                        working_history.extend(build_file_bubbles(file_att))
+
+                        # Accumulate any out-of-band tool cost (e.g. image
+                        # generation). Feeds session_cost / conversation_cost
+                        # so every cost display reflects the true total.
+                        tc = metadata.get("tool_cost") if metadata else None
+                        if tc and isinstance(tc, (int, float)) and tc > 0:
+                            tool_costs_this_turn += tc
+                            if (
+                                user_agent
+                                and hasattr(user_agent, "token_tracker")
+                                and user_agent.token_tracker
+                            ):
+                                user_agent.token_tracker.add_tool_cost(tc)
+
+                        yield working_history, ""
+
+                    elif event_type == "content":
+                        # Stream content from response - ensure content is not None
+                        content_to_add = safe_string(content)
+                        # print(f"🔍 DEBUG: Content event - content: '{content_to_add}', length: {len(content_to_add)}")
+                        # Keep generating_answer visible while answer streams; complete at turn end.
+                        if content_to_add.strip() and reasoning_bubble_id is not None:
+                            complete_reasoning_bubble(
+                                working_history, reasoning_bubble_id
+                            )
+
+                        # Only add line break when LLM starts answering after tool messages
+                        if assistant_message_index < 0 and response_content == "":
+                            # This is the very first content, check if there are recent tool messages
+                            has_recent_tool_messages = False
+                            for i in range(
+                                max(0, len(working_history) - 3), len(working_history)
+                            ):
+                                msg = working_history[i]
+                                if not isinstance(msg, dict):
+                                    continue
+                                metadata = msg.get("metadata") or {}
+                                if isinstance(metadata, dict) and metadata.get("title"):
+                                    has_recent_tool_messages = True
+                                    break
+
+                            if has_recent_tool_messages:
+                                # Add lean line break only when LLM starts answering after tools
+                                content_to_add = "\n\n" + content_to_add
+
+                        response_content += content_to_add
+
+                        # Rewrite LLM-generated inline image references to Gradio-servable URLs
+                        response_content = rewrite_llm_inline_images(
+                            response_content, user_agent
+                        )
+
+                        # Update or create assistant message
+                        if (
+                            assistant_message_index >= 0
+                            and assistant_message_index < len(working_history)
+                        ):
+                            # Update existing assistant message
+                            working_history[assistant_message_index] = {
+                                "role": "assistant",
+                                "content": response_content,
+                            }
+                            # print(f"🔍 DEBUG: Updated existing assistant message at index {assistant_message_index}")
+                        else:
+                            # Create new assistant message
+                            working_history.append(
+                                {"role": "assistant", "content": response_content}
+                            )
+                            assistant_message_index = len(working_history) - 1
+                            # print(f"🔍 DEBUG: Created new assistant message at index {assistant_message_index}")
+
+                        yield working_history, ""
+
+                    elif event_type == "error":
+                        # Add error message to response content so users can see what went wrong
+                        response_content += content + "\n\n"
+
+                        # Update assistant message with error
+                        if (
+                            assistant_message_index >= 0
+                            and assistant_message_index < len(working_history)
+                        ):
+                            working_history[assistant_message_index] = {
+                                "role": "assistant",
+                                "content": response_content,
+                            }
+                        else:
+                            working_history.append(
+                                {"role": "assistant", "content": response_content}
+                            )
+                            assistant_message_index = len(working_history) - 1
+
+                        streaming_error_handled = True
+                        yield working_history, ""
+
+            except Exception as e:
+                import traceback
+
+                _logger.error("Error streaming message: %s", e, exc_info=True)
+                streaming_error_handled = True
+                # print(f"🔍 DEBUG: Set streaming_error_handled to True in streaming loop")
+                # Continue with the rest of the processing even if streaming fails
+            finally:
+                _stream = locals().get("_stream")
+                if _stream is not None:
+                    try:
+                        await _stream.aclose()
+                    except Exception:
+                        pass
+
+            # Append partial text from interrupted stream so the UI
+            # shows every received chunk + the interruption marker.
+            pending = getattr(user_agent, "_pending_partial_text", None)
+            if pending:
+                response_content += pending
+                if assistant_message_index >= 0 and assistant_message_index < len(
+                    working_history
+                ):
+                    working_history[assistant_message_index]["content"] = (
+                        response_content
+                    )
+                user_agent._pending_partial_text = None  # noqa: SLF001
+
+            if generating_answer_pending:
+                complete_generating_answer_bubble(working_history, generating_answer_id)
+                generating_answer_pending = False
+            elif response_content.strip():
+                complete_generating_answer_bubble(working_history, None)
+            if reasoning_bubble_id is not None:
+                complete_reasoning_bubble(working_history, reasoning_bubble_id)
+
+            # Add API token count to final response
+            # Add token counts below assistant response
+            token_displays = []
+
+            # Add prompt tokens if available
+            if prompt_tokens:
+                token_displays.append(
+                    format_translation(
+                        "prompt_tokens",
+                        self.language,
+                        tokens=prompt_tokens.formatted_no_cost,
+                    )
+                )
+
+            # Add API tokens if available from session-specific agent
+            if user_agent:
+                try:
+                    # print(f"🔍 DEBUG: Getting last API tokens from session agent")
+                    last_api_tokens = user_agent.get_last_api_tokens()
+                    # print(f"🔍 DEBUG: Last API tokens: {last_api_tokens}")
+                    if last_api_tokens:
+                        token_displays.append(
+                            format_translation(
+                                "api_tokens",
+                                self.language,
+                                tokens=last_api_tokens.formatted_no_cost,
+                            )
+                        )
+                        # print(f"🔍 DEBUG: Added API token display")
+                    else:
+                        # print("🔍 DEBUG: No API tokens available")
+                        pass
+                except Exception as e:
+                    # print(f"🔍 DEBUG: API token error: {e}")
+                    # Use session-specific debug streamer
+                    session_debug = get_debug_streamer(session_id)
+                    session_debug.warning(f"Failed to get API token count: {e}")
+
+            # Add provider/model information if available - use session-specific agent
+            if user_agent and hasattr(user_agent, "get_llm_info"):
+                try:
+                    llm_info = user_agent.get_llm_info()
+                    if llm_info and "provider" in llm_info and "model_name" in llm_info:
+                        provider = llm_info.get("provider", "Unknown")
+                        model = llm_info.get("model_name", "Unknown")
+                        token_displays.append(
+                            format_translation(
+                                "provider_model",
+                                self.language,
+                                provider=provider,
+                                model=model,
+                            )
+                        )
+                        # print(f"🔍 DEBUG: Added provider/model display: {provider} / {model}")
+                except Exception as e:
+                    # print(f"🔍 DEBUG: Provider/model display error: {e}")
+                    # Use session-specific debug streamer
+                    session_debug = get_debug_streamer(session_id)
+                    session_debug.warning(f"Failed to get provider/model info: {e}")
+
+            # Calculate execution time for the entire response
+            execution_time = time.time() - start_time
+
+            # Add deduplication stats if available from session-specific agent
+            if user_agent and hasattr(user_agent, "_deduplication_stats"):
+                dedup_stats = user_agent._deduplication_stats.get(session_id, {})
+                if dedup_stats:
+                    dedup_summary = []
+                    total_duplicates = 0
+                    total_tool_calls = 0
+
+                    for _tool_key, stats in dedup_stats.items():
+                        total_tool_calls += stats["total_calls"]
+                        if stats["duplicates"] > 0:
+                            dedup_summary.append(
+                                f"{stats['tool_name']}: {stats['duplicates']}"
+                            )
+                            total_duplicates += stats["duplicates"]
+
+                    if dedup_summary:
+                        # Show per-tool breakdown
+                        per_tool_breakdown = ", ".join(dedup_summary)
+                        token_displays.append(
+                            format_translation(
+                                "deduplication",
+                                self.language,
+                                duplicates=total_duplicates,
+                                breakdown=per_tool_breakdown,
+                            )
+                        )
+                        # print(f"🔍 DEBUG: Added deduplication stats: {total_duplicates} duplicates")
+
+                    # Add total tool calls count
+                    if total_tool_calls > 0:
+                        token_displays.append(
+                            format_translation(
+                                "total_tool_calls",
+                                self.language,
+                                calls=total_tool_calls,
+                            )
+                        )
+                        # print(f"🔍 DEBUG: Added total tool calls: {total_tool_calls}")
+
+            # Add token statistics as a separate metadata block
+            if token_displays:
+                # Add total cost for this turn (LLM + any tool costs combined).
+                # _turn_cost covers the LLM; tool_costs_this_turn covers tools
+                # that make their own API calls (e.g. image generation).
+                try:
+                    if user_agent and hasattr(user_agent, "token_tracker"):
+                        llm_cost = getattr(user_agent.token_tracker, "_turn_cost", None)
+                        llm_cost = float(llm_cost) if llm_cost else 0.0
+                    else:
+                        llm_cost = 0.0
+                    total_cost = llm_cost + tool_costs_this_turn
+                    if total_cost > 0:
+                        token_displays.append(
+                            format_translation(
+                                "turn_cost",
+                                self.language,
+                                cost=f"${total_cost:.4f}",
+                            )
+                        )
+                except Exception:
+                    pass  # Never let cost display break the stats bubble
+
+                # Add execution time to the token display
+                token_displays.append(
+                    format_translation(
+                        "execution_time", self.language, time=execution_time
+                    )
+                )
+                token_display = "\n".join(token_displays)
+                # Create a separate metadata block for token statistics
+                token_metadata_message = {
+                    "role": "assistant",
+                    "content": token_display,
+                    "metadata": {
+                        "title": format_translation(
+                            "token_statistics_title", self.language
+                        )
+                    },
+                }
+                working_history.append(token_metadata_message)
+                # print(f"🔍 DEBUG: Added token metadata block: {token_display}")
+
+            # Tool messages are now added immediately during streaming, no need to add them here
+            # Ensure tool messages are preserved and not overwritten
+            # print(f"🔍 DEBUG: Final working history length: {len(working_history)}")
+            for i, msg in enumerate(working_history):
+                # Safety check for None first - before any method calls
+                if msg is None:
+                    # print(f"🔍 DEBUG: Message {i} is None, skipping...")
+                    continue
+                if not isinstance(msg, dict):
+                    # print(f"🔍 DEBUG: Message {i} is not a dict (type: {type(msg)}), skipping...")
+                    continue
+                # Additional safety for metadata access
+                metadata = msg.get("metadata") if msg else None
+                if metadata and metadata.get("title"):
+                    # print(f"🔍 DEBUG: Tool message {i}: {metadata.get('title', 'No title')}")
+                    pass
+                elif msg and msg.get("role") == "assistant":
+                    # print(f"🔍 DEBUG: Assistant message {i}: {len(msg.get('content', ''))} chars")
+                    pass
+
+            # Stop processing state (per-session)
+            self.stop_processing(session_id)
+
+            # Final yield with updated stats
+            # print(f"🔍 DEBUG: Final yield - working_history length: {len(working_history)}")
+            # print(f"🔍 DEBUG: Final yield - response_content length: {len(response_content)}")
+            yield working_history, ""
+
+        except Exception as e:
+            # Log error to terminal but don't add to chat response
+            try:
+                # Use session-specific debug streamer if available, otherwise app-level
+                if "session_id" in locals():
+                    session_debug = get_debug_streamer(session_id)
+                    session_debug.error(f"Error in stream chat: {e}")
+                else:
+                    self.debug_streamer.error(f"Error in stream chat: {e}")
+            except:
+                # If debug streamer fails, just continue
+                pass
+            _logger.error("Streaming error (terminal log only): %s", e, exc_info=True)
+            # Stop processing state on error
+            # self.stop_processing()
+            # Continue gracefully - don't stop processing for streaming errors
+            # The response might still be valid even with streaming issues
+            yield working_history, ""
+        finally:
+            # Clear session context after turn
+            try:
+                set_current_session_id(None)
+            except Exception as e:
+                logging.debug(f"Failed to clear session context: {e}")
+
+    def _sync_llm_dropdown_from_session(self, request: gr.Request | None = None) -> Any:
+        """Align sidebar LLM dropdown with the active session agent."""
+        if not request or not getattr(self, "session_manager", None):
+            return gr.update()
+        try:
+            sid = self.session_manager.get_session_id(request)
+            agent = self.session_manager.get_session_agent(sid)
+            inst = getattr(agent, "llm_instance", None)
+            if not inst:
+                return gr.update()
+            p, m = inst.provider.value, inst.model_name
+            return f"{p.title()} / {m}"
+        except Exception as e:
+            logging.getLogger(__name__).debug(
+                "sync_llm_dropdown_from_session: %s", e, exc_info=True
+            )
+            return gr.update()
+
+    def _create_event_handlers(self) -> dict[str, Any]:
+        """Create event handlers for all tabs"""
+        handlers = {
+            # Chat handlers (core functionality)
+            "stream_message": self._stream_message_wrapper,
+            "clear_chat": self.clear_conversation,
+            # Status and monitoring handlers
+            "update_status": self._update_status,
+            "update_token_budget": self._update_token_budget,
+            "sync_llm_dropdown_from_session": self._sync_llm_dropdown_from_session,
+            "refresh_logs": self._refresh_logs,
+            "refresh_stats": self._refresh_stats,
+            "update_all_ui": self.update_all_ui_components,
+            "trigger_ui_update": self.trigger_ui_update,
+            "get_progress_status": self.get_progress_status,
+            "update_progress_display": self.update_progress_display,
+            # LLM selection handlers - removed auto-refresh handler
+            # LLM selection components update only when explicitly triggered
+        }
+
+        # Add language switch handler if this is the language detection app
+
+        return handlers
+
+    def _stream_message_wrapper(
+        self, message: str, history: list[dict[str, str]], request: gr.Request = None
+    ):
+        """Stream a message to the agent (synchronous wrapper)"""
+        if not message.strip():
+            yield history, ""
+            return
+
+        # Start processing state for icon rotation
+        self.start_processing()
+
+        # Always use the persistent background loop to avoid closing gRPC/Gemini resources
+        self._ensure_stream_loop()
+        import queue
+
+        out_queue = queue.Queue()
+        future = self._submit_stream_task(message, history, request, out_queue)
+
+        try:
+            while True:
+                item = out_queue.get()
+                if item is StopIteration:
+                    break
+                yield item
+        finally:
+            # Best-effort cancel if still running
+            try:
+                if not future.done():
+                    future.cancel()
+            except Exception as e:
+                logging.debug(f"Failed to cancel future: {e}")
+
+        # Refresh UI after streaming completes (EVENT-DRIVEN)
+        self._refresh_ui_after_message()
+
+    def _update_status(self, request: gr.Request = None) -> str:
+        """Update Statistics tab (same content as full stats refresh)."""
+        return self._refresh_stats(request)
+
+    def _update_token_budget(self, request: gr.Request = None) -> str:
+        """Update token budget display - delegates to chat tab with session awareness"""
+        chat_tab = self.tab_instances.get("chat")
+        if chat_tab and hasattr(chat_tab, "format_token_budget_display"):
+            return chat_tab.format_token_budget_display(request)
+        return get_translation_key("token_budget_initializing", self.language)
+
+    def _refresh_logs(self, request: gr.Request = None) -> str:
+        """Refresh logs display - delegates to logs tab with session awareness"""
+        logs_tab = self.tab_instances.get("logs")
+        if logs_tab and hasattr(logs_tab, "get_initialization_logs"):
+            return logs_tab.get_initialization_logs(request)
+
+        # Fallback logs
+        return (
+            "\n".join(self.initialization_logs)
+            if self.initialization_logs
+            else "No logs available"
+        )
+
+    def _refresh_stats(self, request: gr.Request = None) -> str:
+        """Refresh stats display - delegates to stats tab with session awareness"""
+        stats_tab = self.tab_instances.get("stats")
+        if stats_tab and hasattr(stats_tab, "format_stats_display"):
+            return stats_tab.format_stats_display(request)
+
+        # Fallback stats
+        if self.is_ready():
+            return get_translation_key("agent_ready", self.language)
+        else:
+            return get_translation_key("agent_initializing", self.language)
+
+    def _trigger_ui_update(self):
+        """Trigger UI update after agent initialization or message processing"""
+        try:
+            # print("🔍 DEBUG: Triggering UI update...")
+            # Store the update trigger - the UI will check this
+            self._ui_update_needed = True
+        except Exception:
+            # print(f"🔍 DEBUG: Error triggering UI update: {e}")
+            pass
+
+    def check_and_clear_ui_update(self) -> bool:
+        """Check if UI update is needed and clear the flag"""
+        if self._ui_update_needed:
+            self._ui_update_needed = False
+            return True
+        return False
+
+    def update_all_ui_components(
+        self, request: gr.Request = None
+    ) -> tuple[str, str, str, str]:
+        """Refresh stats block (three outputs) + logs (session-aware)."""
+        stats = self._refresh_stats(request)
+        logs = self._refresh_logs(request)
+        return stats, stats, stats, logs
+
+    def trigger_ui_update(self):
+        """Trigger UI update after agent initialization or message processing"""
+        try:
+            # print("🔍 DEBUG: Triggering UI update...")
+            # This will be called when the agent is ready or after messages
+            # The actual UI update will happen through Gradio's event system
+            self._ui_update_needed = True
+        except Exception:
+            # print(f"🔍 DEBUG: Error triggering UI update: {e}")
+            pass
+
+    def _refresh_ui_after_message(self):
+        """Refresh all UI components after a message is processed (EVENT-DRIVEN)"""
+        try:
+            # Trigger UI update after message processing
+            self.trigger_ui_update()
+
+            # print("🔍 DEBUG: UI refreshed after message completion (EVENT-DRIVEN)")
+
+        except Exception:
+            # print(f"🔍 DEBUG: Error refreshing UI after message: {e}")
+            pass
+
+    def create_interface(self) -> gr.Blocks:
+        """Create the Gradio interface using UI Manager and modular tabs"""
+        # Validate UI Manager
+        if not self.ui_manager:
+            msg = "UI Manager not available - cannot create interface"
+            raise RuntimeError(msg)
+
+        # Create event handlers
+        event_handlers = self._create_event_handlers()
+
+        # Create tab modules with error handling
+        tab_modules = []
+        sidebar_for_tabs: Any = None
+        try:
+            sidebar_for_tabs = Sidebar(
+                event_handlers, language=self.language, i18n_instance=self.i18n
+            )
+            sidebar_for_tabs.set_main_app(self)
+
+            # Home tab first (welcome page)
+            if HomeTab:
+                home_tab = HomeTab(
+                    event_handlers, language=self.language, i18n_instance=self.i18n
+                )
+                home_tab.set_main_app(self)
+                tab_modules.append(home_tab)
+                self.tab_instances["home"] = home_tab
+            else:
+                _logger.warning("HomeTab not available")
+
+            if ChatTab:
+                chat_tab = ChatTab(
+                    event_handlers, language=self.language, i18n_instance=self.i18n
+                )
+                chat_tab.set_main_app(self)
+                tab_modules.append(chat_tab)
+                self.tab_instances["chat"] = chat_tab
+            else:
+                _logger.warning("ChatTab not available")
+
+            if StatsTab:
+                stats_tab = StatsTab(
+                    event_handlers, language=self.language, i18n_instance=self.i18n
+                )
+                stats_tab.set_main_app(self)
+                tab_modules.append(stats_tab)
+                self.tab_instances["stats"] = stats_tab
+            else:
+                _logger.warning("StatsTab not available")
+
+            if DownloadsTab:
+                downloads_tab = DownloadsTab(
+                    event_handlers, language=self.language, i18n_instance=self.i18n
+                )
+                downloads_tab.set_main_app(self)
+                tab_modules.append(downloads_tab)
+                self.tab_instances["downloads"] = downloads_tab
+            else:
+                _logger.warning("DownloadsTab not available")
+
+            # Config tab is always shown. CMW_USE_DOTENV only switches platform
+            # credentials: .env vs browser (see ConfigTab).
+            if ConfigTab:
+                config_tab = ConfigTab(
+                    event_handlers, language=self.language, i18n_instance=self.i18n
+                )
+                config_tab.set_main_app(self)
+                config_tab.set_sidebar_instance(sidebar_for_tabs)
+                tab_modules.append(config_tab)
+                self.tab_instances["config"] = config_tab
+            else:
+                _logger.info("ConfigTab class unavailable; skipping config tab")
+
+            if LogsTab:
+                logs_tab = LogsTab(
+                    event_handlers, language=self.language, i18n_instance=self.i18n
+                )
+                logs_tab.set_main_app(self)
+                tab_modules.append(logs_tab)
+                self.tab_instances["logs"] = logs_tab
+            else:
+                _logger.warning("LogsTab not available")
+        except Exception as e:
+            _logger.exception("Error creating tab modules: %s", e)
+            raise
+
+        # Configure queue manager once on the real demo (not a throwaway temp Blocks).
+        try:
+            if hasattr(self, "queue_manager") and self.queue_manager:
+                _logger.info("Queue manager ready (configured on demo later)")
+            else:
+                _logger.warning("Queue manager not available for configuration")
+        except Exception as e:
+            _logger.warning("Failed to configure queue manager: %s", e)
+
+        # Use UI Manager to create interface
+        try:
+            demo = self.ui_manager.create_interface(
+                tab_modules,
+                event_handlers,
+                main_app=self,
+                sidebar_instance=sidebar_for_tabs,
+            )
+        except Exception as e:
+            _logger.exception("Error creating interface: %s", e)
+            raise
+
+        # Add a minimal server-side API endpoint to ask a question and get final answer
+        # This uses the same session isolation as the UI and returns only the last assistant text
+        def _api_ask(
+            question: str,
+            username: str | None = None,
+            password: str | None = None,
+            base_url: str | None = None,
+            session_id: str | None = None,
+        ) -> str:
+            _logger.info(f"🔗 API /ask called with question: {question[:50]}...")
+
+            # Use provided session_id or generate a new one
+            if not session_id:
+                session_id = f"api_{uuid.uuid4().hex[:16]}_{int(time.time())}"
+
+            # Set session context for logging and request config resolution
+            self.set_session_context(session_id)
+            set_current_session_id(session_id)
+
+            # Set session configuration if provided
+            if any([username, password, base_url]):
+                config = {}
+                if username is not None:
+                    config["username"] = username.strip()
+                if password is not None:
+                    config["password"] = password.strip()
+                if base_url is not None:
+                    config["url"] = base_url.strip()
+
+                if config:
+                    set_session_config(session_id, config)
+                    _logger.debug(
+                        f"API: Set session config for {session_id}: {list(config.keys())}"
+                    )
+
+            # Get user agent with session configuration
+            user_agent = self.get_user_agent(session_id)
+
+            # Collect all streaming content into a single response
+            response_content = ""
+            try:
+                # Use asyncio to run the async stream_message method
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+
+                async def _collect_response():
+                    nonlocal response_content
+                    async for event in user_agent.stream_message(question, session_id):
+                        if not event:
+                            continue
+                        event_type = event.get("type")
+                        if event_type == "content":
+                            content = event.get("content", "")
+                            if content:
+                                response_content += content
+                        elif event_type == "error":
+                            error = event.get("content", "Error")
+                            response_content = f"❌ {error}"
+                            return
+
+                loop.run_until_complete(_collect_response())
+                loop.close()
+
+            except Exception as e:
+                _logger.exception(f"API /ask error: {e}")
+                return f"❌ {e}"
+
+            _logger.info(
+                f"API /ask: Returning response (length: {len(response_content)})"
+            )
+            return response_content
+
+        # Streaming endpoint: yields incremental content for cURL/Client streaming
+        def _api_ask_stream(
+            question: str,
+            username: str | None = None,
+            password: str | None = None,
+            base_url: str | None = None,
+            session_id: str | None = None,
+        ):
+            _logger.info(f"🔗 API /ask_stream called with question: {question[:50]}...")
+
+            # Use provided session_id or generate a new one
+            if not session_id:
+                session_id = f"api_{uuid.uuid4().hex[:16]}_{int(time.time())}"
+
+            self.set_session_context(session_id)
+            set_current_session_id(session_id)
+
+            user_agent = self.get_user_agent(session_id)
+
+            # Set session configuration if provided
+            if any([username, password, base_url]):
+                config = {}
+                if username is not None:
+                    config["username"] = username.strip()
+                if password is not None:
+                    config["password"] = password.strip()
+                if base_url is not None:
+                    config["url"] = base_url.strip()
+
+                if config:
+                    set_session_config(session_id, config)
+                    _logger.debug(
+                        f"API: Set session config for {session_id}: {list(config.keys())}"
+                    )
+
+            cumulative = ""
+
+            async def _stream():
+                nonlocal cumulative
+                try:
+                    # Pass app's language for proper i18n
+                    async for event in user_agent.stream_message(
+                        question, session_id, language=self.language
+                    ):
+                        if not event:
+                            continue
+                        et = event.get("type")
+                        if et == "content":
+                            piece = safe_string(event.get("content", ""))
+                            if not piece:
+                                continue
+                            cumulative += piece
+                            # yield incremental text
+                            yield cumulative
+                        elif et == "error":
+                            # surface error as a final message
+                            err = safe_string(event.get("content", "Error"))
+                            yield err
+                            return
+                    # end for
+                except Exception as e:
+                    yield f"❌ {e}"
+
+            # Proper async-to-sync bridge using threading and queue
+
+            def run_async_generator():
+                async def _run():
+                    async for item in _stream():
+                        queue.put(item)
+                    queue.put(None)  # Signal end
+
+                # Run in a new event loop in a separate thread
+                asyncio.run(_run())
+
+            queue = Queue()
+            thread = threading.Thread(target=run_async_generator)
+            thread.start()
+
+            try:
+                while True:
+                    try:
+                        item = queue.get(timeout=60)  # 30 second timeout
+                        if item is None:  # End signal
+                            break
+                        yield item
+                    except Empty:
+                        yield "⏱️ Timeout waiting for response"
+                        break
+            finally:
+                thread.join(timeout=1)
+
+        # Register API endpoints: streaming via hidden submit (generator SSE); ask via gr.api().
+        with demo:
+            _in = gr.Textbox(label="question", visible=False)
+            _username = gr.Textbox(label="username", visible=False)
+            _password = gr.Textbox(label="password", type="password", visible=False)
+            _base_url = gr.Textbox(label="base_url", visible=False)
+            _session_id = gr.Textbox(label="session_id", type="password", visible=False)
+            _out = gr.Textbox(label="answer", visible=False)
+            _in.submit(
+                _api_ask_stream,
+                inputs=[_in, _username, _password, _base_url, _session_id],
+                outputs=_out,
+                api_name="ask_stream",
+                api_visibility="private",
+            )
+            gr.api(_api_ask, api_name="ask", api_visibility="private")
+
+        # Configure concurrency and queuing AFTER registering named endpoints
+        # Always initialize queue (even with minimal settings) to prevent AttributeError.
+        # Reference: ``cmw-rag/rag_engine/api/app.py`` — lightweight tails use ``queue=False``;
+        # streaming/chat handlers run on the Gradio queue via ``QueueManager.configure_queue``.
+        self.queue_manager.configure_queue(demo)
+
+        # Ensure queue is initialized even if configure_queue didn't call demo.queue()
+        # This prevents AttributeError: 'NoneType' object has no attribute 'max_thread_count'
+        if demo._queue is None:
+            demo.queue(default_concurrency_limit=1, status_update_rate="auto")
+            _logger.info("Queue initialized with minimal default settings")
+
+        # Ensure thread-pool limiter is created before server starts.
+        # Gradio 6.11+ runs pre/post processing via anyio.to_thread.run_sync;
+        # a missing limiter can stall SSE-backed initialization.
+        demo.create_limiter()
+
+        # OpenAI-shaped completions on Gradio's FastAPI app (see also ``main()`` mount path).
+        register_agent_completions_route(demo, self)
+
+        # Consolidate all components from UI Manager (single source of truth)
+        self.components = self.ui_manager.get_components()
+        # Keep app reference for external FastAPI endpoint registration.
+        demo.cmw_main_app = self
+
+        return demo
+
+
+class NextGenAppWithLanguageDetection(NextGenApp):
+    """LangChain-native Gradio application with dynamic language detection and switching"""
+
+    def __init__(self, language: str = "en"):
+        super().__init__(language)
+        self.current_language = language
+        self.supported_languages = ["en", "ru"]
+
+        # Language detection is now integrated directly into this class
+
+    def get_current_language(self, request: gr.Request = None) -> str:
+        """
+        Get current language using Gradio's I18n system with GRADIO_DEFAULT_LANGUAGE as primary source.
+
+        Args:
+            request: Gradio request object (optional)
+
+        Returns:
+            Language code ('en' or 'ru')
+        """
+        try:
+            # Primary: Use GRADIO_DEFAULT_LANGUAGE environment variable
+            import os
+
+            gradio_lang = os.getenv("GRADIO_DEFAULT_LANGUAGE", "").lower()
+            if gradio_lang is not None:
+                return gradio_lang
+
+            # Secondary: Use Gradio's I18n system for detection
+            i18n = gr.I18n(en={"language": "en"}, ru={"language": "ru"})
+            detected_language = i18n("language")
+            if detected_language is not None:
+                return detected_language
+        except Exception:
+            return "ru"
+
+
+# Global demo variable for single port architecture
+demo = None
+# Tracks UI-shaping env (home order, download prep) so cached Blocks rebuild when they change.
+_DEMO_UI_LAYOUT_SIG: str | None = None
+
+
+def _ui_layout_env_signature() -> str:
+    """Stable fingerprint for UI layout env vars (same interpreter, e.g. watch / reload)."""
+    return os.getenv("CMW_UI_DOWNLOAD_PREP_AFTER_STREAM") or ""
+
+
+def get_demo_with_language_detection():
+    """Get or create the demo interface with language detection support"""
+    global demo, _DEMO_UI_LAYOUT_SIG
+
+    sig = _ui_layout_env_signature()
+    if demo is not None and sig != _DEMO_UI_LAYOUT_SIG:
+        _logger.info(
+            "Rebuilding demo: UI layout env changed (%r -> %r)",
+            _DEMO_UI_LAYOUT_SIG,
+            sig,
+        )
+        demo = None
+
+    if demo is None:
+        try:
+            # First, detect the language using the elegant i18n system
+            temp_app = NextGenAppWithLanguageDetection()
+            detected_language = temp_app.get_current_language()
+
+            # Create app with the detected language
+            app = NextGenAppWithLanguageDetection(language=detected_language)
+            demo = app.create_interface()
+
+            # Ensure the demo has the required attributes for Gradio reloading
+            if not hasattr(demo, "_queue"):
+                demo._queue = None
+
+            _DEMO_UI_LAYOUT_SIG = sig
+            _logger.info(f"🌐 Demo created with detected language: {detected_language}")
+        except Exception as e:
+            _logger.exception("Error creating demo: %s", e)
+            # Create a minimal working demo with required attributes
+            with gr.Blocks() as fallback_demo:
+                gr.Markdown("# CMW Platform Agent")
+                gr.Markdown("Application is initializing...")
+            # Ensure required attributes exist
+            if not hasattr(fallback_demo, "_queue"):
+                fallback_demo._queue = None
+            demo = fallback_demo
+            _DEMO_UI_LAYOUT_SIG = sig
+
+    return demo
+
+
+def create_fallback_demo():
+    """Create a minimal fallback demo for error cases"""
+    with gr.Blocks() as fallback_demo:
+        gr.Markdown("# CMW Platform Agent")
+        gr.Markdown("Application is initializing...")
+    # Ensure required attributes exist
+    if not hasattr(fallback_demo, "_queue"):
+        fallback_demo._queue = None
+    return fallback_demo
+
+
+# Initialize demo for Gradio reloading - use language detection
+# This ensures demo is available for Gradio's reload mechanism
+def initialize_demo():
+    """Initialize the demo with proper error handling"""
+    try:
+        return get_demo_with_language_detection()
+    except Exception as e:
+        _logger.exception("Failed to initialize demo: %s", e)
+        # Create a minimal fallback demo
+        return create_fallback_demo()
+
+
+# Initialize demo - this will be available for Gradio's static analysis
+# Use a simple approach that Gradio can detect
+try:
+    demo = initialize_demo()
+except Exception as e:
+    _logger.exception("Failed to initialize demo at module level: %s", e)
+    # Create a minimal fallback demo that Gradio can detect
+    with gr.Blocks() as demo:
+        gr.Markdown("# CMW Platform Agent")
+        gr.Markdown("Application is initializing...")
+
+
+def reload_demo():
+    """Reload the demo for Gradio hot reloading"""
+    global demo
+    try:
+        _logger.info("Reloading demo...")
+        demo = None
+        demo = get_demo_with_language_detection()
+        return demo
+    except Exception as e:
+        _logger.exception("Error reloading demo: %s", e)
+        # Return current demo or create minimal one
+        if demo is None:
+            with gr.Blocks() as fallback_demo:
+                gr.Markdown("# CMW Platform Agent")
+                gr.Markdown("Error during reload - please restart the application")
+            return fallback_demo
+        return demo
+
+
+def find_available_port(start_port=7860, max_attempts=10):
+    """Find an available port starting from start_port"""
+    import socket
+
+    for port in range(start_port, start_port + max_attempts):
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind(("0.0.0.0", port))
+                return port
+        except OSError:
+            continue
+    return None
+
+
+def main():
+    """Main function to run the application with single port and language detection"""
+    import argparse
+    import os
+    import sys
+
+    # Setup LangSmith environment first
+    from kg_engine.agent.langsmith_config import setup_langsmith_environment
+
+    setup_langsmith_environment()
+
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description="CMW Platform Agent")
+    parser.add_argument(
+        "-en", "--english", action="store_true", help="Start in English"
+    )
+    parser.add_argument(
+        "-ru", "--russian", action="store_true", help="Start in Russian"
+    )
+    parser.add_argument(
+        "-p", "--port", type=int, default=None, help="Port to run on (overrides config)"
+    )
+    parser.add_argument(
+        "--auto-port", action="store_true", help="Automatically find an available port"
+    )
+    parser.add_argument(
+        "--config", action="store_true", help="Show current configuration"
+    )
+    args = parser.parse_args()
+
+    # Show configuration if requested
+    if args.config:
+        config.print_config()
+        return
+
+    # Get language settings from central config
+    language_settings = get_language_settings()
+    port_settings = get_port_settings()
+
+    # Determine language from command line, environment variable, or config default
+    # Priority: Command line > Environment variable > Config default
+    language = language_settings["default_language"]
+
+    try:
+        # Create a temporary app instance to use the integrated language detection
+        temp_app = NextGenAppWithLanguageDetection()
+        detected_language = temp_app.get_current_language()
+        if detected_language in ["en", "ru"]:
+            language = detected_language
+            _logger.info(
+                f"🌐 Language overridden with Gradio detection: {detected_language}"
+            )
+    except Exception as e:
+        _logger.warning(
+            f"⚠️ Language detection failed: {e}, using dotenv language: {language}"
+        )
+
+    if args.russian:
+        language = "ru"
+    elif args.english:
+        language = "en"
+
+    # Override language with Gradio I18n detection if no command line override
+    # Determine port
+    default_port = args.port if args.port is not None else port_settings["default_port"]
+
+    if args.auto_port:
+        port = find_available_port(default_port, port_settings["auto_port_range"])
+        if port is None:
+            _logger.error(
+                "Could not find an available port starting from %s", default_port
+            )
+            sys.exit(1)
+    else:
+        port = default_port
+
+    _logger.info("Starting LangChain-Native LLM Agent App with language detection...")
+    _logger.info("Language: %s", language.upper())
+    _logger.info("Port: %s", port)
+
+    # Use a single global demo instance via the initializer
+    # to prevent desynchronization of blocks_config and fn_index
+    # during reloads and multiple interface creations
+    demo = initialize_demo()
+
+    _logger.info(
+        "Launching FastAPI + mounted Gradio on port %s with language switching...",
+        port,
+    )
+    from fastapi import FastAPI
+    from gradio import mount_gradio_app
+    import uvicorn
+
+    fastapi_app = FastAPI(title="CMW Platform Agent API")
+    main_app = getattr(demo, "cmw_main_app", None)
+    if main_app is not None:
+        register_agent_completions_on_fastapi(fastapi_app, main_app)
+    else:
+        _logger.warning(
+            "Main app reference unavailable; agent completions endpoint not registered"
+        )
+
+    _repo_root = Path(__file__).resolve().parent.parent
+    _theme_css = _repo_root / "resources" / "css" / "cmw_copilot_theme.css"
+    _favicon = _repo_root / "resources" / "img" / "comindware_logo.svg"
+
+    app = mount_gradio_app(
+        fastapi_app,
+        demo,
+        path="/",
+        server_name="0.0.0.0",
+        server_port=port,
+        footer_links=[],
+        theme=gr.themes.Soft(),
+        css_paths=[_theme_css],
+        favicon_path=str(_favicon),
+        show_error=True,
+        ssr_mode=False,
+        # Cache + theme/static assets (same intent as ``demo.launch(allowed_paths=...)``).
+        allowed_paths=[
+            str(Path(_GRADIO_CACHE_DIR).resolve()),
+            str(_GRADIO_RESOURCES_DIR.resolve()),
+        ],
+    )
+
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=port,
+        log_level="info",
+        timeout_graceful_shutdown=3,
+    )
+
+
+if __name__ == "__main__":
+    main()

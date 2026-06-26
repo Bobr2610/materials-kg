@@ -1,0 +1,64 @@
+# Materials Knowledge Graph — .gitignore
+
+# Environments
+.env
+.venv/**
+.venv*/**
+__pycache__/
+
+# Application data (generated, environment-specific)
+data/chromadb_data/**
+chroma/**
+logs/**
+*.log
+*.log.*
+*.pid
+
+# Python build artifacts
+*.egg-info/
+dist/
+build/
+.mypy_cache/*
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# IDE
+.vscode/
+.cursor/hooks/state/
+.opencode/package-lock.json
+.opencode/package.json
+.opencode/node_modules/
+.opencode/plans/**/*.backup
+.opencode/ralph/
+
+# Reference repos (gitignored symlinks)
+.reference-repos/**
+
+# Node.js
+node_modules/
+
+# Scratch / disposable experiments
+.scratch/
+!.scratch/README.md
+
+# OS files
+*.swp
+Thumbs.db
+.DS_Store
+
+# Gradio temp
+.gradio/
+
+# Playwright / browser automation
+.playwright-mcp/**
+.playwright-cli/**
+.browser-states/
+
+# Screencasts
+.screencasts/
+
+# MkDocs build output
+_site/
+.site/

@@ -1,0 +1,863 @@
+import inspect
+from typing import Any, Dict, List, Literal, Optional, Set, Type
+
+from langchain_core.tools import tool
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+from . import requests_ as requests_
+from .models import (
+    AttributeResult,
+    CommonAttributeFields,
+    CommonGetAttributeFields,
+    RefAttributeFields,
+    TemplateResult,
+    normalize_operation_archive_unarchive,
+)
+
+# Common constants
+APPLICATION_ENDPOINT = "webapi/Solution"
+ATTRIBUTE_ENDPOINT = "webapi/Attribute"
+RECORD_TEMPLATE_ENDPOINT = "webapi/RecordTemplate"
+FORM_ENDPOINT = "webapi/Form"
+DATASET_ENDPOINT = "webapi/Dataset"
+TOOLBAR_ENDPOINT = "webapi/Toolbar"
+BUTTON_ENDPOINT = "webapi/UserCommand"
+KEYS_TO_REMOVE_MAPPING = {
+    "String": [
+        "isMultiValue",
+        "isMandatory",
+        "isOwnership",
+        "instanceGlobalAlias",
+        "imageColorType",
+        "imagePreserveAspectRatio",
+    ],
+    "Role": [
+        "instanceGlobalAlias",
+        "isTitle",
+        "isUnique",
+        "isIndexed",
+        "isMandatory",
+        "isOwnership",
+        "imageColorType",
+        "imagePreserveAspectRatio",
+    ],
+    "Instance": [
+        "isTitle",
+        "isUnique",
+        "isIndexed",
+        "isMandatory",
+        "isOwnership",
+        "imageColorType",
+        "imagePreserveAspectRatio",
+    ],
+    "Image": [
+        "isUnique",
+        "format",
+        "isCalculated",
+        "isTitle",
+        "isMandatory",
+        "isOwnership",
+        "instanceGlobalAlias",
+    ],
+    "Enum": [
+        "isMultiValue",
+        "isMandatory",
+        "isOwnership",
+        "instanceGlobalAlias",
+        "imageColorType",
+        "imagePreserveAspectRatio",
+    ],
+    "Duration": [
+        "isUnique",
+        "isIndexed",
+        "isMultiValue",
+        "isMandatory",
+        "isOwnership",
+        "instanceGlobalAlias",
+        "imageColorType",
+        "imagePreserveAspectRatio",
+    ],
+    "Drawing": [
+        "isIndexed",
+        "isMultiValue",
+        "imageColorType",
+        "imagePreserveAspectRatio",
+        "isUnique",
+        "format",
+        "isCalculated",
+        "isTitle",
+        "isMandatory",
+        "isOwnership",
+        "instanceGlobalAlias",
+    ],
+    "Document": [
+        "isTitle",
+        "isUnique",
+        "isCalculated",
+        "isMandatory",
+        "isOwnership",
+        "instanceGlobalAlias",
+        "imageColorType",
+        "imagePreserveAspectRatio",
+    ],
+    "Decimal": [
+        "isMultiValue",
+        "isMandatory",
+        "isOwnership",
+        "instanceGlobalAlias",
+        "imageColorType",
+        "imagePreserveAspectRatio",
+    ],
+    "DateTime": [
+        "isUnique",
+        "isIndexed",
+        "isMultiValue",
+        "isMandatory",
+        "isOwnership",
+        "instanceGlobalAlias",
+        "imageColorType",
+        "imagePreserveAspectRatio",
+    ],
+    "Boolean": [
+        "isMultiValue",
+        "isMandatory",
+        "isOwnership",
+        "instanceGlobalAlias",
+        "imageColorType",
+        "imagePreserveAspectRatio",
+    ],
+    "Account": [
+        "isUnique",
+        "isIndexed",
+        "isMandatory",
+        "isOwnership",
+        "imageColorType",
+        "imagePreserveAspectRatio",
+    ],
+    "Process": [
+        "isUnique",
+        "isIndexed",
+        "isTitle",
+        "isCalculated",
+        "isMultiValue",
+        "isMandatory",
+        "isOwnership",
+        "instanceGlobalAlias",
+        "imageColorType",
+        "imagePreserveAspectRatio",
+    ],
+    "Conversation": [
+        "isUnique",
+        "isIndexed",
+        "isTitle",
+        "isCalculated",
+        "isMultiValue",
+        "isMandatory",
+        "isOwnership",
+        "instanceGlobalAlias",
+        "imageColorType",
+        "imagePreserveAspectRatio",
+    ],
+    "Color": [
+        "isUnique",
+        "isIndexed",
+        "isTitle",
+        "isCalculated",
+        "isMultiValue",
+        "isMandatory",
+        "isOwnership",
+        "instanceGlobalAlias",
+        "imageColorType",
+        "imagePreserveAspectRatio",
+    ],
+    "Record": [
+        "relatedTemplate",
+        "isReferenceData",
+        "isTransferable",
+        "keyProperty",
+        "conversationDisplayConfig",
+    ],
+    "Application": [],
+}
+
+ATTRIBUTE_MODEL_DESCRIPTIONS = {
+    "Account": """Stores one or several linked account IDs.""",
+    "Boolean": "Stores `true` or `false`.",
+    "DateTime": """Stores date and time along with a `Display format`:
+        - DateISO: 1986-09-04
+        - YearMonth: сентябрь 1986
+        - TimeTracker: остался 1 д 12 ч 55 мин
+        - DateTimeISO: 1986-09-04 03:30:00
+        - ShortDateLongTime: 04.09.1986 г. 03:30:00
+        - ShortDateShortTime: 04.09.1986 03:30
+        - CondensedDateTime: 4 сент. 1986 г. 03:30
+        - MonthDay: 4 сентября
+        - CondensedDate: 4 сент. 1986 г.
+        - ShortDate: 4.09.1986
+        - LongDate: 4 сентября 1986 г.
+        - LongDateLongTime: 4 сентября 1986 г. 03:30:00
+        - LongDateShortTime: 4 сентября 1986 г. 03:30""",
+    "Decimal": """Stores numeric numbers with configurable decimal places.
+        Decimal places examples:
+        - 0: 123
+        - 1: 123.4
+        - 2: 123.45""",
+    "Document": "Stores file attachments with configurable file format filters.",
+    "Drawing": "Stores floor plans based on CAD files.",
+    "Duration": """Supports various display formats:
+        - DurationHMS: 2 ч 55 м 59 с
+        - DurationHM: 2 ч 55 м
+        - DurationHMSTime: 2:55:59 (макс 23:59:59)
+        - DurationD8HM: 3 д 12 ч 55 м (8-часовой день)
+        - DurationD24HM: 1 д 12 ч 55 м (24-часовой день)
+        - DurationFullShort: 1 д 12 ч 55 м 59 с
+        - DurationHMTime: 2:55 (макс. 23:59)""",
+    "Enum": "Stores a list of values with multiple language support and color coding.",
+    "Image": "Stores image files with configurable color modes and dimensions.",
+    "Record": "Stores one or several IDs of the linked records in the related template. "
+    "Record attribute can be mutually linked with the attribute in the related template. "
+    "Mutually linked attributes are automatically cross-linked whenever the values of one of the attributes change.",
+    "Role": "Stores one or several linked role IDs.",
+    "String": r"""Stores a sting value.
+        Supports various display formats including predefined and custom masks for common Russian data types:
+        - LicensePlateNumberRuMask: ([АВЕКМНОРСТУХавекмнорстух]{1}[0-9]{3}[АВЕКМНОРСТУХавекмнорстух]{2} [0-9]{3})
+        - IndexRuMask: ([0-9]{6})
+        - PassportRuMask: ([0-9]{4} [0-9]{6})
+        - INNMask: ([0-9]{10})
+        - OGRNMask: ([0-9]{13})
+        - IndividualINNMask: ([0-9]{12})
+        - PhoneRuMask: (\+7 \([0-9]{3}\) [0-9]{3}-[0-9]{2}-[0-9]{2})
+        - EmailMask: ^(([a-zа-яё0-9_-]+\.)*[a-zа-яё0-9_-]+@[a-zа-яё0-9-]+(\.[a-zа-яё0-9-]+)*\.[a-zа-яё]{2,6})?$""",
+}
+
+ATTRIBUTE_RESPONSE_MAPPING = {
+    "owner": "Parent template system name",
+    "alias": "Attribute system name",
+    "type": "Attribute type",
+    "format": "Display format",
+    "name": "Name",
+    "description": "Description",
+    "isSystem": "Is system",
+    "isDisabled": "Archived",
+    "isUnique": "Control value uniqueness",
+    "isIndexed": "Use to search records",
+    "isTracked": "Write changes to the log",
+    "isDigitGrouping": "Group digits numbers",
+    "isMultiValue": "Store multiple values",
+    "isTitle": "Use as record title",
+    "isCalculated": "Calculate value",
+    "isReadonly": "Is readonly",
+    "expression": "Expression for value calculation",
+    "fileFormat": "File extensions filter",
+    "uriSchemeFormats": "Allowed URI schemes  ",
+    "instanceAlias": "Related template system name",
+    "instanceAttributeAlias": "Related attribute system name",
+    "imageColorType": "Rendering color mode",
+    "imageWidth": "Image width",
+    "imageHeight": "Image height",
+    "imagePreserveAspectRatio": "Save image aspect ratio",
+    "imageXResolution": "X-axis image resolution",
+    "imageYResolution": "Y-axis image resolution",
+    "decimalPlaces": "Number decimal places",
+    "validationMaskRegex": "Custom mask",
+    "variants": "Enum values",
+    "linkedRecordTemplate": "Related template ID",
+}
+
+TEMPLATE_RESPONSE_MAPPING = {
+    "alias": "Template system name",
+    "type": "Template type",
+    "name": "Name",
+    "description": "Description",
+}
+
+APPLICATION_RESPONSE_MAPPING = {
+    "alias": "Application system name",
+    "name": "Name",
+    "description": "Description",
+    "isDefault": "Use by default",
+}
+
+ENTITY_TYPE_MAPPING = {
+    "attribute": [ATTRIBUTE_MODEL_DESCRIPTIONS, ATTRIBUTE_RESPONSE_MAPPING],
+    "template": [None, TEMPLATE_RESPONSE_MAPPING],
+    "application": [None, APPLICATION_RESPONSE_MAPPING],
+}
+
+
+
+def remove_values(obj: Any, exclude_values: set[Any] = None) -> Any:
+    """
+    Recursively remove specified values from dicts/lists.
+
+    Args:
+        obj: The object to clean (dict, list, or any other type)
+        exclude_values: Set of values to remove (default: {None, ""})
+
+    Returns:
+        Cleaned object
+    """
+    if exclude_values is None:
+        exclude_values = {None, ""}
+
+    if isinstance(obj, dict):
+        result = {}
+        for k, v in obj.items():
+            cleaned_v = remove_values(v, exclude_values)
+            # Safe comparison: only check membership if cleaned_v is hashable
+            # For unhashable types (dict, list), we assume they should be kept
+            try:
+                if cleaned_v not in exclude_values:
+                    result[k] = cleaned_v
+            except TypeError:
+                # cleaned_v is unhashable (dict, list, etc.), so keep it
+                result[k] = cleaned_v
+        return result
+
+    if isinstance(obj, list):
+        result = []
+        for v in obj:
+            cleaned_v = remove_values(v, exclude_values)
+            try:
+                if cleaned_v not in exclude_values:
+                    result.append(cleaned_v)
+            except TypeError:
+                # cleaned_v is unhashable (dict, list, etc.), so keep it
+                result.append(cleaned_v)
+        return result
+
+    return obj
+
+
+def _set_input_mask(display_format: str) -> str:
+    # Setting validation mask via display format
+    input_mask_mapping: dict[str, str] = {
+        "PlainText": None,
+        "MarkedText": None,
+        "HtmlText": None,
+        "LicensePlateNumberRuMask": "([АВЕКМНОРСТУХавекмнорстух]{1}[0-9]{3}[АВЕКМНОРСТУХавекмнорстух]{2} [0-9]{3})",
+        "IndexRuMask": "([0-9]{6})",
+        "PassportRuMask": "([0-9]{4} [0-9]{6})",
+        "INNMask": "([0-9]{10})",
+        "OGRNMask": "([0-9]{13})",
+        "IndividualINNMask": "([0-9]{12})",
+        "PhoneRuMask": "(\\+7 \\([0-9]{3}\\) [0-9]{3}-[0-9]{2}-[0-9]{2})",
+        "EmailMask": "^(([a-zа-яё0-9_-]+\\.)*[a-zа-яё0-9_-]+@[a-zа-яё0-9-]+(\\.[a-zа-яё0-9-]+)*\\.[a-zа-яё]{2,6})?$",
+        "CustomMask": None,
+    }
+
+    return input_mask_mapping.get(display_format)
+
+
+def build_global_alias(entity_type: str, owner: str, alias: str) -> dict[str, str]:
+    """
+    Build a standardized globalAlias dict for API requests.
+
+    Args:
+        entity_type: Type of entity (Form, Dataset, Toolbar, UserCommand, Attribute)
+        owner: Owner/template system name
+        alias: Entity system name
+
+    Returns:
+        dict with type, owner, alias keys
+    """
+    return {"type": entity_type, "owner": owner, "alias": alias}
+
+
+def _fetch_entity(
+    entity_type: str,
+    application_system_name: str,
+    template_system_name: str,
+    entity_system_name: str,
+    endpoint_prefix: str | None = None,
+) -> dict[str, Any] | None:
+    """
+    Generic fetch function for any entity type.
+
+    Args:
+        entity_type: Type in globalAlias (Form, Dataset, Toolbar, UserCommand, Attribute)
+        application_system_name: Application system name
+        template_system_name: Template system name
+        entity_system_name: Entity system name
+        endpoint_prefix: Optional custom endpoint prefix
+
+    Returns:
+        Entity data dict or None if not found
+    """
+    global_alias = f"{entity_type}@{template_system_name}.{entity_system_name}"
+    if endpoint_prefix is None:
+        endpoint_prefix = f"webapi/{entity_type}"
+    endpoint = f"{endpoint_prefix}/{application_system_name}/{global_alias}"
+    result = execute_get_operation(AttributeResult, endpoint)
+    if result.get("success"):
+        meta_fields = {"success", "status_code", "error"}
+        # Data may be in result.data or at top level of result
+        data = result.get("data")
+        if isinstance(data, dict):
+            return {k: v for k, v in data.items() if k not in meta_fields}
+        # Fall back to top-level fields (excluding meta)
+        return {k: v for k, v in result.items() if k not in meta_fields}
+    return None
+
+
+def _build_toolbar_items(
+    items: list[BaseModel],
+    template_system_name: str,
+) -> list[dict[str, Any]]:
+    """
+    Build toolbar items list from input schemas.
+
+    Args:
+        items: List of ToolbarItemInputSchema or similar
+        template_system_name: Template system name for action owner
+
+    Returns:
+        List of toolbar item dicts
+    """
+    toolbar_items = []
+    for idx, item_input in enumerate(items):
+        item = {
+            "action": {
+                "type": "UserCommand",
+                "owner": template_system_name,
+                "alias": item_input.button_system_name,
+            },
+            "name": item_input.display_name or item_input.button_system_name,
+            "order": item_input.item_order or idx,
+            "type": "Action",
+            "iconType": item_input.icon or "Undefined",
+            "severity": "None",
+        }
+        toolbar_items.append(item)
+    return toolbar_items
+
+
+def execute_get_operation(
+    result_model: type[BaseModel], endpoint: str
+) -> dict[str, Any]:
+    """
+    :param result_model: Pydantic-модель для валидации финального результата (должна иметь поля: success, status_code, data, error)
+    :return: Валидированный результат в виде dict (model_dump)
+    """
+
+    stack = inspect.stack()
+    caller_frame = stack[1]
+    caller_name = caller_frame.function
+
+    result = requests_._get_request(endpoint)
+
+    if not result.get("success", False):
+        adapted = {
+            "success": result.get("success", False),
+            "status_code": result.get("status_code"),
+            "data": None,
+            "error": result.get("error"),
+        }
+        return result_model(**adapted).model_dump()
+
+    # Извлекаем тело ответа
+    raw_response = result.get("raw_response")
+    if raw_response is None:
+        adapted = {
+            "success": False,
+            "status_code": result.get("status_code"),
+            "data": None,
+            "error": "No response data received from server",
+        }
+        return result_model(**adapted).model_dump()
+
+    # Проверяем структуру
+    if not isinstance(raw_response, dict) or "response" not in raw_response:
+        adapted = {
+            "success": False,
+            "status_code": result.get("status_code"),
+            "data": None,
+            "error": "Unexpected response structure from server",
+        }
+        return result_model(**adapted).model_dump()
+
+    # Копируем данные, чтобы не мутировать оригинал
+    data = (
+        raw_response["response"].copy()
+        if isinstance(raw_response["response"], dict)
+        else raw_response["response"]
+    )
+
+    if data is None:
+        adapted = {
+            "success": False,
+            "status_code": result.get("status_code"),
+            "data": None,
+            "error": "No response data in server response",
+        }
+        return result_model(**adapted).model_dump()
+
+    if isinstance(data, dict):
+        # Определяем тип атрибута
+        data = process_data(data, f"{caller_name}")
+
+    # Формируем финальный результат
+    final_result = {
+        "success": True,
+        "status_code": result["status_code"],
+        "error": None,
+    }
+
+    final_result = {**data, **final_result} if isinstance(data, dict) else final_result
+
+    # Валидируем и возвращаем
+    validated = result_model(**final_result)
+    return validated.model_dump()
+
+
+def _apply_partial_update(endpoint: str, request_body: dict[str, Any]) -> dict[str, Any]:
+    """
+    For edit operations, fetch current schema and merge missing fields.
+
+    Supports:
+    - webapi/Attribute/{app} → fetches from webapi/Attribute/List/Template@{app}.{owner}
+    - webapi/RecordTemplate/{app} → fetches from webapi/RecordTemplate/List/{app}
+    - webapi/Form/{app}/... → fetches from webapi/Form/List/Template@{app}.{template}
+    """
+    import base64
+    import requests
+
+    try:
+        cfg = requests_._load_server_config()
+        base_url = cfg.base_url.rstrip("/")
+        login = cfg.login
+        password = cfg.password
+    except Exception:
+        return request_body
+
+    if not base_url or not login or not password:
+        return request_body
+
+    creds = base64.b64encode(f"{login}:{password}".encode()).decode()
+    headers = {"Authorization": f"Basic {creds}", "Content-Type": "application/json"}
+
+    try:
+        list_endpoint = None
+        alias_path = None  # path to alias in the response item
+        alias_value = None
+
+        if endpoint.startswith("webapi/Attribute/"):
+            app_name = endpoint.rsplit("/", maxsplit=1)[-1]
+            global_alias = request_body.get("globalAlias", {})
+            owner = global_alias.get("owner", "")
+            alias_value = global_alias.get("alias", "")
+            if owner and alias_value:
+                list_endpoint = f"{base_url}/webapi/Attribute/List/Template@{app_name}.{owner}"
+                alias_path = ("globalAlias", "alias")
+
+        elif endpoint.startswith("webapi/RecordTemplate/"):
+            app_name = endpoint.rsplit("/", maxsplit=1)[-1]
+            alias_value = request_body.get("globalAlias", {}).get("alias")
+            if alias_value:
+                list_endpoint = f"{base_url}/webapi/RecordTemplate/List/{app_name}"
+                alias_path = ("globalAlias", "alias")
+
+        elif endpoint.startswith("webapi/Form/"):
+            parts = endpoint.split("/")
+            # PUT/POST: webapi/Form/{solutionAlias} - form alias in body
+            if len(parts) == 3:
+                app_name = parts[-1]
+                ga = request_body.get("globalAlias", {})
+                template_owner = ga.get("owner", "")
+                alias_value = ga.get("alias", "")
+                if template_owner and alias_value:
+                    list_endpoint = f"{base_url}/webapi/Form/List/Template@{app_name}.{template_owner}"
+                    alias_path = ("globalAlias", "alias")
+            # GET/DELETE: webapi/Form/{solutionAlias}/{formGlobalAlias}
+            elif len(parts) >= 4:
+                app_name = parts[-2]
+                form_alias = parts[-1]
+                if form_alias.startswith("Form@"):
+                    template_owner = form_alias.split("@")[1].split(".")[0] if "@" in form_alias else None
+                    alias_value = form_alias.split(".")[-1] if "." in form_alias else None
+                    if template_owner:
+                        list_endpoint = f"{base_url}/webapi/Form/List/Template@{app_name}.{template_owner}"
+                        alias_path = ("globalAlias", "alias")
+
+        if not list_endpoint or not alias_value:
+            return request_body
+
+        resp = requests.get(list_endpoint, headers=headers, timeout=30)
+        if resp.status_code != 200:
+            return request_body
+
+        data = resp.json()
+        items = data.get("response", []) if isinstance(data, dict) else []
+
+        current = None
+        for item in items:
+            item_alias = None
+            if alias_path and len(alias_path) == 2:
+                item_alias = item.get(alias_path[0], {}).get(alias_path[1])
+            elif alias_path:
+                item_alias = item.get(alias_path[0] if isinstance(alias_path, str) else "")
+            if item_alias == alias_value:
+                current = item
+                break
+
+        if current:
+            for key, value in current.items():
+                if key not in request_body:
+                    request_body[key] = value
+
+    except Exception:
+        pass
+
+    return request_body
+
+
+def execute_edit_or_create_operation(
+    request_body: dict[str, Any],
+    operation: str,
+    endpoint: str,
+    result_model: type[BaseModel],
+) -> dict[str, Any]:
+    """
+    Выполняет операцию (create/edit) через API.
+    Возвращает словарь с результатом.
+
+    For edit operations on attributes, this function automatically fetches the current
+    schema first and preserves all non-specified fields (partial update support).
+    """
+    import base64
+    import os
+
+    import requests
+
+    # Убираем None-значения
+    request_body = remove_values(request_body)
+
+    # For edit operations, do partial update - fetch current schema first
+    if operation == "edit":
+        request_body = _apply_partial_update(endpoint, request_body)
+
+    try:
+        if operation == "create":
+            result = requests_._post_request(request_body, endpoint)
+        elif operation == "edit":
+            result = requests_._put_request(request_body, endpoint)
+        else:
+            result = {
+                "success": False,
+                "error": f"No such operation: {operation}. Available operations: create, edit",
+                "status_code": 400,
+            }
+
+    except Exception as e:
+        result = {
+            "success": False,
+            "error": f"Tool execution failed: {e!s}",
+            "status_code": 500,
+        }
+
+    # Гарантируем, что result — это dict
+    if not isinstance(result, dict):
+        result = {
+            "success": False,
+            "error": f"Unexpected result type: {type(result)}",
+            "status_code": 500,
+        }
+
+    # Добавляем префикс к ошибке, если операция неуспешна
+    if not result.get("success", False) and result.get("error"):
+        error_info = result.get("error", "")
+        result["error"] = f"API operation failed: {error_info}"
+
+    validated = result_model(**result)
+    return validated.model_dump()
+
+
+def process_data(data: dict[str, Any], caller_name: str) -> dict[str, Any]:
+
+    if isinstance(data, dict):
+        # Определяем тип атрибута
+        if data.get("globalAlias"):
+            entity_type = data.get("globalAlias")
+            entity_type = entity_type.get("type")
+            if entity_type == "Attribute":
+                type = data.get("type")
+            else:
+                type = entity_type
+        else:
+            type = "Application"
+            entity_type = "Application"
+        keys_to_remove = KEYS_TO_REMOVE_MAPPING.get(
+            type, []
+        )  # по умолчанию - пустой список
+        # Удаляем ненужные ключи (если это словарь)
+        if keys_to_remove is not None:
+            for key in keys_to_remove:
+                data.pop(key, None)
+
+        # Обрабатываем globalAlias: вытаскиваем owner и alias, удаляем globalAlias и type
+        if "globalAlias" in data:
+            global_alias = data.pop("globalAlias", {})
+            if isinstance(global_alias, dict):
+                # Добавляем owner и alias в корень, если они есть
+                new_items = {}
+                if "owner" in global_alias:
+                    new_items["owner"] = global_alias["owner"]
+                if "alias" in global_alias:
+                    new_items["alias"] = global_alias["alias"]
+                # type игнорируется и не добавляется
+
+                # Пересоздаём словарь: сначала новые ключи, потом остальные
+                data = {**new_items, **data}
+
+        # Обрабатываем instanceGlobalAlias: вытаскиваем owner и alias, удаляем instanceGlobalAlias и type
+        if "instanceGlobalAlias" in data:
+            instance_global_alias = data.pop("instanceGlobalAlias", {})
+            if isinstance(instance_global_alias, dict):
+                # Добавляем owner и alias в корень, если они есть
+                if "owner" in instance_global_alias:
+                    data["instanceAlias"] = instance_global_alias["owner"]
+                    data["instanceAttributeAlias"] = instance_global_alias["alias"]
+                else:
+                    if "alias" in instance_global_alias:
+                        data["instanceAlias"] = instance_global_alias["alias"]
+                # type игнорируется и не добавляется
+
+        # Специальная обработка variants - преобразуем структуру каждого элемента
+        if "variants" in data:
+            processed_variants = []
+            for variant in data["variants"]:
+                if not isinstance(variant, dict):
+                    continue  # пропускаем, если не словарь
+
+                # Извлекаем alias.alias
+                alias_value = ""
+                if "alias" in variant and isinstance(variant["alias"], dict):
+                    alias_value = variant["alias"].get("alias", "")
+
+                # Извлекаем переводы из name
+                name_data = (
+                    variant.get("name", {})
+                    if isinstance(variant.get("name"), dict)
+                    else {}
+                )
+                en_name = name_data.get("en", "")
+                ru_name = name_data.get("ru", "")
+                de_name = name_data.get("de", "")
+
+                # Цвет
+                color = variant.get("color", "")
+
+                # Формируем новый элемент
+                processed_variants.append(
+                    {
+                        "System name": alias_value,
+                        "English name": en_name,
+                        "Russian name": ru_name,
+                        "German name": de_name,
+                        "Color": color,
+                    }
+                )
+
+                # Заменяем старый variants на обрботанный
+                data["variants"] = processed_variants
+
+        data = rename_data(data, f"{caller_name}", entity_type, type)
+    return data
+
+
+def rename_data(
+    data: dict[str, Any], caller_name: str, entity_type: str, type: str
+) -> dict[str, Any]:
+
+    if isinstance(data, dict):
+        # Определяем тип атрибута
+        renamed_data = {}
+
+        # Добавляем описание типа атрибута как первый элемент
+        model_description = None
+        model_response = None
+        for key, value in ENTITY_TYPE_MAPPING.items():
+            if caller_name.__contains__(key):
+                model_description = value[0]
+                model_response = value[1]
+                break
+        if model_description is not None:
+            if entity_type and entity_type in model_description:
+                renamed_data[f"{entity_type} type description"] = model_description[
+                    type
+                ]
+        if model_response is not None:
+            for key, value in data.items():
+                # Если ключ есть в маппинге - используем новое имя, иначе оставляем как есть
+                new_key = model_response.get(key, key)
+                renamed_data[new_key] = value
+            data = renamed_data
+
+    return data
+
+
+def execute_list_operation(
+    response_data: dict[str, Any], result_model: type[BaseModel]
+) -> dict[str, Any]:
+    """
+    :param request_result: Результат вызова _get_request(...)
+    :return: Валидированный результат в виде dict (model_dump)
+    """
+
+    stack = inspect.stack()
+    caller_frame = stack[1]
+    caller_name = caller_frame.function
+
+    if not response_data.get("success", False):
+        adapted = {
+            "success": response_data.get("success", False),
+            "status_code": response_data.get("status_code"),
+            "data": None,
+            "error": response_data.get("error"),
+        }
+        return result_model(**adapted).model_dump()
+
+    # Извлекаем тело ответа
+    raw_response = response_data.get("raw_response")
+    if raw_response is None:
+        adapted = {
+            "success": False,
+            "status_code": response_data.get("status_code"),
+            "data": None,
+            "error": "No response data received from server",
+        }
+        return result_model(**adapted).model_dump()
+
+    # Проверяем структуру
+    if not isinstance(raw_response, dict) or "response" not in raw_response:
+        adapted = {
+            "success": False,
+            "status_code": response_data.get("status_code"),
+            "data": None,
+            "error": "Unexpected response structure from server",
+        }
+        return result_model(**adapted).model_dump()
+
+    # Копируем данные, чтобы не мутировать оригинал
+    data = (
+        raw_response["response"].copy()
+        if isinstance(raw_response["response"], list)
+        else raw_response["response"]
+    )
+
+    for i, item in enumerate(data):
+        if isinstance(item, dict):
+            data[i] = process_data(item, f"{caller_name}")
+
+    # Формируем финальный результат
+    final_result = {
+        "success": True,
+        "status_code": response_data["status_code"],
+        "error": None,
+    }
+
+    final_result["data"] = data
+
+    # Валидируем и возвращаем
+    validated = result_model(**final_result)
+    return validated.model_dump()
