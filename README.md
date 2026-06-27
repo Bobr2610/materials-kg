@@ -1,55 +1,94 @@
 # Materials Knowledge Graph
 
-Knowledge graph + search-analytics system for materials science. Links articles, experiments, materials, properties, modes, equipment, research teams, and conclusions into a queryable graph with LLM-powered entity extraction.
+Graph-first materials knowledge graph for structured ingestion, explainable query, and gap analysis.
 
-### Architecture
+The current core is centered on typed domain models, repository-backed persistence, and a compact service API. Postgres is the primary persistence target, with `pgvector` used for searchable text units and hybrid evidence lookup.
 
-```
+## Current Architecture
+
+```text
 materials-kg/
   kg_engine/
-    graph/          # Knowledge graph: entities, relations, extraction, query, tools
-    retrieval/      # Vector search (ChromaDB, reranking, embeddings)
-    llm/            # LLM manager, agent factory, fallback
-    agent/          # LangChain agent, streaming, session management
-    api/            # Gradio UI + REST API
-    core/           # Document processing, chunking, indexing
-    storage/        # Vector store adapters
-    tools/          # LangChain tools for RAG
-    config/         # Settings, model registry
-    utils/          # Shared utilities
-    scripts/        # Build/build_index/knowledge_graph scripts
-    tests/          # Test suite
+    domain/        # Typed entities, relations, observations, traces, query DTOs
+    repositories/  # Persistence protocol + Postgres/pgvector and in-memory adapters
+    services/      # Graph-first ingestion/query API
+    api/           # Application-facing HTTP/UI entrypoints
+    core/          # Document processing, chunking, indexing helpers
+    retrieval/     # Embeddings, reranking, search helpers
+    graph/         # Legacy prototype graph pipeline and agent-facing tools
+    agent/         # Legacy/prototype agent stack and orchestration
 ```
 
-### Key Capabilities
+## What Is Source Of Truth
 
-- **Entity extraction**: Regex + LLM extraction of materials, properties, experiments, modes, equipment, teams, articles, conclusions
-- **Graph query**: `query_by_material_and_mode("Ti6Al4V", "annealing")` → properties, experiments, conclusions
-- **Hybrid search**: Combine vector similarity with graph traversal for enriched results
-- **Data gap analysis**: Identify materials without measured properties or missing mode combinations
-- **5 LangChain tools**: `query_material`, `query_property`, `query_related`, `graph_data_gaps`, `graph_stats`
-- **RAG pipeline**: Full retrieval-augmented generation over materials documents
+- `kg_engine/domain/` defines the canonical business objects: entities, evidence, relations, observations, decision traces, coverage rules, and query result envelopes.
+- `kg_engine/repositories/protocols.py` defines the persistence contract used by the service layer.
+- `kg_engine/services/materials_kg.py` is the public graph-first ingestion and query API.
+- `kg_engine/repositories/postgres.py` is the primary durable backend and includes schema bootstrap for Postgres + `pgvector`.
 
-### Quick Start
+## Storage Model
 
-```bash
-# Install
-pip install -r kg_engine/requirements.txt
+The Postgres repository persists:
 
-# Build knowledge graph from document chunks
-python kg_engine/scripts/build_knowledge_graph.py --source chunks.json --output graph.json
+- canonical entities and alias resolution
+- typed relations between entities
+- evidence with source spans and extraction metadata
+- observations with measured values and units
+- decision traces for explainability and history
+- coverage rules for gap analysis
+- searchable text units with optional `VECTOR(1536)` embeddings
 
-# Run tests
-python -m pytest kg_engine/tests/test_graph.py -v
+## Ingestion API
+
+The main service surface is `MaterialsKGService`:
+
+```python
+from kg_engine.repositories.memory import InMemoryMaterialsKGRepository
+from kg_engine.services.materials_kg import MaterialsKGService
+
+service = MaterialsKGService(InMemoryMaterialsKGRepository())
+
+service.ingest_reference_data(...)
+service.ingest_experiments(...)
+service.ingest_documents(...)
 ```
 
-### Questions it answers
+These entrypoints support three complementary flows:
 
-- *What has been done on alloy X under processing mode Y and what was the effect on property Z?*
-- *Which materials have been tested for property P with value > V?*
-- *What related entities exist for material M?*
-- *Where are the data gaps — which material-mode combinations are unexplored?*
+- reference dictionaries and coverage rules
+- structured experiment ingestion with observations and findings
+- document ingestion with references, findings, tags, and searchable text units
 
-### References
+## Query API
 
-See [AGENTS.md](./AGENTS.md) for full conventions, entity/relation types, dev commands, and [`.agents/skills/materials-knowledge-graph/SKILL.md`](./.agents/skills/materials-knowledge-graph/SKILL.md) for architecture details.
+`MaterialsKGService` exposes graph-first read paths:
+
+- `query_material_mode(material, mode=None, property_name=None)`
+- `query_property(property_name, filters=None)`
+- `query_related(entity, depth=2, relation_filters=None)`
+- `query_decision_history(entity_or_experiment)`
+- `query_data_gaps(scope=None, filters=None)`
+
+These return typed result models from `kg_engine/domain/models.py`, not raw graph objects.
+
+## Postgres + pgvector Bootstrap
+
+```python
+from kg_engine.repositories.postgres import PostgresMaterialsKGRepository
+
+repository = PostgresMaterialsKGRepository(connection)
+repository.ensure_schema()
+service = MaterialsKGService(repository)
+```
+
+`ensure_schema()` creates the materials KG tables and enables the `vector` extension required for text-unit embeddings.
+
+## Legacy Stack Status
+
+`kg_engine/graph/` and `kg_engine/agent/` remain in the repository as a legacy prototype/donor stack. They are still useful as reference implementations, migration material, and tool/UI experiments, but they are no longer the canonical architecture for the new graph-first core.
+
+## References
+
+- [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) for the layer model, storage layout, and API walkthrough
+- [AGENTS.md](./AGENTS.md) for repo conventions and developer workflows
+- [`.agents/skills/materials-knowledge-graph/SKILL.md`](./.agents/skills/materials-knowledge-graph/SKILL.md) for domain notes and examples
