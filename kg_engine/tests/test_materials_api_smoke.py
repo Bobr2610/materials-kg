@@ -69,7 +69,13 @@ def test_dashboard_and_sample_data_flow() -> None:
     assert "Чат" in dashboard.text
     assert "Добавить источники" in dashboard.text
     assert "/ingest/upload" in dashboard.text
+    assert "/demo/load-sample" in dashboard.text
     assert "Введите текст" in dashboard.text
+    assert 'id="collapseSources"' in dashboard.text
+    assert 'id="restoreSources"' in dashboard.text
+    assert 'id="menuButton"' in dashboard.text
+    assert 'id="loadSample"' in dashboard.text
+    assert 'addEventListener("click", loadSampleData)' in dashboard.text
 
     ref_json = json.dumps({
         "entities": [
@@ -109,6 +115,37 @@ def test_dashboard_and_sample_data_flow() -> None:
     body = query.json()
     assert body["answer"]
     assert body["matched_entities"]
+
+
+def test_demo_load_sample_powers_notebook_ui_queries() -> None:
+    app = create_materials_app(
+        service=MaterialsKGService(InMemoryMaterialsKGRepository())
+    )
+    client = TestClient(app)
+
+    sample = client.post("/demo/load-sample")
+    assert sample.status_code == 200
+    sample_body = sample.json()
+    assert sample_body["reference"]["entities"] > 0
+    assert sample_body["experiments"]["experiments"] > 0
+    assert sample_body["documents"]["documents"] > 0
+    assert len(sample_body["uploaded"]) == 3
+
+    graph = client.get("/graph/data")
+    assert graph.status_code == 200
+    assert graph.json()["nodes"]
+    assert graph.json()["edges"]
+
+    answer = client.post(
+        "/query/answer",
+        json={"question": "Что делали по Ti-6Al-4V после Annealed?"},
+    )
+    assert answer.status_code == 200
+    answer_body = answer.json()
+    assert answer_body["answer"]
+    assert answer_body["matched_entities"]
+    assert answer_body["experiments"]
+    assert answer_body["related_entities"]
 
 
 def test_free_question_material_and_property_fallbacks() -> None:

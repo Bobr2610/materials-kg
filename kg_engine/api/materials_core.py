@@ -33,6 +33,7 @@ if TYPE_CHECKING:
 
 _TEXT_SUFFIXES = {".txt", ".md"}
 _STRUCTURED_SUFFIXES = {".json", ".jsonl", ".csv", ".tsv"}
+_SAMPLE_DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 
 
 def _parse_uploaded_file(name: str, content: bytes) -> object | None:
@@ -116,6 +117,12 @@ def _notebook_dashboard_html() -> str:
       display: grid;
       grid-template-columns: 380px 1fr;
       gap: 0;
+    }
+    .app.sources-collapsed { grid-template-columns: 0 1fr; }
+    .app.sources-collapsed .sources {
+      overflow: hidden;
+      border-right: 0;
+      min-width: 0;
     }
     .sources {
       background: #fff;
@@ -274,6 +281,41 @@ def _notebook_dashboard_html() -> str:
       cursor: pointer;
     }
     .chat-top button:hover { background: #f1f3f4; }
+    .top-actions { position: relative; display: flex; gap: 4px; align-items: center; }
+    .restore-sources {
+      display: none;
+      width: auto !important;
+      padding: 0 10px !important;
+      border: 1px solid #dadce0 !important;
+      border-radius: 16px !important;
+      font-size: 13px !important;
+      gap: 6px;
+    }
+    .app.sources-collapsed .restore-sources { display: inline-flex; }
+    .menu-popover {
+      display: none;
+      position: absolute;
+      top: 38px;
+      right: 0;
+      min-width: 190px;
+      padding: 6px;
+      border: 1px solid #dadce0;
+      border-radius: 10px;
+      background: #fff;
+      box-shadow: 0 8px 24px rgba(60,64,67,0.18);
+      z-index: 20;
+    }
+    .menu-popover.open { display: grid; }
+    .menu-popover button {
+      width: 100% !important;
+      height: 34px !important;
+      border-radius: 8px !important;
+      display: flex !important;
+      justify-content: flex-start;
+      padding: 0 10px !important;
+      font-size: 13px !important;
+      color: #202124 !important;
+    }
     .chat-body {
       overflow: auto;
       padding: 0;
@@ -468,6 +510,8 @@ def _notebook_dashboard_html() -> str:
     @media (max-width: 860px) {
       .app { grid-template-columns: 1fr; }
       .sources { display: none; }
+      .app.sources-collapsed { grid-template-columns: 1fr; }
+      .restore-sources { display: none !important; }
     }
     .graph-toggle {
       width: 32px; height: 32px;
@@ -567,11 +611,11 @@ def _notebook_dashboard_html() -> str:
 <body>
   <div class="drop-overlay" id="dropOverlay">Перетащите файлы сюда</div>
   <input type="file" id="fileInput" multiple accept=".json,.jsonl,.csv,.tsv,.txt,.md" style="display:none">
-  <div class="app">
+  <div class="app" id="appShell">
     <aside class="sources">
       <div class="sources-top">
         <span>Источники</span>
-        <button title="Свернуть">&#9634;</button>
+        <button id="collapseSources" title="Свернуть">&#9634;</button>
       </div>
       <button class="add-sources" id="addSources">
         <span class="plus">+</span> Добавить источники
@@ -592,11 +636,16 @@ def _notebook_dashboard_html() -> str:
     <section class="chat">
       <div class="chat-top">
         <span>Чат</span>
-        <div style="display:flex;gap:4px;align-items:center">
+        <div class="top-actions">
+          <button class="restore-sources" id="restoreSources" title="Показать источники">Источники</button>
           <button class="graph-toggle" id="graphToggle" title="Граф знаний">
             <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/></svg>
           </button>
-          <button title="Меню">&vellip;</button>
+          <button id="menuButton" title="Меню">&vellip;</button>
+          <div class="menu-popover" id="menuPopover">
+            <button id="loadSample" type="button">Загрузить пример данных</button>
+            <button id="clearChat" type="button">Очистить чат</button>
+          </div>
         </div>
       </div>
       <main class="chat-body" id="chatBody">
@@ -683,7 +732,8 @@ def _notebook_dashboard_html() -> str:
     }
     function getSelectedSources() {
       const checks = document.querySelectorAll('.source-check:checked');
-      if (!checks.length) return null;
+      const allChecks = document.querySelectorAll('.source-check');
+      if (!checks.length || checks.length === allChecks.length) return null;
       return Array.from(checks).map(c => c.dataset.name).filter(Boolean);
     }
     function renderSources(uploadResult) {
@@ -705,6 +755,7 @@ def _notebook_dashboard_html() -> str:
         const ov = uploadResult.overview;
         addMsg("assistant", '<div class="overview-card">' + escapeHtml(ov.summary) + "</div>");
       }
+      graphData = null;
       if (uploadResult.suggested_questions?.length) {
         renderSuggestions(uploadResult.suggested_questions);
       }
@@ -750,7 +801,7 @@ def _notebook_dashboard_html() -> str:
         if (data.reference?.entities) counts.push(data.reference.entities + " сущностей");
         if (data.experiments?.experiments) counts.push(data.experiments.experiments + " экспериментов");
         if (data.documents?.documents) counts.push(data.documents.documents + " документов");
-        addMsg("assistant", '<div class="bubble">Загружено: ' + (counts.join(", ") || "файлы приняты") + ". Задавайте вопросы.</div>');
+        addMsg("assistant", '<div class="bubble">Загружено: ' + (counts.join(", ") || "файлы приняты") + ". Задавайте вопросы.</div>");
       } catch(e) {
         addMsg("assistant", '<div class="bubble error">' + escapeHtml(e.message) + "</div>");
       } finally {
@@ -781,11 +832,35 @@ def _notebook_dashboard_html() -> str:
         $("sendQuestion").disabled = false;
       }
     }
+    async function loadSampleData() {
+      $("menuPopover").classList.remove("open");
+      $("loadSample").disabled = true;
+      try {
+        const data = await postJson("/demo/load-sample");
+        renderSources(data);
+        addMsg("assistant", '<div class="bubble">Пример данных загружен. Можно спросить: что уже делали по Ti-6Al-4V после Annealed?</div>');
+      } catch(e) {
+        addMsg("assistant", '<div class="bubble error">' + escapeHtml(e.message) + "</div>");
+      } finally {
+        $("loadSample").disabled = false;
+      }
+    }
+    function clearChat() {
+      $("menuPopover").classList.remove("open");
+      $("chatBody").innerHTML = '<div class="hero" id="hero"><div class="hero-inner"><div class="hero-icon">&#128218;</div><h1>Блокнот материалов</h1><p id="notebookMeta">' + state.total + ' источников</p></div></div><div class="suggestions" id="suggestions"></div>';
+      fetch("/source/suggestions").then(r => r.json()).then(renderSuggestions).catch(() => {});
+    }
     $("addSources").addEventListener("click", () => $("fileInput").click());
     $("fileInput").addEventListener("change", e => { uploadFiles(Array.from(e.target.files)); e.target.value = ""; });
     $("sendQuestion").addEventListener("click", ask);
     $("question").addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ask(); } });
     $("question").addEventListener("input", function() { this.style.height = "auto"; this.style.height = Math.min(this.scrollHeight, 120) + "px"; });
+    $("collapseSources").addEventListener("click", () => $("appShell").classList.add("sources-collapsed"));
+    $("restoreSources").addEventListener("click", () => $("appShell").classList.remove("sources-collapsed"));
+    $("menuButton").addEventListener("click", e => { e.stopPropagation(); $("menuPopover").classList.toggle("open"); });
+    $("loadSample").addEventListener("click", loadSampleData);
+    $("clearChat").addEventListener("click", clearChat);
+    document.addEventListener("click", e => { if (!$("menuPopover").contains(e.target) && e.target !== $("menuButton")) $("menuPopover").classList.remove("open"); });
     let dragTimer;
     document.addEventListener("dragenter", e => { e.preventDefault(); clearTimeout(dragTimer); $("dropOverlay").classList.add("active"); });
     document.addEventListener("dragover", e => e.preventDefault());
@@ -1081,6 +1156,50 @@ def create_materials_app(
         if doc_payload:
             results["documents"] = runtime_service.ingest_documents(DocumentCorpusAdapter().from_payload(doc_payload))
         results["uploaded"] = uploaded
+        results["overview"] = runtime_service.get_source_overview()
+        results["suggested_questions"] = runtime_service.get_suggested_questions()
+        return results
+
+    @app.post("/demo/load-sample")
+    def load_sample_data() -> dict:
+        reference_path = _SAMPLE_DATA_DIR / "reference.json"
+        experiments_path = _SAMPLE_DATA_DIR / "experiments.json"
+        documents_path = _SAMPLE_DATA_DIR / "documents.json"
+        with reference_path.open("r", encoding="utf-8") as file:
+            reference_payload = json.load(file)
+        with experiments_path.open("r", encoding="utf-8") as file:
+            experiments_payload = json.load(file)
+        with documents_path.open("r", encoding="utf-8") as file:
+            documents_payload = json.load(file)
+
+        results = {
+            "reference": runtime_service.ingest_reference_data(
+                ReferenceDataAdapter().from_payload(reference_payload)
+            ),
+            "experiments": runtime_service.ingest_experiments(
+                ExperimentCatalogAdapter().from_payload(experiments_payload)
+            ),
+            "documents": runtime_service.ingest_documents(
+                DocumentCorpusAdapter().from_payload(documents_payload)
+            ),
+            "uploaded": [
+                {
+                    "name": reference_path.name,
+                    "size": reference_path.stat().st_size,
+                    "type": reference_path.suffix.lstrip("."),
+                },
+                {
+                    "name": experiments_path.name,
+                    "size": experiments_path.stat().st_size,
+                    "type": experiments_path.suffix.lstrip("."),
+                },
+                {
+                    "name": documents_path.name,
+                    "size": documents_path.stat().st_size,
+                    "type": documents_path.suffix.lstrip("."),
+                },
+            ],
+        }
         results["overview"] = runtime_service.get_source_overview()
         results["suggested_questions"] = runtime_service.get_suggested_questions()
         return results
