@@ -613,6 +613,7 @@ def _notebook_dashboard_html() -> str:
       <button class="add-sources" id="addSources">
         <span class="plus">+</span> Добавить источники
       </button>
+      <div style="font-size:11px;color:#9aa0a6;padding:0 16px;margin-top:4px">Галочка = источник учитывается в запросах</div>
       <div class="upload-progress" id="uploadProgress">Загрузка файлов...</div>
       <div class="source-list" id="sources">
         <div class="source-empty" id="sourceEmpty">
@@ -736,8 +737,8 @@ def _notebook_dashboard_html() -> str:
         if (!state.files.find(x => x.name === f.name)) state.files.push(f);
       });
       state.total = state.files.length;
-      $("sourceNote").textContent = state.total + " источников";
-      $("notebookMeta").textContent = state.total + " источников";
+      if ($("sourceNote")) $("sourceNote").textContent = state.total + " источников";
+      if ($("notebookMeta")) $("notebookMeta").textContent = state.total + " источников";
       $("sourceEmpty")?.remove();
       $("sources").innerHTML = state.files.map(f => {
         const t = f.type || "unknown";
@@ -849,8 +850,8 @@ def _notebook_dashboard_html() -> str:
         const data = await r.json();
         state.files = state.files.filter(f => f.name !== name);
         state.total = state.files.length;
-        $("sourceNote").textContent = state.total + " источников";
-        $("notebookMeta").textContent = state.total + " источников";
+        if ($("sourceNote")) $("sourceNote").textContent = state.total + " источников";
+        if ($("notebookMeta")) $("notebookMeta").textContent = state.total + " источников";
         renderSources({ uploaded: [], overview: data.overview, suggested_questions: [] });
         addMsg("assistant", '<div class="bubble">Источник "' + escapeHtml(name) + '" удалён. Удалено записей: ' + data.removed_records + "</div>");
   
@@ -865,8 +866,8 @@ def _notebook_dashboard_html() -> str:
         const data = await r.json();
         state.files = [];
         state.total = 0;
-        $("sourceNote").textContent = "0 источников";
-        $("notebookMeta").textContent = "0 источников";
+        if ($("sourceNote")) $("sourceNote").textContent = "0 источников";
+        if ($("notebookMeta")) $("notebookMeta").textContent = "0 источников";
         $("sources").innerHTML = '<div class="source-empty" id="sourceEmpty"><div><div class="doc-icon"><svg viewBox="0 0 24 24"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg></div><strong>Здесь появятся загруженные источники</strong><p>Нажмите «Добавить источник» или перетащите файлы: JSON, JSONL, CSV, TSV, TXT, MD</p></div></div>';
         addMsg("assistant", '<div class="bubble">Все источники удалены. Граф пуст.</div>');
   
@@ -990,8 +991,8 @@ def _notebook_dashboard_html() -> str:
         if (data.source_files?.length) {
           state.files = data.source_files;
           state.total = state.files.length;
-          $("sourceNote").textContent = state.total + " источников";
-          $("notebookMeta").textContent = state.total + " источников";
+          if ($("sourceNote")) $("sourceNote").textContent = state.total + " источников";
+          if ($("notebookMeta")) $("notebookMeta").textContent = state.total + " источников";
           $("sourceEmpty")?.remove();
           $("sources").innerHTML = state.files.map(f => {
             const t = f.type || "unknown";
