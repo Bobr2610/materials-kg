@@ -1,0 +1,86 @@
+{
+  "materials": [
+    {
+      "name": "CuCrZr",
+      "canonical_id": "mat_cucrzr",
+      "aliases": ["Cu-Cr-Zr", "C18150"],
+      "properties": {
+        "category": "copper_alloy",
+        "typical_use": "high-conductivity tooling"
+      },
+      "source_ref": "sample reference pack"
+    },
+    {
+      "name": "316L Stainless Steel",
+      "canonical_id": "mat_316l",
+      "aliases": ["316L", "AISI 316L", "SS316L"],
+      "properties": {
+        "category": "stainless_steel",
+        "process_family": "LPBF"
+      },
+      "source_ref": "sample reference pack"
+    }
+  ],
+  "properties": [
+    {
+      "name": "Electrical Conductivity",
+      "canonical_id": "prop_electrical_conductivity",
+      "aliases": ["IACS", "conductivity"],
+      "properties": {"unit": "%IACS"}
+    },
+    {
+      "name": "Density",
+      "canonical_id": "prop_density",
+      "aliases": ["relative density"],
+      "properties": {"unit": "%"}
+    },
+    {
+      "name": "Surface Roughness",
+      "canonical_id": "prop_surface_roughness",
+      "aliases": ["Ra"],
+      "properties": {"unit": "um"}
+    }
+  ],
+  "modes": [
+    {
+      "name": "Solution Treated",
+      "canonical_id": "mode_solution_treated",
+      "aliases": ["solution annealed"]
+    },
+    {
+      "name": "HIP",
+      "canonical_id": "mode_hip",
+      "aliases": ["hot isostatic pressing"]
+    }
+  ],
+  "equipment": [
+    {
+      "name": "Renishaw AM500Q",
+      "canonical_id": "equip_renishaw_am500q",
+      "properties": {"type": "lpbf_machine"}
+    },
+    {
+      "name": "SigmaScope SMP350",
+      "canonical_id": "equip_sigmascope_smp350",
+      "properties": {"type": "conductivity_meter"}
+    }
+  ],
+  "teams": [
+    {
+      "name": "Thermal Processing Group",
+      "canonical_id": "team_thermal_processing",
+      "aliases": ["TPG"],
+      "properties": {"site": "pilot lab"}
+    }
+  ],
+  "coverage_rules": [
+    {
+      "rule_id": "sample_cucrzr_conductivity_coverage",
+      "name": "CuCrZr conductivity by post-processing mode",
+      "material_names": ["CuCrZr"],
+      "mode_names": ["As-Built", "Solution Treated", "Aged"],
+      "property_names": ["Electrical Conductivity"],
+      "scope": "material-mode-property"
+    }
+  ]
+}
