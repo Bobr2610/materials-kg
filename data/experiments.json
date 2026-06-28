@@ -1,0 +1,105 @@
+[
+  {
+    "experiment_id": "EXP-Ti6AV-001",
+    "title": "Tensile testing of Ti-6Al-4V as-built SLM specimens",
+    "material_name": "Ti-6Al-4V",
+    "mode_name": "As-Built",
+    "equipment_names": ["Instron 5982"],
+    "team_name": "AM Processing Lab",
+    "source_version": "SLM-v2.1",
+    "observations": [
+      {"property_name": "Tensile Strength", "value": 1050, "unit": "MPa", "row_reference": "specimen-SLM-001"},
+      {"property_name": "Yield Strength", "value": 980, "unit": "MPa", "row_reference": "specimen-SLM-001"},
+      {"property_name": "Elongation", "value": 8.5, "unit": "%", "row_reference": "specimen-SLM-001"},
+      {"property_name": "Hardness", "value": 345, "unit": "HV", "row_reference": "specimen-SLM-001"}
+    ],
+    "findings": [
+      {"summary": "As-built Ti-6Al-4V shows UTS exceeding 1000 MPa but reduced ductility vs wrought", "confidence": 0.95, "observation_indices": [0, 1, 2]}
+    ],
+    "text_units": [
+      {"content": "SLM-produced Ti-6Al-4V specimens (LPBF, 30 μm layer, Ar atmosphere) were tested per ASTM E8. Gauge section 5×25 mm. Three replicates per condition."}
+    ]
+  },
+  {
+    "experiment_id": "EXP-Ti6AV-002",
+    "title": "Tensile testing of Ti-6Al-4V annealed SLM specimens",
+    "material_name": "Ti-6Al-4V",
+    "mode_name": "Annealed",
+    "equipment_names": ["Instron 5982"],
+    "team_name": "AM Processing Lab",
+    "source_version": "SLM-v2.1",
+    "observations": [
+      {"property_name": "Tensile Strength", "value": 980, "unit": "MPa", "row_reference": "specimen-SLA-001"},
+      {"property_name": "Yield Strength", "value": 910, "unit": "MPa", "row_reference": "specimen-SLA-001"},
+      {"property_name": "Elongation", "value": 12.0, "unit": "%", "row_reference": "specimen-SLA-001"},
+      {"property_name": "Hardness", "value": 320, "unit": "HV", "row_reference": "specimen-SLA-001"}
+    ],
+    "findings": [
+      {"summary": "Annealing at 650°C/2h restores ductility to >10% while maintaining UTS above 950 MPa", "confidence": 0.9, "observation_indices": [0, 2]}
+    ],
+    "text_units": [
+      {"content": "Post-build stress relief at 650°C for 2 hours in vacuum furnace followed by furnace cool. Subsequent tensile testing per ASTM E8 showed improved elongation."}
+    ]
+  },
+  {
+    "experiment_id": "EXP-IN718-001",
+    "title": "Tensile testing of IN718 as-built SLM specimens",
+    "material_name": "IN718",
+    "mode_name": "As-Built",
+    "equipment_names": ["Instron 5982", "MTS 810"],
+    "team_name": "Mechanical Testing Group",
+    "source_version": "IN718-AM-v1",
+    "observations": [
+      {"property_name": "Tensile Strength", "value": 1150, "unit": "MPa", "row_reference": "IN718-SLM-001"},
+      {"property_name": "Yield Strength", "value": 950, "unit": "MPa", "row_reference": "IN718-SLM-001"},
+      {"property_name": "Elongation", "value": 15.0, "unit": "%", "row_reference": "IN718-SLM-001"}
+    ],
+    "findings": [
+      {"summary": "As-built IN718 exhibits good balance of strength and ductility without post-processing", "confidence": 0.88, "observation_indices": [0, 2]}
+    ],
+    "text_units": [
+      {"content": "LPBF IN718 powder (15-45 μm, gas-atomized) processed in nitrogen atmosphere. Layer thickness 40 μm. Tested per ASTM E8M at room temperature."}
+    ]
+  },
+  {
+    "experiment_id": "EXP-IN718-002",
+    "title": "Aged IN718 SLM specimens — standard heat treatment",
+    "material_name": "IN718",
+    "mode_name": "Aged",
+    "equipment_names": ["Instron 5982"],
+    "team_name": "Mechanical Testing Group",
+    "source_version": "IN718-AM-v1",
+    "observations": [
+      {"property_name": "Tensile Strength", "value": 1380, "unit": "MPa", "row_reference": "IN718-SLM-HT-001"},
+      {"property_name": "Yield Strength", "value": 1150, "unit": "MPa", "row_reference": "IN718-SLM-HT-001"},
+      {"property_name": "Elongation", "value": 11.0, "unit": "%", "row_reference": "IN718-SLM-HT-001"},
+      {"property_name": "Hardness", "value": 450, "unit": "HV", "row_reference": "IN718-SLM-HT-001"}
+    ],
+    "findings": [
+      {"summary": "Standard IN718 aging (720°C/8h + 620°C/8h) yields UTS approaching 1400 MPa with acceptable ductility", "confidence": 0.92, "observation_indices": [0, 2]}
+    ],
+    "text_units": [
+      {"content": "Solution treatment at 980°C/1h + air cool, followed by double aging: 720°C/8h (furnace cool to 620°C) + 620°C/8h (air cool). Per AMS 5662 schedule."}
+    ]
+  },
+  {
+    "experiment_id": "EXP-AL6061-001",
+    "title": "Tensile testing of Al6061-T6 wrought reference",
+    "material_name": "Al6061",
+    "mode_name": "Wrought",
+    "equipment_names": ["Instron 5982"],
+    "team_name": "Mechanical Testing Group",
+    "observations": [
+      {"property_name": "Tensile Strength", "value": 310, "unit": "MPa", "row_reference": "AL6061-T6-001"},
+      {"property_name": "Yield Strength", "value": 276, "unit": "MPa", "row_reference": "AL6061-T6-001"},
+      {"property_name": "Elongation", "value": 12.0, "unit": "%", "row_reference": "AL6061-T6-001"},
+      {"property_name": "Hardness", "value": 107, "unit": "HV", "row_reference": "AL6061-T6-001"}
+    ],
+    "findings": [
+      {"summary": "Wrought Al6061-T6 meets AMS 4911 minimum requirements (UTS ≥ 290 MPa, YS ≥ 240 MPa)", "confidence": 0.98, "observation_indices": [0, 1]}
+    ],
+    "text_units": [
+      {"content": "Wrought Al6061-T6 sheet (2mm thick) tested as-received. Property values consistent with AMS 4911 and MMPDS data."}
+    ]
+  }
+]

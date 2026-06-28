@@ -1,0 +1,395 @@
+"""Ingest reference, experiment, and document batches into the graph-first core."""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import logging
+import sys
+from pathlib import Path
+from typing import Any
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(name)s | %(message)s")
+logger = logging.getLogger(__name__)
+
+_project_root = Path(__file__).parent.parent.parent
+if str(_project_root) not in sys.path:
+    sys.path.insert(0, str(_project_root))
+
+from kg_engine.config.settings import settings
+from kg_engine.ingestion.adapters import DocumentCorpusAdapter
+from kg_engine.ingestion.adapters import ExperimentCatalogAdapter
+from kg_engine.ingestion.adapters import ReferenceDataAdapter
+from kg_engine.ingestion.adapters import StaffDirectoryAdapter
+from kg_engine.ingestion.adapters import TagCatalogAdapter
+from kg_engine.repositories.factory import create_materials_repository
+from kg_engine.services.materials_kg import MaterialsKGService
+
+
+_CANONICAL_REFERENCE_SECTIONS = {
+    "entities",
+    "materials",
+    "equipment",
+    "properties",
+    "modes",
+    "teams",
+    "documents",
+    "tags",
+    "coverage_rules",
+}
+
+_CANONICAL_EXPERIMENT_SECTIONS = {"experiments", "rows", "items"}
+_CANONICAL_DOCUMENT_SECTIONS = {"documents", "rows", "items"}
+_TEXT_FILE_SUFFIXES = {".txt", ".md"}
+_STRUCTURED_FILE_SUFFIXES = {".json", ".jsonl", ".csv", ".tsv"}
+
+
+def _supported_files(path: Path) -> list[Path]:
+    if path.is_file():
+        return [path]
+    return [
+        item
+        for item in sorted(path.rglob("*"))
+        if item.is_file()
+        and item.suffix.lower() in {*_STRUCTURED_FILE_SUFFIXES, *_TEXT_FILE_SUFFIXES}
+    ]
+
+
+def _load_tabular(path: Path) -> list[dict[str, Any]]:
+    delimiter = "\t" if path.suffix.lower() == ".tsv" else ","
+    with path.open("r", encoding="utf-8-sig", newline="") as handle:
+        return [dict(row) for row in csv.DictReader(handle, delimiter=delimiter)]
+
+
+def _load_one(path: Path, *, family: str) -> Any:
+    suffix = path.suffix.lower()
+    if suffix == ".json":
+        return json.loads(path.read_text(encoding="utf-8"))
+    if suffix == ".jsonl":
+        return [
+            json.loads(line)
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+    if suffix in {".csv", ".tsv"}:
+        return _load_tabular(path)
+    if family == "documents" and suffix in {".txt", ".md"}:
+        text = path.read_text(encoding="utf-8", errors="replace")
+        title = path.stem
+        if suffix == ".md":
+            for line in text.splitlines():
+                if line.startswith("# "):
+                    title = line[2:].strip() or title
+                    break
+        return [
+            {
+                "document_id": str(path),
+                "title": title,
+                "text": text,
+                "metadata": {"source_path": str(path)},
+            }
+        ]
+    logger.warning("Skipping unsupported %s input file: %s", family, path)
+    return [] if family != "reference" else {}
+
+
+def _source_metadata(path: Path, **extra: Any) -> dict[str, Any]:
+    return {
+        "source_path": str(path),
+        "source_file": path.name,
+        **{key: value for key, value in extra.items() if value not in (None, "")},
+    }
+
+
+def _document_from_text_file(path: Path) -> dict[str, Any]:
+    text = path.read_text(encoding="utf-8", errors="replace")
+    title = path.stem
+    if path.suffix.lower() == ".md":
+        for line in text.splitlines():
+            if line.startswith("# "):
+                title = line[2:].strip() or title
+                break
+    return {
+        "document_id": str(path),
+        "title": title,
+        "text": text,
+        "metadata": _source_metadata(path, ingestion_role="raw_text_document"),
+    }
+
+
+def _fallback_document(path: Path, payload: Any, *, row_index: int | None = None) -> dict[str, Any]:
+    if isinstance(payload, str):
+        text = payload
+    else:
+        text = json.dumps(payload, ensure_ascii=False, indent=2, default=str)
+    row_part = "" if row_index is None else f"#{row_index}"
+    return {
+        "document_id": f"{path}{row_part}",
+        "title": path.stem if row_index is None else f"{path.stem} row {row_index}",
+        "text": text,
+        "metadata": _source_metadata(
+            path,
+            row_index=row_index,
+            ingestion_role="unclassified_source_preserved",
+        ),
+    }
+
+
+def _has_explicit_entity_kind(record: dict[str, Any]) -> bool:
+    return bool(record.get("kind") or record.get("entity_kind") or record.get("type"))
+
+
+def _looks_like_experiment(record: dict[str, Any]) -> bool:
+    return bool(
+        (record.get("experiment_id") or record.get("id") or record.get("code"))
+        and (record.get("material_name") or record.get("material") or record.get("alloy"))
+        and (
+            isinstance(record.get("observations"), list)
+            or record.get("property_name")
+            or record.get("property")
+            or record.get("property_id")
+        )
+    )
+
+
+def _looks_like_document(record: dict[str, Any]) -> bool:
+    return bool(
+        (record.get("document_id") or record.get("path") or record.get("file") or record.get("id"))
+        and (record.get("text") or record.get("content") or record.get("body"))
+    )
+
+
+def _iter_records(payload: Any) -> list[dict[str, Any]]:
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    if isinstance(payload, dict):
+        for key in (*_CANONICAL_EXPERIMENT_SECTIONS, *_CANONICAL_DOCUMENT_SECTIONS):
+            value = payload.get(key)
+            if isinstance(value, list):
+                return [item for item in value if isinstance(item, dict)]
+        return [payload]
+    return []
+
+
+def _merge_reference_payload(target: dict[str, Any], payload: Any, _source: Path) -> None:
+    if isinstance(payload, dict):
+        matched = False
+        for key, value in payload.items():
+            if key in _CANONICAL_REFERENCE_SECTIONS and isinstance(value, list):
+                target.setdefault(key, []).extend(value)
+                matched = True
+        if matched:
+            return
+        if payload.get("kind") or payload.get("entity_kind") or payload.get("type"):
+            target.setdefault("entities", []).append(payload)
+        return
+    if isinstance(payload, list):
+        target.setdefault("entities", []).extend(
+            item
+            for item in payload
+            if isinstance(item, dict)
+            and (item.get("kind") or item.get("entity_kind") or item.get("type"))
+        )
+
+
+def _merge_bundle_payload(bundle: dict[str, Any], payload: Any, source: Path) -> None:
+    if isinstance(payload, dict):
+        matched = False
+        for key, value in payload.items():
+            if key in _CANONICAL_REFERENCE_SECTIONS and isinstance(value, list):
+                bundle["reference"].setdefault(key, []).extend(value)
+                matched = True
+            elif key == "experiments" and isinstance(value, list):
+                bundle["experiments"].extend(
+                    {**item, "metadata": {**item.get("metadata", {}), **_source_metadata(source)}}
+                    if isinstance(item, dict)
+                    else item
+                    for item in value
+                )
+                matched = True
+            elif key == "documents" and isinstance(value, list):
+                bundle["documents"].extend(
+                    {**item, "metadata": {**item.get("metadata", {}), **_source_metadata(source)}}
+                    if isinstance(item, dict)
+                    else item
+                    for item in value
+                )
+                matched = True
+        if matched:
+            return
+
+    for index, record in enumerate(_iter_records(payload)):
+        metadata = _source_metadata(source, row_index=index)
+        if _has_explicit_entity_kind(record):
+            bundle["reference"].setdefault("entities", []).append(
+                {
+                    **record,
+                    "source_ref": record.get("source_ref") or str(source),
+                }
+            )
+        elif _looks_like_experiment(record):
+            bundle["experiments"].append(
+                {**record, "metadata": {**record.get("metadata", {}), **metadata}}
+            )
+        elif _looks_like_document(record):
+            bundle["documents"].append(
+                {**record, "metadata": {**record.get("metadata", {}), **metadata}}
+            )
+        else:
+            bundle["documents"].append(_fallback_document(source, record, row_index=index))
+
+    if not _iter_records(payload) and payload not in (None, {}, []):
+        bundle["documents"].append(_fallback_document(source, payload))
+
+
+def _load_bundle(path: str) -> dict[str, Any]:
+    source_path = Path(path)
+    if not source_path.exists():
+        raise FileNotFoundError(f"Input path not found: {source_path}")
+    bundle: dict[str, Any] = {
+        "reference": {},
+        "experiments": [],
+        "documents": [],
+    }
+    for file_path in _supported_files(source_path):
+        suffix = file_path.suffix.lower()
+        if suffix in _TEXT_FILE_SUFFIXES:
+            bundle["documents"].append(_document_from_text_file(file_path))
+            continue
+        if suffix in _STRUCTURED_FILE_SUFFIXES:
+            _merge_bundle_payload(bundle, _load_one(file_path, family="bundle"), file_path)
+    return bundle
+
+
+def _load_payload(path: str | None, *, family: str) -> object | None:
+    if path is None:
+        return None
+    source_path = Path(path)
+    if not source_path.exists():
+        raise FileNotFoundError(f"Input file not found: {source_path}")
+    files = _supported_files(source_path)
+    if family == "reference":
+        merged: dict[str, Any] = {}
+        for file_path in files:
+            _merge_reference_payload(merged, _load_one(file_path, family=family), file_path)
+        return merged
+    merged_rows: list[Any] = []
+    for file_path in files:
+        payload = _load_one(file_path, family=family)
+        if isinstance(payload, list):
+            merged_rows.extend(payload)
+        elif isinstance(payload, dict):
+            for key in (family, "rows", "items"):
+                value = payload.get(key)
+                if isinstance(value, list):
+                    merged_rows.extend(value)
+                    break
+            else:
+                merged_rows.append(payload)
+    return merged_rows
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Ingest data into the materials KG core")
+    parser.add_argument(
+        "--input",
+        type=str,
+        default=None,
+        help=(
+            "Path to a mixed file or directory. The loader recursively ingests explicit "
+            "reference/experiment/document structures and preserves unknown files as documents."
+        ),
+    )
+    parser.add_argument(
+        "--reference",
+        type=str,
+        default=None,
+        help="Path to reference JSON/JSONL/CSV/TSV file or directory",
+    )
+    parser.add_argument(
+        "--experiments",
+        type=str,
+        default=None,
+        help="Path to experiment JSON/JSONL/CSV/TSV file or directory",
+    )
+    parser.add_argument(
+        "--documents",
+        type=str,
+        default=None,
+        help="Path to document JSON/JSONL/CSV/TSV/TXT/MD file or directory",
+    )
+    parser.add_argument(
+        "--staff",
+        type=str,
+        default=None,
+        help="Path to staff/lab JSON/JSONL/CSV/TSV file or directory",
+    )
+    parser.add_argument(
+        "--tags",
+        type=str,
+        default=None,
+        help="Path to topic tag JSON/JSONL/CSV/TSV file or directory",
+    )
+    parser.add_argument(
+        "--ensure-schema",
+        action="store_true",
+        default=False,
+        help="Create Postgres schema automatically when using MATERIALS_PG_DSN",
+    )
+    args = parser.parse_args()
+
+    repository = create_materials_repository(
+        settings,
+        ensure_schema=args.ensure_schema or settings.materials_api_ensure_schema,
+    )
+    service = MaterialsKGService(repository)
+
+    if args.input:
+        bundle = _load_bundle(args.input)
+        reference_result = service.ingest_reference_data(
+            ReferenceDataAdapter().from_payload(bundle["reference"])
+        )
+        experiment_result = service.ingest_experiments(
+            ExperimentCatalogAdapter().from_payload(bundle["experiments"])
+        )
+        document_result = service.ingest_documents(
+            DocumentCorpusAdapter().from_payload(bundle["documents"])
+        )
+        logger.info("Mixed input reference ingestion: %s", reference_result)
+        logger.info("Mixed input experiment ingestion: %s", experiment_result)
+        logger.info("Mixed input document ingestion: %s", document_result)
+
+    if args.reference:
+        payload = _load_payload(args.reference, family="reference")
+        batch = ReferenceDataAdapter().from_payload(payload or {})
+        result = service.ingest_reference_data(batch)
+        logger.info("Reference ingestion: %s", result)
+
+    if args.experiments:
+        payload = _load_payload(args.experiments, family="experiments")
+        batch = ExperimentCatalogAdapter().from_payload(payload or [])
+        result = service.ingest_experiments(batch)
+        logger.info("Experiment ingestion: %s", result)
+
+    if args.documents:
+        payload = _load_payload(args.documents, family="documents")
+        batch = DocumentCorpusAdapter().from_payload(payload or [])
+        result = service.ingest_documents(batch)
+        logger.info("Document ingestion: %s", result)
+
+    if args.staff:
+        payload = _load_payload(args.staff, family="staff")
+        batch = StaffDirectoryAdapter().from_payload(payload or [])
+        result = service.ingest_reference_data(batch)
+        logger.info("Staff ingestion: %s", result)
+
+    if args.tags:
+        payload = _load_payload(args.tags, family="tags")
+        batch = TagCatalogAdapter().from_payload(payload or [])
+        result = service.ingest_reference_data(batch)
+        logger.info("Tag ingestion: %s", result)
+
+
+if __name__ == "__main__":
+    main()

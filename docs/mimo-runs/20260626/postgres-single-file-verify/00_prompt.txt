@@ -1,0 +1,21 @@
+﻿You are MiMo working in C:\MAI\Nornicel\Code\materials-kg.
+
+Single-file task only.
+Focus only on: kg_engine\repositories\postgres.py
+
+Goal:
+- Verify the recent Postgres repository hardening changes in that file.
+- If needed, make only minimal fixes in that file.
+- Then run only lightweight verification for that file.
+- Return immediately with: changed files, verification, remaining issues.
+
+Do NOT touch any other file unless absolutely required for syntax/import resolution, and if so, stop and say so instead of continuing.
+Do NOT do broad exploration.
+Do NOT edit docs.
+Do NOT edit tests.
+
+Preferred verification:
+- python -m compileall kg_engine\repositories\postgres.py
+- if possible, one tiny import/smoke check that touches only the repository module path
+
+If the file already looks acceptable, make no edits and just report that.

@@ -1,0 +1,40 @@
+[
+  {
+    "document_id": "DOC-AM-REVIEW-001",
+    "title": "AM titanium alloys: process-structure-property review",
+    "text": "Additive manufacturing of Ti-6Al-4V via laser powder bed fusion (LPBF) produces acicular alpha-prime martensite in the as-built condition, resulting in high strength (>1000 MPa UTS) but limited ductility (<10% elongation). Post-build annealing at 650-800°C transforms the martensitic microstructure to a lamellar alpha+beta morphology, restoring ductility while retaining strength levels above wrought Grade 5 (950 MPa). Key process parameters include laser power (200-400W), scan speed (800-1200 mm/s), and layer thickness (20-60 μm).",
+    "material_names": ["Ti-6Al-4V"],
+    "mode_names": ["As-Built", "Annealed"],
+    "property_names": ["Tensile Strength", "Yield Strength", "Elongation"],
+    "team_names": ["AM Processing Lab"],
+    "tag_names": ["additive_manufacturing", "titanium", "LPBF", "heat_treatment"],
+    "experiment_ids": ["EXP-Ti6AV-001", "EXP-Ti6AV-002"],
+    "findings": [
+      {"summary": "As-built LPBF Ti-6Al-4V achieves UTS >1000 MPa with alpha-prime martensite microstructure", "confidence": 0.93, "observation_indices": []},
+      {"summary": "Annealing at 650-800°C restores ductility by transforming martensite to lamellar alpha+beta", "confidence": 0.91, "observation_indices": []}
+    ],
+    "text_units": [
+      {"content": "Ti-6Al-4V is the workhorse alloy for aerospace AM, comprising ~50% of all titanium AM parts produced globally."},
+      {"content": "The beta transus for Ti-6Al-4V is approximately 995°C. Processing below this temperature retains primary alpha, while above it produces fully martensitic or Widmanstätten structures on rapid cooling."}
+    ]
+  },
+  {
+    "document_id": "DOC-IN718-REVIEW-001",
+    "title": "Inconel 718 AM: microstructure and mechanical properties",
+    "text": "IN718 produced via LPBF exhibits columnar dendritic solidification with Nb segregation to interdendritic regions. As-built UTS typically reaches 1100-1200 MPa with 12-18% elongation. The standard two-step aging treatment (720°C/8h + 620°C/8h) precipitates gamma-prime and gamma-double-prime phases, increasing UTS to 1350-1450 MPa. Fatigue properties of AM IN718 remain a concern due to porosity and surface roughness effects.",
+    "material_names": ["IN718"],
+    "mode_names": ["As-Built", "Aged"],
+    "property_names": ["Tensile Strength", "Yield Strength", "Elongation", "Fatigue Limit"],
+    "team_names": ["Mechanical Testing Group", "AM Processing Lab"],
+    "tag_names": ["nickel_superalloy", "AM", "LPBF", "heat_treatment", "fatigue"],
+    "experiment_ids": ["EXP-IN718-001", "EXP-IN718-002"],
+    "findings": [
+      {"summary": "AM IN718 requires double aging to achieve full precipitation strengthening", "confidence": 0.9, "observation_indices": []},
+      {"summary": "Porosity and surface roughness degrade fatigue life in as-built AM IN718", "confidence": 0.85, "observation_indices": []}
+    ],
+    "text_units": [
+      {"content": "IN718 is a precipitation-hardenable nickel-chromium superalloy widely used in gas turbine and aerospace applications up to 650°C service temperature."},
+      {"content": "The gamma-prime [Ni3(Al,Ti)] and gamma-double-prime [Ni3Nb] precipitates provide the primary strengthening mechanism in aged IN718."}
+    ]
+  }
+]

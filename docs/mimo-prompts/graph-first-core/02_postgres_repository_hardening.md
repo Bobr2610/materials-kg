@@ -1,0 +1,79 @@
+# Prompt 02: Postgres Repository Hardening
+
+You are working in the `materials-kg` repo. Harden the Postgres repository for the new graph-first core so it behaves predictably under re-ingestion, partial failures, and readback from psycopg rows.
+
+## Goal
+
+Strengthen `kg_engine/repositories/postgres.py` without changing the public repository contract in `kg_engine/repositories/protocols.py`. Focus on transaction safety, merge semantics, row decoding correctness, and deterministic query behavior for the new core.
+
+## Files to inspect first
+
+- `kg_engine/repositories/postgres.py`
+- `kg_engine/repositories/protocols.py`
+- `kg_engine/repositories/memory.py`
+- `kg_engine/services/materials_kg.py`
+- `kg_engine/domain/models.py`
+- `kg_engine/tests/test_materials_kg_core.py`
+- `kg_engine/tests/conftest.py`
+
+## Hot spots to pay attention to
+
+- repeated `commit()` calls after each upsert path
+- alias replacement logic in `upsert_entity()`
+- JSONB merge vs replacement behavior
+- row decoding for enums and structured fields
+- lack of explicit rollback handling on failed writes
+- non-deterministic ordering in list/query methods
+- search/read methods that should be stable under tests and re-ingestion
+
+## Desired work
+
+- Keep the repository API shape intact.
+- Make write operations safer under exceptions: no silent partial success inside a method.
+- Preserve merge semantics already implied by the in-memory repository, especially for aliases, properties, source refs, evidence ids, and confidence values.
+- Normalize readback types so models are reconstructed consistently from database rows.
+- Where practical, make result ordering deterministic for tests and callers.
+- Add focused repository tests with fakes/stubs if no live Postgres test fixture exists yet.
+
+## Constraints
+
+- Do not rewrite the repository around a different ORM or query builder.
+- Stay inside the graph-first core boundary; do not drag in legacy graph or agent code.
+- Keep schema shape changes minimal and justified.
+- Avoid broad refactors in `MaterialsKGService`; fix repository behavior first.
+- If you introduce helper methods, keep them local and surgical.
+
+## Acceptance criteria
+
+- A failed repository write does not leave the method in a silently half-applied state.
+- Re-ingestion preserves intended merge semantics instead of clobbering useful fields.
+- Row-to-model reconstruction is type-correct for `EntityKind`, `RelationType`, `SourceKind`, `SourceSpan`, JSON fields, and timestamps.
+- Query/list results used by tests are deterministic where ordering matters.
+- New or updated tests cover at least:
+  - entity upsert merge behavior
+  - rollback-safe failure path or transaction handling
+  - row decoding for evidence/text units/enums
+  - deterministic ordering for at least one list/read path
+
+## Verification commands
+
+```bash
+ruff check kg_engine/repositories/postgres.py kg_engine/tests
+python -m pytest kg_engine/tests/test_materials_kg_core.py -v
+python -m pytest -k "postgres or materials_kg_core" kg_engine/tests -v
+```
+
+If you add repository-unit tests with stubs, run them explicitly too.
+
+## What not to touch
+
+- Do not replace psycopg with SQLAlchemy or another persistence framework.
+- Do not redesign the domain model layer in `kg_engine/domain/models.py` unless a tiny compatibility fix is truly required.
+- Do not modify legacy `kg_engine/graph/` persistence code.
+- Do not expand this task into vector-search redesign or retrieval ranking work.
+
+## Output expected from you
+
+- Implement the patch.
+- Explain exactly what failure modes were hardened.
+- List the verification commands you ran and note whether they used stubs/fakes or a live Postgres connection.

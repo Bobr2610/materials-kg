@@ -163,7 +163,7 @@ The read side also hangs off `MaterialsKGService`.
 ### Material and mode context
 
 ```python
-result = service.query_material_mode("Ti6Al4V", "Annealing", "Hardness")
+result = service.query_material_mode("Material-A", "Mode-A", "Hardness")
 ```
 
 Returns:
@@ -186,7 +186,7 @@ Supports material, mode, and numeric range filtering through `PropertyFilters`.
 ### Related-entity traversal
 
 ```python
-result = service.query_related("Al6061", depth=2)
+result = service.query_related("Material-B", depth=2)
 ```
 
 Returns:
@@ -229,7 +229,7 @@ service.ingest_reference_data(reference_batch)
 service.ingest_experiments(experiment_batch)
 service.ingest_documents(document_batch)
 
-answer = service.query_material_mode("Ti-6Al-4V", "Annealing")
+answer = service.query_material_mode("Material-A", "Mode-A")
 ```
 
 For tests and local checks, the same service can be wired to `InMemoryMaterialsKGRepository`.

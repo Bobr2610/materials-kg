@@ -1,0 +1,42 @@
+﻿You are MiMo acting as a coding subagent in a separate git worktree.
+
+Repository: C:\MAI\Nornicel\Code\wt-unblock-core
+Deep research report: docs/mimo-runs/20260627/deep-research/20_summary.md
+
+Implement only the Phase 1 unblock tasks from the report:
+
+T1: Remove CMW settings requirement
+- Files: kg_engine/config/settings.py, .env.example, tests if needed.
+- Goal: importing kg_engine.config.settings must not require CMW/Comindware credentials.
+- Make legacy cmw_* settings optional with safe empty defaults or otherwise isolate them from new core startup.
+- Do not introduce new required env vars.
+
+T6: Add pyproject project metadata
+- File: pyproject.toml.
+- Add minimal [build-system] and [project] metadata for editable install.
+- Use package name materials-kg, Python >=3.11.
+- Keep existing ruff/mypy settings intact.
+- Keep dependencies aligned with requirements_core.txt, not the legacy agent stack.
+
+T5: Add minimal sample data and ingestion examples
+- Add a small data/ or examples/ fixture set for reference data and experiments/documents covering Ti-6Al-4V, IN718, Al6061.
+- Include coverage rules so data-gap analysis has something to show.
+- Update README or docs with exact commands to run the core API and ingestion script.
+
+Constraints:
+- Do not edit kg_engine/api/app.py or kg_engine/agent/* in this task.
+- Do not remove legacy files.
+- Keep changes narrow and easy to review.
+- Preserve existing new-core public API routes.
+- Do not touch donor folders outside this worktree.
+
+Verification to run if possible:
+python -c "from kg_engine.config.settings import settings; print(settings.materials_api_title)"
+python -m pytest kg_engine/tests/test_materials_kg_core.py kg_engine/tests/test_materials_api_smoke.py kg_engine/tests/test_repository_factory.py kg_engine/tests/test_ingestion_adapters.py -q
+ruff check kg_engine/domain kg_engine/repositories kg_engine/services kg_engine/api/materials_core.py kg_engine/ingestion kg_engine/scripts/ingest_materials_kg.py kg_engine/scripts/run_materials_api.py
+
+Return:
+- Summary of changes
+- Files changed
+- Verification results
+- Any remaining risks

@@ -1,0 +1,250 @@
+from __future__ import annotations
+
+from kg_engine.domain.models import CanonicalEntityInput
+from kg_engine.domain.models import CoverageRuleInput
+from kg_engine.domain.models import DocumentInput
+from kg_engine.domain.models import EntityKind
+from kg_engine.domain.models import ExperimentInput
+from kg_engine.domain.models import FindingInput
+from kg_engine.domain.models import ObservationInput
+from kg_engine.domain.models import PropertyFilters
+from kg_engine.domain.models import QueryFilters
+from kg_engine.domain.models import ReferenceDataBatch
+from kg_engine.repositories.memory import InMemoryMaterialsKGRepository
+from kg_engine.services.materials_kg import MaterialsKGService
+
+
+def build_service() -> MaterialsKGService:
+    repository = InMemoryMaterialsKGRepository()
+    return MaterialsKGService(repository)
+
+
+def test_reference_resolution_handles_aliases_and_noisy_names() -> None:
+    service = build_service()
+    service.ingest_reference_data(
+        ReferenceDataBatch(
+            entities=[
+                CanonicalEntityInput(
+                    kind=EntityKind.MATERIAL,
+                    name="Ti-6Al-4V",
+                    aliases=["Ti6Al4V", "ti 6al 4v"],
+                ),
+                CanonicalEntityInput(
+                    kind=EntityKind.MODE,
+                    name="Annealing",
+                    aliases=["anneal", "annealing"],
+                ),
+                CanonicalEntityInput(
+                    kind=EntityKind.PROPERTY,
+                    name="Hardness",
+                    aliases=["hardness", "твердость"],
+                ),
+            ]
+        )
+    )
+    service.ingest_experiments(
+        [
+            ExperimentInput(
+                experiment_id="exp-001",
+                title="Anneal trial",
+                material_name="ti 6al 4v",
+                mode_name="anneal",
+                observations=[
+                    ObservationInput(
+                        property_name="твердость",
+                        value=36.0,
+                        unit="HRC",
+                    )
+                ],
+            )
+        ]
+    )
+
+    result = service.query_material_mode("Ti6Al4V", "Annealing")
+
+    assert result.material.canonical_name == "Ti-6Al-4V"
+    assert result.mode is not None
+    assert result.mode.canonical_name == "Annealing"
+    assert len(result.observations) == 1
+
+
+def test_relation_and_observation_preserve_provenance_and_units() -> None:
+    service = build_service()
+    service.ingest_reference_data(
+        ReferenceDataBatch(
+            entities=[
+                CanonicalEntityInput(kind=EntityKind.MATERIAL, name="IN718"),
+                CanonicalEntityInput(kind=EntityKind.MODE, name="Aging"),
+                CanonicalEntityInput(
+                    kind=EntityKind.PROPERTY,
+                    name="Yield strength",
+                    aliases=["yield_strength"],
+                ),
+            ]
+        )
+    )
+    service.ingest_experiments(
+        [
+            ExperimentInput(
+                experiment_id="exp-718",
+                title="IN718 aging trial",
+                material_name="IN718",
+                mode_name="Aging",
+                observations=[
+                    ObservationInput(
+                        property_name="yield_strength",
+                        value=1080.0,
+                        unit="MPa",
+                        fragment="Yield strength reached 1080 MPa",
+                        row_reference="sheet1!B12",
+                    )
+                ],
+            )
+        ]
+    )
+
+    result = service.query_property(
+        "Yield strength",
+        PropertyFilters(min_value=1000.0),
+    )
+
+    assert len(result.observations) == 1
+    observation = result.observations[0]
+    assert observation.unit == "MPa"
+    evidence = result.evidence[0]
+    assert evidence.span.row_reference == "sheet1!B12"
+    assert evidence.span.fragment == "Yield strength reached 1080 MPa"
+
+
+def test_gap_analysis_uses_coverage_rules_instead_of_cartesian_noise() -> None:
+    service = build_service()
+    service.ingest_reference_data(
+        ReferenceDataBatch(
+            entities=[
+                CanonicalEntityInput(kind=EntityKind.MATERIAL, name="Ti-6Al-4V"),
+                CanonicalEntityInput(kind=EntityKind.MODE, name="Annealing"),
+                CanonicalEntityInput(kind=EntityKind.PROPERTY, name="Hardness"),
+                CanonicalEntityInput(
+                    kind=EntityKind.PROPERTY,
+                    name="Tensile strength",
+                ),
+            ],
+            coverage_rules=[
+                CoverageRuleInput(
+                    rule_id="rule-1",
+                    name="Ti-6Al-4V annealing matrix",
+                    material_names=["Ti-6Al-4V"],
+                    mode_names=["Annealing"],
+                    property_names=["Hardness", "Tensile strength"],
+                )
+            ],
+        )
+    )
+    service.ingest_experiments(
+        [
+            ExperimentInput(
+                experiment_id="exp-gap",
+                title="Anneal matrix partial",
+                material_name="Ti-6Al-4V",
+                mode_name="Annealing",
+                observations=[
+                    ObservationInput(
+                        property_name="Hardness",
+                        value=35.0,
+                        unit="HRC",
+                    )
+                ],
+            )
+        ]
+    )
+
+    gaps = service.query_data_gaps(filters=QueryFilters(material_name="Ti-6Al-4V"))
+
+    assert len(gaps) == 1
+    assert "Tensile strength" in gaps[0].reason
+
+
+def test_material_mode_query_returns_experiments_findings_and_evidence_paths() -> None:
+    service = build_service()
+    service.ingest_reference_data(
+        ReferenceDataBatch(
+            entities=[
+                CanonicalEntityInput(kind=EntityKind.MATERIAL, name="Al6061"),
+                CanonicalEntityInput(kind=EntityKind.MODE, name="Solution treatment"),
+                CanonicalEntityInput(
+                    kind=EntityKind.PROPERTY,
+                    name="Tensile strength",
+                ),
+            ]
+        )
+    )
+    service.ingest_experiments(
+        [
+            ExperimentInput(
+                experiment_id="exp-mm",
+                title="Al6061 solution treatment run",
+                material_name="Al6061",
+                mode_name="Solution treatment",
+                observations=[
+                    ObservationInput(
+                        property_name="Tensile strength",
+                        value=310.0,
+                        unit="MPa",
+                        fragment="Measured tensile strength 310 MPa",
+                    )
+                ],
+                findings=[
+                    FindingInput(
+                        summary="Strength improved after solution treatment",
+                        decision="Continue with follow-up aging study",
+                        observation_indices=[0],
+                    )
+                ],
+                text_units=[
+                    {"content": "Al6061 solution treatment increased tensile strength."}
+                ],
+            )
+        ]
+    )
+
+    result = service.query_material_mode(
+        "Al6061",
+        "Solution treatment",
+        "Tensile strength",
+    )
+    related = service.query_related("Al6061", depth=2)
+    history = service.query_decision_history("exp-mm")
+
+    assert len(result.experiments) == 1
+    assert len(result.findings) == 1
+    assert len(result.evidence) == 2
+    assert result.search_hits
+    assert any(path.entity_ids[-1] != path.entity_ids[0] for path in related.evidence_paths)
+    assert len(history.traces) == 1
+
+
+def test_incremental_reingestion_does_not_duplicate_canonical_entities() -> None:
+    service = build_service()
+    service.ingest_reference_data(
+        ReferenceDataBatch(
+            entities=[CanonicalEntityInput(kind=EntityKind.MATERIAL, name="WC-Co")]
+        )
+    )
+    batch = [
+        ExperimentInput(
+            experiment_id="exp-dup",
+            title="WC-Co baseline",
+            material_name="WC-Co",
+            observations=[
+                ObservationInput(property_name="Hardness", value=1450.0, unit="HV")
+            ],
+        )
+    ]
+    service.ingest_experiments(batch)
+    service.ingest_experiments(batch)
+
+    property_result = service.query_property("Hardness")
+    related = service.query_related("WC-Co", depth=1)
+
+    assert len(property_result.materials) == 1
+    assert len(related.related_entities) >= 1

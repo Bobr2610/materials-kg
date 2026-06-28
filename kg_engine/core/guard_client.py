@@ -203,4 +203,11 @@ class GuardClient:
         return safety_level == "Unsafe"
 
 
-guard_client = GuardClient()
+guard_client: GuardClient | None = None
+
+
+def get_guard_client() -> GuardClient:
+    global guard_client  # noqa: PLW0603
+    if guard_client is None:
+        guard_client = GuardClient()
+    return guard_client

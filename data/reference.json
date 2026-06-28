@@ -1,0 +1,73 @@
+{
+  "materials": [
+    {
+      "name": "Ti-6Al-4V",
+      "canonical_id": "mat_ti6al4v",
+      "aliases": ["Ti6Al4V", "Ti6-4", "Grade 5 titanium", "Титановый сплав ВТ6"],
+      "properties": {"category": "titanium_alloy", "grade": 5, "density_kg_m3": 4430},
+      "source_ref": "AMS 4928"
+    },
+    {
+      "name": "IN718",
+      "canonical_id": "mat_in718",
+      "aliases": ["Inconel 718", "ИН718", "NiCr19FeNb", "UNS N07718"],
+      "properties": {"category": "nickel_superalloy", "density_kg_m3": 8190},
+      "source_ref": "AMS 5662"
+    },
+    {
+      "name": "Al6061",
+      "canonical_id": "mat_al6061",
+      "aliases": ["Aluminium 6061", "Алюминий 6061", "AA6061", "AL6061-T6"],
+      "properties": {"category": "aluminium_alloy", "grade": "T6", "density_kg_m3": 2700},
+      "source_ref": "AMS-QQ-A-250/11"
+    }
+  ],
+  "properties": [
+    {"name": "Tensile Strength", "canonical_id": "prop_uts", "aliases": ["UTS", "Ultimate Tensile Strength"], "properties": {"unit": "MPa"}},
+    {"name": "Yield Strength", "canonical_id": "prop_ys", "aliases": ["YS", "0.2% Offset Yield Strength"], "properties": {"unit": "MPa"}},
+    {"name": "Elongation", "canonical_id": "prop_elong", "aliases": ["Elongation at break", "dL/L0"], "properties": {"unit": "%"}},
+    {"name": "Hardness", "canonical_id": "prop_hardness", "aliases": ["HV", "Vickers Hardness"], "properties": {"unit": "HV"}},
+    {"name": "Fatigue Limit", "canonical_id": "prop_fatigue", "aliases": ["Endurance limit", "Fatigue strength"], "properties": {"unit": "MPa"}}
+  ],
+  "modes": [
+    {"name": "As-Built", "canonical_id": "mode_as_built", "aliases": ["as-manufactured", "as-deposited"], "properties": {"process": "AM"}},
+    {"name": "Annealed", "canonical_id": "mode_annealed", "aliases": ["stress-relieved"], "properties": {"process": "heat_treatment"}},
+    {"name": "Aged", "canonical_id": "mode_aged", "aliases": ["peak-aged", "double-aged"], "properties": {"process": "heat_treatment"}},
+    {"name": "Wrought", "canonical_id": "mode_wrought", "aliases": ["forged", "rolled"], "properties": {"process": "mechanical"}}
+  ],
+  "equipment": [
+    {"name": "Instron 5982", "canonical_id": "equip_instron_5982", "properties": {"type": "universal_testing_machine", "capacity_kN": 100}},
+    {"name": "Zeiss GeminiSEM", "canonical_id": "equip_zeiss_gemini", "properties": {"type": "SEM", "resolution_nm": 0.8}},
+    {"name": "MTS 810", "canonical_id": "equip_mts_810", "properties": {"type": "servo_hydraulic", "capacity_kN": 250}}
+  ],
+  "teams": [
+    {"name": "AM Processing Lab", "canonical_id": "team_am_lab", "aliases": ["Additive Manufacturing Lab"], "properties": {"members": ["Dr. Petrov", "MSc. Ivanova"]}},
+    {"name": "Mechanical Testing Group", "canonical_id": "team_mech_test", "aliases": ["MTG"], "properties": {"members": ["Dr. Smirnov", "Eng. Kozlov"]}}
+  ],
+  "coverage_rules": [
+    {
+      "rule_id": "rule_basic_coverage",
+      "name": "Basic mechanical property coverage",
+      "material_names": ["Ti-6Al-4V", "IN718", "Al6061"],
+      "mode_names": ["As-Built", "Annealed", "Aged", "Wrought"],
+      "property_names": ["Tensile Strength", "Yield Strength", "Elongation"],
+      "scope": "material-mode-property"
+    },
+    {
+      "rule_id": "rule_hardness_coverage",
+      "name": "Hardness coverage across modes",
+      "material_names": ["Ti-6Al-4V", "IN718", "Al6061"],
+      "mode_names": ["As-Built", "Annealed", "Wrought"],
+      "property_names": ["Hardness"],
+      "scope": "material-mode-property"
+    },
+    {
+      "rule_id": "rule_fatigue_coverage",
+      "name": "Fatigue data coverage",
+      "material_names": ["Ti-6Al-4V", "IN718"],
+      "mode_names": ["As-Built", "Annealed"],
+      "property_names": ["Fatigue Limit"],
+      "scope": "material-mode-property"
+    }
+  ]
+}

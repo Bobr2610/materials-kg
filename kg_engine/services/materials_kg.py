@@ -1,0 +1,1234 @@
+"""Graph-first service layer for materials knowledge graph ingestion and query."""
+
+from __future__ import annotations
+
+import hashlib
+import logging
+from collections import deque
+from statistics import fmean
+from typing import Any
+
+from kg_engine.domain.models import CanonicalEntityInput
+from kg_engine.domain.models import CoverageRuleInput
+from kg_engine.domain.models import DataGap
+from kg_engine.domain.models import DecisionHistoryQueryResult
+from kg_engine.domain.models import DecisionTrace
+from kg_engine.domain.models import DocumentInput
+from kg_engine.domain.models import Entity
+from kg_engine.domain.models import EntityKind
+from kg_engine.domain.models import Evidence
+from kg_engine.domain.models import EvidencePath
+from kg_engine.domain.models import ExperimentInput
+from kg_engine.domain.models import FindingInput
+from kg_engine.domain.models import MaterialModeQueryResult
+from kg_engine.domain.models import Observation
+from kg_engine.domain.models import ObservationInput
+from kg_engine.domain.models import PropertyFilters
+from kg_engine.domain.models import PropertyQueryResult
+from kg_engine.domain.models import QueryFilters
+from kg_engine.domain.models import ReferenceDataBatch
+from kg_engine.domain.models import RelatedEntitiesQueryResult
+from kg_engine.domain.models import Relation
+from kg_engine.domain.models import RelationType
+from kg_engine.domain.models import SearchTextUnit
+from kg_engine.domain.models import SourceKind
+from kg_engine.domain.models import SourceSpan
+from kg_engine.domain.models import TextUnitInput
+from kg_engine.domain.resolution import normalize_name
+from kg_engine.repositories.protocols import MaterialsKGRepository
+
+logger = logging.getLogger(__name__)
+
+
+def _stable_id(prefix: str, *parts: Any) -> str:
+    raw = "::".join(str(part) for part in parts if part is not None)
+    digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
+    return f"{prefix}_{digest}"
+
+
+class MaterialsKGService:
+    """Public ingestion and query API for the compact domain core."""
+
+    def __init__(
+        self,
+        repository: MaterialsKGRepository,
+        llm_provider: Any | None = None,
+    ) -> None:
+        self._repository = repository
+        self._llm = llm_provider
+
+    def ingest_reference_data(self, batch: ReferenceDataBatch) -> dict[str, int]:
+        entity_count = 0
+        for record in batch.entities:
+            self._upsert_reference_entity(record)
+            entity_count += 1
+        for rule in batch.coverage_rules:
+            self._repository.upsert_coverage_rule(rule)
+        return {
+            "entities": entity_count,
+            "coverage_rules": len(batch.coverage_rules),
+        }
+
+    def ingest_experiments(self, batch: list[ExperimentInput]) -> dict[str, int]:
+        observation_count = 0
+        trace_count = 0
+        for experiment in batch:
+            experiment_entity = self._ensure_entity(
+                EntityKind.EXPERIMENT,
+                experiment.title,
+                entity_id=experiment.experiment_id,
+                aliases=[experiment.experiment_id],
+                source_ref=experiment.experiment_id,
+                properties=experiment.metadata,
+            )
+            material = self._ensure_entity(
+                EntityKind.MATERIAL,
+                experiment.material_name,
+                source_ref=experiment.experiment_id,
+            )
+            self._link_entities(
+                experiment_entity.id,
+                material.id,
+                RelationType.EVALUATES_MATERIAL,
+                evidence_ids=[],
+                properties={"source": experiment.experiment_id},
+            )
+            mode_entity = None
+            if experiment.mode_name:
+                mode_entity = self._ensure_entity(
+                    EntityKind.MODE,
+                    experiment.mode_name,
+                    source_ref=experiment.experiment_id,
+                )
+                self._link_entities(
+                    experiment_entity.id,
+                    mode_entity.id,
+                    RelationType.USES_MODE,
+                    evidence_ids=[],
+                )
+            if experiment.team_name:
+                team = self._ensure_entity(
+                    EntityKind.TEAM,
+                    experiment.team_name,
+                    source_ref=experiment.experiment_id,
+                )
+                self._link_entities(
+                    experiment_entity.id,
+                    team.id,
+                    RelationType.PERFORMED_BY,
+                    evidence_ids=[],
+                )
+            for equipment_name in experiment.equipment_names:
+                equipment = self._ensure_entity(
+                    EntityKind.EQUIPMENT,
+                    equipment_name,
+                    source_ref=experiment.experiment_id,
+                )
+                self._link_entities(
+                    experiment_entity.id,
+                    equipment.id,
+                    RelationType.USES_EQUIPMENT,
+                    evidence_ids=[],
+                )
+            if experiment.document_id:
+                document = self._ensure_entity(
+                    EntityKind.DOCUMENT,
+                    experiment.document_id,
+                    entity_id=experiment.document_id,
+                    aliases=[experiment.document_id],
+                    source_ref=experiment.experiment_id,
+                )
+                self._link_entities(
+                    experiment_entity.id,
+                    document.id,
+                    RelationType.DOCUMENTED_IN,
+                    evidence_ids=[],
+                )
+
+            observation_ids: list[str] = []
+            for observation_input in experiment.observations:
+                observation = self._create_observation(
+                    experiment=experiment,
+                    experiment_entity=experiment_entity,
+                    material=material,
+                    mode_entity=mode_entity,
+                    observation_input=observation_input,
+                )
+                observation_ids.append(observation.id)
+                observation_count += 1
+
+            for index, finding in enumerate(experiment.findings):
+                self._create_trace(
+                    finding=finding,
+                    source_kind=SourceKind.EXPERIMENT,
+                    source_id=experiment.experiment_id,
+                    entity_ids=[
+                        material.id,
+                        experiment_entity.id,
+                        *([mode_entity.id] if mode_entity else []),
+                    ],
+                    experiment_id=experiment_entity.id,
+                    observation_ids=[
+                        observation_ids[item]
+                        for item in finding.observation_indices
+                        if item < len(observation_ids)
+                    ],
+                    trace_id=_stable_id(
+                        "trace",
+                        experiment.experiment_id,
+                        index,
+                        finding.summary,
+                    ),
+                    version=experiment.source_version,
+                )
+                trace_count += 1
+
+            for index, text_unit in enumerate(experiment.text_units):
+                self._repository.upsert_text_unit(
+                    SearchTextUnit(
+                        id=_stable_id(
+                            "text",
+                            experiment.experiment_id,
+                            index,
+                            text_unit.content,
+                        ),
+                        source_entity_id=experiment_entity.id,
+                        source_kind=SourceKind.EXPERIMENT,
+                        content=text_unit.content,
+                        metadata=text_unit.metadata,
+                    )
+                )
+        return {
+            "experiments": len(batch),
+            "observations": observation_count,
+            "decision_traces": trace_count,
+        }
+
+    def ingest_documents(self, batch: list[DocumentInput]) -> dict[str, int]:
+        trace_count = 0
+        llm_extracted_count = 0
+        for document in batch:
+            document_entity = self._ensure_entity(
+                EntityKind.DOCUMENT,
+                document.title,
+                entity_id=document.document_id,
+                aliases=[document.document_id],
+                source_ref=document.document_id,
+                properties=document.metadata,
+            )
+            linked_entity_ids: list[str] = [document_entity.id]
+
+            has_explicit_entities = any([
+                document.material_names, document.mode_names,
+                document.property_names, document.equipment_names,
+                document.team_names, document.experiment_ids,
+            ])
+
+            if self._llm and not has_explicit_entities and document.text:
+                try:
+                    from kg_engine.llm_core.extraction import extract_entities_from_document
+                    extracted = extract_entities_from_document(
+                        self._llm, document.title, document.text
+                    )
+                    for ent in extracted.get("entities", []):
+                        kind_str = ent.get("kind", "document")
+                        try:
+                            kind = EntityKind(kind_str)
+                        except ValueError:
+                            kind = EntityKind.DOCUMENT
+                        entity = self._ensure_entity(
+                            kind, ent.get("name", ""),
+                            source_ref=document.document_id,
+                            aliases=ent.get("aliases", []),
+                            properties=ent.get("properties", {}),
+                        )
+                        linked_entity_ids.append(entity.id)
+                        evidence = self._create_evidence(
+                            source_kind=SourceKind.DOCUMENT,
+                            source_id=document.document_id,
+                            fragment=ent.get("name", ""),
+                            extraction_method="llm_extraction",
+                            confidence=0.85,
+                        )
+                        self._link_entities(
+                            document_entity.id, entity.id,
+                            RelationType.REFERENCES,
+                            evidence_ids=[evidence.id],
+                        )
+                    for exp in extracted.get("experiments", []):
+                        material_name = exp.get("material_name", "")
+                        mode_name = exp.get("mode_name", "")
+                        observations = []
+                        for obs in exp.get("observations", []):
+                            observations.append(ObservationInput(
+                                property_name=obs.get("property_name", ""),
+                                value=obs.get("value"),
+                                unit=obs.get("unit", ""),
+                                confidence=obs.get("confidence", 0.85),
+                                extraction_method="llm_extraction",
+                            ))
+                        findings = []
+                        for f in exp.get("findings", []):
+                            from kg_engine.domain.models import FindingInput
+                            findings.append(FindingInput(
+                                summary=f.get("summary", ""),
+                                confidence=f.get("confidence", 0.85),
+                                extraction_method="llm_extraction",
+                            ))
+                        exp_input = ExperimentInput(
+                            experiment_id=exp.get("experiment_id", f"{document.document_id}_exp_{llm_extracted_count}"),
+                            title=exp.get("title", f"Extracted from {document.title}"),
+                            material_name=material_name,
+                            mode_name=mode_name,
+                            observations=observations,
+                            findings=findings,
+                            metadata={"source_document": document.document_id, "extraction_method": "llm"},
+                        )
+                        self.ingest_experiments([exp_input])
+                        llm_extracted_count += 1
+                except Exception:
+                    logger.exception("LLM extraction failed for document %s", document.document_id)
+
+            for kind, values in (
+                (EntityKind.MATERIAL, document.material_names),
+                (EntityKind.MODE, document.mode_names),
+                (EntityKind.PROPERTY, document.property_names),
+                (EntityKind.EQUIPMENT, document.equipment_names),
+                (EntityKind.TEAM, document.team_names),
+            ):
+                for value in values:
+                    entity = self._ensure_entity(kind, value, source_ref=document.document_id)
+                    linked_entity_ids.append(entity.id)
+                    evidence = self._create_evidence(
+                        source_kind=SourceKind.DOCUMENT,
+                        source_id=document.document_id,
+                        fragment=value,
+                        extraction_method="document_reference",
+                    )
+                    self._link_entities(
+                        document_entity.id,
+                        entity.id,
+                        RelationType.REFERENCES,
+                        evidence_ids=[evidence.id],
+                    )
+            for tag_name in document.tag_names:
+                tag = self._ensure_entity(EntityKind.TAG, tag_name, source_ref=document.document_id)
+                linked_entity_ids.append(tag.id)
+                self._link_entities(
+                    document_entity.id,
+                    tag.id,
+                    RelationType.TAGGED_WITH,
+                    evidence_ids=[],
+                )
+            for experiment_id in document.experiment_ids:
+                experiment_entity = self._ensure_entity(
+                    EntityKind.EXPERIMENT,
+                    experiment_id,
+                    entity_id=experiment_id,
+                    aliases=[experiment_id],
+                    source_ref=document.document_id,
+                )
+                linked_entity_ids.append(experiment_entity.id)
+                self._link_entities(
+                    experiment_entity.id,
+                    document_entity.id,
+                    RelationType.DOCUMENTED_IN,
+                    evidence_ids=[],
+                )
+            self._upsert_text_unit_with_embedding(
+                unit_id=_stable_id("doc_text", document.document_id, document.text),
+                source_entity_id=document_entity.id,
+                source_kind=SourceKind.DOCUMENT,
+                content=document.text,
+                metadata=document.metadata,
+            )
+            for index, text_unit in enumerate(document.text_units):
+                self._upsert_text_unit_with_embedding(
+                    unit_id=_stable_id("doc_chunk", document.document_id, index),
+                    source_entity_id=document_entity.id,
+                    source_kind=SourceKind.DOCUMENT,
+                    content=text_unit.content,
+                    metadata=text_unit.metadata,
+                )
+            for index, finding in enumerate(document.findings):
+                self._create_trace(
+                    finding=finding,
+                    source_kind=SourceKind.DOCUMENT,
+                    source_id=document.document_id,
+                    entity_ids=linked_entity_ids,
+                    experiment_id=None,
+                    observation_ids=[],
+                    trace_id=_stable_id(
+                        "doc_trace",
+                        document.document_id,
+                        index,
+                        finding.summary,
+                    ),
+                )
+                trace_count += 1
+        return {"documents": len(batch), "decision_traces": trace_count}
+
+    def _upsert_text_unit_with_embedding(
+        self,
+        unit_id: str,
+        source_entity_id: str,
+        source_kind: SourceKind,
+        content: str,
+        metadata: dict | None = None,
+    ) -> SearchTextUnit:
+        embedding = None
+        if self._llm and content:
+            try:
+                embeddings = self._llm.embed([content[:2000]])
+                if embeddings and embeddings[0]:
+                    embedding = embeddings[0]
+            except Exception:
+                logger.debug("Embedding generation failed for text unit %s", unit_id)
+        unit = SearchTextUnit(
+            id=unit_id,
+            source_entity_id=source_entity_id,
+            source_kind=source_kind,
+            content=content,
+            embedding=embedding,
+            metadata=metadata or {},
+        )
+        return self._repository.upsert_text_unit(unit)
+
+    def query_material_mode(
+        self,
+        material: str,
+        mode: str | None = None,
+        property_name: str | None = None,
+    ) -> MaterialModeQueryResult:
+        material_entity = self._require_entity(EntityKind.MATERIAL, material)
+        mode_entity = None if mode is None else self._require_entity(EntityKind.MODE, mode)
+        property_entity = None
+        if property_name is not None:
+            property_entity = self._require_entity(EntityKind.PROPERTY, property_name)
+        observations = self._repository.list_observations(material_id=material_entity.id)
+        if mode_entity is not None:
+            observations = [
+                observation
+                for observation in observations
+                if observation.mode_id == mode_entity.id
+            ]
+        if property_entity is not None:
+            observations = [
+                observation
+                for observation in observations
+                if observation.property_id == property_entity.id
+            ]
+        experiment_ids = [
+            observation.experiment_id
+            for observation in observations
+            if observation.experiment_id is not None
+        ]
+        experiments = self._repository.find_entities(ids=list(dict.fromkeys(experiment_ids)))
+        findings: list[DecisionTrace] = []
+        for experiment in experiments:
+            findings.extend(
+                self._repository.list_decision_traces(experiment_id=experiment.id)
+            )
+        evidence_ids = [observation.evidence_id for observation in observations]
+        for trace in findings:
+            evidence_ids.extend(trace.evidence_ids)
+        search_query = " ".join(
+            item for item in [material, mode, property_name] if item is not None
+        )
+        search_hits = self._repository.search_text_units(search_query, limit=5)
+        evidence = self._repository.list_evidence(list(dict.fromkeys(evidence_ids)))
+        confidence_values = [
+            observation.confidence for observation in observations
+        ] or [material_entity.confidence]
+        return MaterialModeQueryResult(
+            material=material_entity,
+            mode=mode_entity,
+            experiments=experiments,
+            observations=observations,
+            findings=findings,
+            evidence=evidence,
+            search_hits=search_hits,
+            confidence=fmean(confidence_values),
+        )
+
+    def query_property(
+        self,
+        property_name: str,
+        filters: PropertyFilters | None = None,
+    ) -> PropertyQueryResult:
+        filters = filters or PropertyFilters()
+        property_entity = self._require_entity(EntityKind.PROPERTY, property_name)
+        observations = self._repository.list_observations(property_id=property_entity.id)
+        if filters.material_name:
+            material_entity = self._require_entity(
+                EntityKind.MATERIAL,
+                filters.material_name,
+            )
+            observations = [
+                observation
+                for observation in observations
+                if observation.material_id == material_entity.id
+            ]
+        if filters.mode_name:
+            mode_entity = self._require_entity(EntityKind.MODE, filters.mode_name)
+            observations = [
+                observation
+                for observation in observations
+                if observation.mode_id == mode_entity.id
+            ]
+        filtered_observations: list[Observation] = []
+        for observation in observations:
+            if filters.min_value is not None and (
+                observation.value is None or observation.value < filters.min_value
+            ):
+                continue
+            if filters.max_value is not None and (
+                observation.value is None or observation.value > filters.max_value
+            ):
+                continue
+            filtered_observations.append(observation)
+        material_ids = list(
+            dict.fromkeys(observation.material_id for observation in filtered_observations)
+        )
+        experiment_ids = list(
+            dict.fromkeys(
+                observation.experiment_id
+                for observation in filtered_observations
+                if observation.experiment_id is not None
+            )
+        )
+        evidence_ids = list(
+            dict.fromkeys(observation.evidence_id for observation in filtered_observations)
+        )
+        return PropertyQueryResult(
+            property_entity=property_entity,
+            observations=filtered_observations,
+            materials=self._repository.find_entities(ids=material_ids),
+            experiments=self._repository.find_entities(ids=experiment_ids),
+            evidence=self._repository.list_evidence(evidence_ids),
+        )
+
+    def query_related(
+        self,
+        entity: str,
+        depth: int = 2,
+        relation_filters: list[RelationType] | None = None,
+    ) -> RelatedEntitiesQueryResult:
+        root = self._resolve_any_entity(entity)
+        visited = {root.id}
+        related_entities: dict[str, Entity] = {}
+        relations: dict[str, Relation] = {}
+        evidence_paths: list[EvidencePath] = []
+        queue: deque[tuple[str, list[str], list[str], int]] = deque(
+            [(root.id, [root.id], [], 0)]
+        )
+        while queue:
+            current_id, path_entities, path_relations, current_depth = queue.popleft()
+            if current_depth >= depth:
+                continue
+            for relation in self._repository.list_relations(
+                entity_id=current_id,
+                relation_types=relation_filters,
+            ):
+                neighbor_id = (
+                    relation.target_entity_id
+                    if relation.source_entity_id == current_id
+                    else relation.source_entity_id
+                )
+                relations[relation.id] = relation
+                new_path_entities = [*path_entities, neighbor_id]
+                new_path_relations = [*path_relations, relation.id]
+                evidence_paths.append(
+                    EvidencePath(
+                        entity_ids=new_path_entities,
+                        relation_ids=new_path_relations,
+                        evidence_ids=relation.evidence_ids,
+                    )
+                )
+                if neighbor_id in visited:
+                    continue
+                visited.add(neighbor_id)
+                neighbor = self._repository.get_entity(neighbor_id)
+                if neighbor is not None:
+                    related_entities[neighbor.id] = neighbor
+                    queue.append(
+                        (
+                            neighbor_id,
+                            new_path_entities,
+                            new_path_relations,
+                            current_depth + 1,
+                        )
+                    )
+        evidence_ids: list[str] = []
+        for relation in relations.values():
+            evidence_ids.extend(relation.evidence_ids)
+        return RelatedEntitiesQueryResult(
+            root_entity=root,
+            related_entities=list(related_entities.values()),
+            relations=list(relations.values()),
+            evidence_paths=evidence_paths,
+            evidence=self._repository.list_evidence(list(dict.fromkeys(evidence_ids))),
+        )
+
+    def query_decision_history(self, entity_or_experiment: str) -> DecisionHistoryQueryResult:
+        root = self._resolve_any_entity(entity_or_experiment)
+        traces = self._repository.list_decision_traces(entity_id=root.id)
+        if root.kind == EntityKind.EXPERIMENT:
+            traces.extend(self._repository.list_decision_traces(experiment_id=root.id))
+        deduped: dict[str, DecisionTrace] = {trace.id: trace for trace in traces}
+        evidence_ids: list[str] = []
+        for trace in deduped.values():
+            evidence_ids.extend(trace.evidence_ids)
+        return DecisionHistoryQueryResult(
+            requested_entity=root,
+            traces=sorted(deduped.values(), key=lambda item: item.timestamp),
+            evidence=self._repository.list_evidence(list(dict.fromkeys(evidence_ids))),
+        )
+
+    def query_data_gaps(
+        self,
+        scope: str | None = None,
+        filters: QueryFilters | None = None,
+    ) -> list[DataGap]:
+        filters = filters or QueryFilters()
+        observations = self._repository.list_observations()
+        observed_keys = {
+            (item.material_id, item.mode_id, item.property_id)
+            for item in observations
+        }
+        gaps: list[DataGap] = []
+        for rule in self._repository.list_coverage_rules():
+            if scope is not None and rule.scope != scope:
+                continue
+            materials = self._resolve_rule_entities(EntityKind.MATERIAL, rule.material_names)
+            modes = self._resolve_rule_entities(EntityKind.MODE, rule.mode_names)
+            properties = self._resolve_rule_entities(
+                EntityKind.PROPERTY,
+                rule.property_names,
+            )
+            for material_entity in materials:
+                if filters.material_name and normalize_name(
+                    material_entity.canonical_name
+                ) != normalize_name(filters.material_name):
+                    continue
+                for mode_entity in modes:
+                    if filters.mode_name and normalize_name(
+                        mode_entity.canonical_name
+                    ) != normalize_name(filters.mode_name):
+                        continue
+                    for property_entity in properties:
+                        if filters.property_name and normalize_name(
+                            property_entity.canonical_name
+                        ) != normalize_name(filters.property_name):
+                            continue
+                        key = (
+                            material_entity.id,
+                            mode_entity.id,
+                            property_entity.id,
+                        )
+                        if key in observed_keys:
+                            continue
+                        gaps.append(
+                            DataGap(
+                                id=_stable_id("gap", rule.rule_id, *key),
+                                scope=rule.scope,
+                                rule_id=rule.rule_id,
+                                material_id=material_entity.id,
+                                mode_id=mode_entity.id,
+                                property_id=property_entity.id,
+                                reason=(
+                                    f"Missing observation for "
+                                    f"{material_entity.canonical_name} / "
+                                    f"{mode_entity.canonical_name} / "
+                                    f"{property_entity.canonical_name}"
+                                ),
+                                metadata={"rule_name": rule.name},
+                            )
+                        )
+        return gaps
+
+    def answer_question(
+        self,
+        *,
+        question: str,
+        material: str | None = None,
+        mode: str | None = None,
+        property_name: str | None = None,
+        source_ids: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Resolve a free-form research question into graph-backed answer parts."""
+        warnings: list[str] = []
+        matched_entities = self._match_entities_from_question(question)
+
+        material_entity = self._resolve_filter_entity(
+            EntityKind.MATERIAL,
+            material,
+            matched_entities,
+            warnings,
+        )
+        mode_entity = self._resolve_filter_entity(
+            EntityKind.MODE,
+            mode,
+            matched_entities,
+            warnings,
+        )
+        property_entity = self._resolve_filter_entity(
+            EntityKind.PROPERTY,
+            property_name,
+            matched_entities,
+            warnings,
+        )
+
+        root_entity = (
+            material_entity
+            or property_entity
+            or mode_entity
+            or (matched_entities[0] if matched_entities else None)
+        )
+        experiments: list[Entity] = []
+        observations: list[Observation] = []
+        evidence: list[Evidence] = []
+        findings: list[DecisionTrace] = []
+        related_entities: list[Entity] = []
+        relations: list[Relation] = []
+        search_hits = self._repository.search_text_units(question, limit=8) if question else []
+
+        if material_entity is not None:
+            material_result = self.query_material_mode(
+                material_entity.canonical_name,
+                mode_entity.canonical_name if mode_entity else None,
+                property_entity.canonical_name if property_entity else None,
+            )
+            experiments.extend(material_result.experiments)
+            observations.extend(material_result.observations)
+            evidence.extend(material_result.evidence)
+            findings.extend(material_result.findings)
+            search_hits = material_result.search_hits or search_hits
+        elif property_entity is not None:
+            property_result = self.query_property(property_entity.canonical_name)
+            experiments.extend(property_result.experiments)
+            observations.extend(property_result.observations)
+            evidence.extend(property_result.evidence)
+
+        if root_entity is not None:
+            related = self.query_related(root_entity.canonical_name, depth=2)
+            related_entities.extend(related.related_entities)
+            relations.extend(related.relations)
+            evidence.extend(related.evidence)
+            history = self.query_decision_history(root_entity.canonical_name)
+            findings.extend(history.traces)
+            evidence.extend(history.evidence)
+        elif not search_hits:
+            warnings.append("Не удалось сопоставить вопрос с загруженными сущностями графа.")
+
+        filters = QueryFilters(
+            material_name=material_entity.canonical_name if material_entity else None,
+            mode_name=mode_entity.canonical_name if mode_entity else None,
+            property_name=property_entity.canonical_name if property_entity else None,
+        )
+        data_gaps = self.query_data_gaps(filters=filters)
+        if not observations and not data_gaps and root_entity is not None:
+            warnings.append("Прямых измерений по распознанным сущностям не найдено.")
+
+        evidence_deduped = self._dedupe_by_id(evidence)
+        search_deduped = self._dedupe_by_id(search_hits)
+        if source_ids:
+            source_set = set(source_ids)
+            evidence_deduped = [e for e in evidence_deduped if e.source_id in source_set]
+            search_deduped = [h for h in search_deduped if h.source_entity_id in source_set]
+
+        citations = self._build_citations(evidence_deduped, search_deduped)
+        answer = self._build_answer_text(
+            material_entity=material_entity,
+            mode_entity=mode_entity,
+            property_entity=property_entity,
+            experiments=experiments,
+            observations=observations,
+            findings=findings,
+            data_gaps=data_gaps,
+            search_hits=search_deduped,
+        )
+
+        if self._llm:
+            try:
+                from kg_engine.llm_core.extraction import llm_generate_answer
+                graph_context = {
+                    "matched_entities": [e.model_dump(mode="json") for e in matched_entities],
+                    "experiments": [e.model_dump(mode="json") for e in self._dedupe_entities(experiments)],
+                    "observations": [o.model_dump(mode="json") for o in self._dedupe_by_id(observations)],
+                    "decision_history": [t.model_dump(mode="json") for t in self._dedupe_by_id(findings)],
+                    "data_gaps": [g.model_dump(mode="json") for g in data_gaps],
+                    "search_hits": [h.model_dump(mode="json") for h in search_deduped],
+                }
+                llm_answer = llm_generate_answer(self._llm, question, graph_context)
+                if llm_answer:
+                    answer = llm_answer
+            except Exception:
+                logger.exception("LLM answer generation failed, using template answer")
+        return {
+            "question": question,
+            "answer": answer,
+            "resolved_query": {
+                "material": material_entity.canonical_name if material_entity else None,
+                "mode": mode_entity.canonical_name if mode_entity else None,
+                "property_name": (
+                    property_entity.canonical_name if property_entity else None
+                ),
+            },
+            "matched_entities": [
+                entity.model_dump(mode="json") for entity in matched_entities
+            ],
+            "experiments": [
+                entity.model_dump(mode="json") for entity in self._dedupe_entities(experiments)
+            ],
+            "observations": [
+                observation.model_dump(mode="json")
+                for observation in self._dedupe_by_id(observations)
+            ],
+            "evidence": [
+                item.model_dump(mode="json") for item in evidence_deduped
+            ],
+            "citations": citations,
+            "related_entities": [
+                entity.model_dump(mode="json")
+                for entity in self._dedupe_entities(related_entities)
+            ],
+            "relations": [
+                relation.model_dump(mode="json")
+                for relation in self._dedupe_by_id(relations)
+            ],
+            "decision_history": [
+                trace.model_dump(mode="json") for trace in self._dedupe_by_id(findings)
+            ],
+            "data_gaps": [gap.model_dump(mode="json") for gap in data_gaps],
+            "search_hits": [
+                hit.model_dump(mode="json") for hit in search_deduped
+            ],
+            "warnings": warnings,
+        }
+
+    def _build_citations(
+        self,
+        evidence: list[Evidence],
+        search_hits: list[SearchTextUnit],
+    ) -> list[dict[str, Any]]:
+        citations: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for item in evidence[:12]:
+            key = f"{item.source_id}:{item.span.fragment or item.extraction_method}"
+            if key in seen:
+                continue
+            seen.add(key)
+            citations.append({
+                "id": item.id,
+                "source_id": item.source_id,
+                "source_kind": item.source_kind.value,
+                "fragment": item.span.fragment or item.extraction_method,
+                "section": item.span.section,
+                "row_reference": item.span.row_reference,
+                "confidence": item.confidence,
+            })
+        for hit in search_hits[:5]:
+            key = f"search:{hit.id}"
+            if key in seen:
+                continue
+            seen.add(key)
+            citations.append({
+                "id": hit.id,
+                "source_id": hit.source_entity_id,
+                "source_kind": hit.source_kind.value,
+                "fragment": hit.content[:200],
+                "section": None,
+                "row_reference": None,
+                "confidence": 1.0,
+            })
+        return citations
+
+    def get_source_overview(self) -> dict[str, Any]:
+        """Generate overview of all loaded sources."""
+        entities = self._repository.find_entities()
+        observations = self._repository.list_observations()
+        relations = self._repository.list_relations()
+        evidence_ids = [obs.evidence_id for obs in observations if obs.evidence_id]
+        evidence_all = self._repository.list_evidence(evidence_ids) if evidence_ids else []
+        by_kind: dict[str, int] = {}
+        for e in entities:
+            by_kind[e.kind.value] = by_kind.get(e.kind.value, 0) + 1
+        source_files: set[str] = set()
+        for e in entities:
+            for ref in e.source_refs:
+                source_files.add(ref)
+        for ev in evidence_all:
+            source_files.add(ev.source_id)
+        return {
+            "total_entities": len(entities),
+            "by_kind": by_kind,
+            "total_observations": len(observations),
+            "total_relations": len(relations),
+            "total_evidence": len(evidence_all),
+            "source_files": sorted(source_files),
+            "summary": (
+                f"Загружено {len(entities)} сущностей "
+                f"({', '.join(f'{k}: {v}' for k, v in sorted(by_kind.items()))}), "
+                f"{len(observations)} измерений, {len(relations)} связей, "
+                f"{len(evidence_all)} доказательств из {len(source_files)} файлов."
+            ),
+        }
+
+    def get_suggested_questions(self) -> list[str]:
+        """Suggest follow-up questions based on loaded data."""
+        entities = self._repository.find_entities()
+        by_kind: dict[EntityKind, list[Entity]] = {}
+        for e in entities:
+            by_kind.setdefault(e.kind, []).append(e)
+        suggestions: list[str] = []
+        materials = by_kind.get(EntityKind.MATERIAL, [])
+        properties = by_kind.get(EntityKind.PROPERTY, [])
+        modes = by_kind.get(EntityKind.MODE, [])
+        teams = by_kind.get(EntityKind.TEAM, [])
+        equipment = by_kind.get(EntityKind.EQUIPMENT, [])
+        if materials and modes:
+            m = materials[0]
+            mo = modes[0]
+            suggestions.append(f"Что уже делали по {m.canonical_name} при режиме {mo.canonical_name}?")
+        if materials and properties:
+            m = materials[0]
+            p = properties[0]
+            suggestions.append(f"Какие свойства измеряли для {m.canonical_name}?")
+        if properties:
+            p = properties[0]
+            suggestions.append(f"Где есть пробелы по {p.canonical_name}?")
+        if materials:
+            for m in materials[:2]:
+                suggestions.append(f"Какие документы связаны с {m.canonical_name}?")
+        if teams:
+            t = teams[0]
+            suggestions.append(f"Какие эксперименты выполняла {t.canonical_name}?")
+        if equipment:
+            eq = equipment[0]
+            suggestions.append(f"Где использовали {eq.canonical_name}?")
+        if not suggestions:
+            suggestions = [
+                "Какие материалы загружены в систему?",
+                "Какие эксперименты есть в базе?",
+                "Какие свойства измерялись?",
+                "Где есть пробелы в данных?",
+            ]
+        return suggestions[:6]
+
+    def _match_entities_from_question(self, question: str) -> list[Entity]:
+        normalized_question = normalize_name(question)
+        if not normalized_question:
+            return []
+        scored: list[tuple[int, Entity]] = []
+        for entity in self._repository.find_entities():
+            names = [entity.canonical_name, *entity.aliases]
+            score = 0
+            for name in names:
+                normalized_name = normalize_name(name)
+                if len(normalized_name) < 3:
+                    continue
+                if normalized_name in normalized_question:
+                    score = max(score, len(normalized_name))
+            if score:
+                scored.append((score, entity))
+        scored.sort(key=lambda item: (item[0], item[1].kind.value), reverse=True)
+        return [entity for _, entity in scored]
+
+    def _resolve_filter_entity(
+        self,
+        kind: EntityKind,
+        explicit_name: str | None,
+        matched_entities: list[Entity],
+        warnings: list[str],
+    ) -> Entity | None:
+        if explicit_name:
+            entity = self._repository.resolve_entity(kind, explicit_name)
+            if entity is None:
+                warnings.append(
+                    f"Фильтр '{explicit_name}' не найден среди сущностей типа {kind.value}."
+                )
+            return entity
+        for entity in matched_entities:
+            if entity.kind == kind:
+                return entity
+        return None
+
+    def _build_answer_text(
+        self,
+        *,
+        material_entity: Entity | None,
+        mode_entity: Entity | None,
+        property_entity: Entity | None,
+        experiments: list[Entity],
+        observations: list[Observation],
+        findings: list[DecisionTrace],
+        data_gaps: list[DataGap],
+        search_hits: list[SearchTextUnit],
+    ) -> str:
+        parts: list[str] = []
+        context = " / ".join(
+            item.canonical_name
+            for item in (material_entity, mode_entity, property_entity)
+            if item is not None
+        )
+        if observations:
+            values = [
+                f"{item.value:g} {item.unit or ''}".strip()
+                for item in observations
+                if item.value is not None
+            ]
+            value_text = ", ".join(values[:5]) if values else "без числовых значений"
+            parts.append(
+                f"Найдено экспериментов: {len(self._dedupe_entities(experiments))}; "
+                f"измерений: {len(self._dedupe_by_id(observations))}. "
+                f"Значения: {value_text}."
+            )
+        elif experiments:
+            parts.append(
+                f"Найдены связанные эксперименты: {len(self._dedupe_entities(experiments))}, "
+                "но прямые измерения для уточненного вопроса не найдены."
+            )
+        elif search_hits:
+            parts.append(
+                "Прямых структурированных измерений не найдено, но есть текстовые "
+                "фрагменты в документах и описаниях экспериментов."
+            )
+        else:
+            parts.append("По загруженным данным прямых совпадений не найдено.")
+        if findings:
+            summaries = [trace.summary for trace in self._dedupe_by_id(findings)[:3]]
+            parts.append("Выводы: " + " ".join(summaries))
+        if data_gaps:
+            parts.append(f"Пробелы данных: {len(data_gaps)} ожидаемых связок без измерений.")
+        if context:
+            parts.insert(0, f"Контекст запроса: {context}.")
+        return " ".join(parts)
+
+    def _dedupe_entities(self, entities: list[Entity]) -> list[Entity]:
+        return list({entity.id: entity for entity in entities}.values())
+
+    def _dedupe_by_id(self, items: list[Any]) -> list[Any]:
+        return list({item.id: item for item in items}.values())
+
+    def _create_observation(
+        self,
+        *,
+        experiment: ExperimentInput,
+        experiment_entity: Entity,
+        material: Entity,
+        mode_entity: Entity | None,
+        observation_input: ObservationInput,
+    ) -> Observation:
+        property_entity = self._ensure_entity(
+            EntityKind.PROPERTY,
+            observation_input.property_name,
+            source_ref=experiment.experiment_id,
+        )
+        evidence = self._create_evidence(
+            source_kind=SourceKind.EXPERIMENT,
+            source_id=experiment.experiment_id,
+            fragment=observation_input.fragment,
+            row_reference=observation_input.row_reference,
+            extraction_method=observation_input.extraction_method,
+            confidence=observation_input.confidence,
+            version=experiment.source_version,
+            metadata=observation_input.metadata,
+        )
+        observation = Observation(
+            id=_stable_id(
+                "obs",
+                experiment.experiment_id,
+                material.id,
+                property_entity.id,
+                mode_entity.id if mode_entity else None,
+                observation_input.value,
+                observation_input.unit,
+                observation_input.row_reference,
+            ),
+            material_id=material.id,
+            property_id=property_entity.id,
+            experiment_id=experiment_entity.id,
+            mode_id=mode_entity.id if mode_entity else None,
+            value=observation_input.value,
+            unit=observation_input.unit,
+            comparator=observation_input.comparator,
+            evidence_id=evidence.id,
+            confidence=observation_input.confidence,
+            observed_at=observation_input.observed_at,
+            metadata=observation_input.metadata,
+        )
+        self._repository.upsert_observation(observation)
+        self._link_entities(
+            experiment_entity.id,
+            property_entity.id,
+            RelationType.MEASURES_PROPERTY,
+            evidence_ids=[evidence.id],
+            properties={
+                "value": observation.value,
+                "unit": observation.unit,
+                "comparator": observation.comparator,
+            },
+        )
+        return observation
+
+    def _create_trace(
+        self,
+        *,
+        finding: FindingInput,
+        source_kind: SourceKind,
+        source_id: str,
+        entity_ids: list[str],
+        experiment_id: str | None,
+        observation_ids: list[str],
+        trace_id: str,
+        version: str | None = None,
+    ) -> DecisionTrace:
+        evidence = self._create_evidence(
+            source_kind=source_kind,
+            source_id=source_id,
+            fragment=finding.fragment or finding.summary,
+            extraction_method=finding.extraction_method,
+            confidence=finding.confidence,
+            version=version,
+            metadata=finding.metadata,
+        )
+        trace = DecisionTrace(
+            id=trace_id,
+            summary=finding.summary,
+            decision=finding.decision,
+            entity_ids=list(dict.fromkeys(entity_ids)),
+            experiment_id=experiment_id,
+            observation_ids=observation_ids,
+            evidence_ids=[evidence.id],
+            changed_from_trace_id=finding.changed_from_trace_id,
+            confidence=finding.confidence,
+            metadata=finding.metadata,
+        )
+        self._repository.upsert_decision_trace(trace)
+        return trace
+
+    def _upsert_reference_entity(self, record: CanonicalEntityInput) -> Entity:
+        entity_id = record.canonical_id or _stable_id(record.kind.value, record.name)
+        entity = Entity(
+            id=entity_id,
+            kind=record.kind,
+            canonical_name=record.name,
+            aliases=record.aliases,
+            properties=record.properties,
+            source_refs=[record.source_ref] if record.source_ref else [],
+        )
+        return self._repository.upsert_entity(entity)
+
+    def _ensure_entity(
+        self,
+        kind: EntityKind,
+        name: str,
+        *,
+        entity_id: str | None = None,
+        aliases: list[str] | None = None,
+        source_ref: str | None = None,
+        properties: dict[str, Any] | None = None,
+    ) -> Entity:
+        existing = self._repository.resolve_entity(kind, name)
+        if existing is not None:
+            updates: dict[str, Any] = {
+                "aliases": list({*existing.aliases, *(aliases or [])}),
+                "properties": {**existing.properties, **(properties or {})},
+                "source_refs": list(
+                    {
+                        *existing.source_refs,
+                        *([source_ref] if source_ref else []),
+                    }
+                ),
+            }
+            return self._repository.upsert_entity(existing.model_copy(update=updates))
+        entity = Entity(
+            id=entity_id or _stable_id(kind.value, name),
+            kind=kind,
+            canonical_name=name,
+            aliases=aliases or [],
+            properties=properties or {},
+            source_refs=[source_ref] if source_ref else [],
+        )
+        return self._repository.upsert_entity(entity)
+
+    def _create_evidence(
+        self,
+        *,
+        source_kind: SourceKind,
+        source_id: str,
+        fragment: str | None,
+        extraction_method: str,
+        confidence: float = 1.0,
+        row_reference: str | None = None,
+        version: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> Evidence:
+        evidence = Evidence(
+            id=_stable_id(
+                "evidence",
+                source_kind.value,
+                source_id,
+                fragment,
+                extraction_method,
+                row_reference,
+            ),
+            source_kind=source_kind,
+            source_id=source_id,
+            span=SourceSpan(fragment=fragment, row_reference=row_reference),
+            extraction_method=extraction_method,
+            confidence=confidence,
+            version=version,
+            metadata=metadata or {},
+        )
+        return self._repository.upsert_evidence(evidence)
+
+    def _link_entities(
+        self,
+        source_entity_id: str,
+        target_entity_id: str,
+        relation_type: RelationType,
+        *,
+        evidence_ids: list[str],
+        properties: dict[str, Any] | None = None,
+    ) -> Relation:
+        relation = Relation(
+            id=_stable_id(
+                "rel",
+                relation_type.value,
+                source_entity_id,
+                target_entity_id,
+            ),
+            relation_type=relation_type,
+            source_entity_id=source_entity_id,
+            target_entity_id=target_entity_id,
+            evidence_ids=evidence_ids,
+            properties=properties or {},
+        )
+        return self._repository.upsert_relation(relation)
+
+    def _resolve_rule_entities(
+        self,
+        kind: EntityKind,
+        names: list[str],
+    ) -> list[Entity]:
+        entities: list[Entity] = []
+        for name in names:
+            entity = self._repository.resolve_entity(kind, name)
+            if entity is not None:
+                entities.append(entity)
+        return entities
+
+    def _require_entity(self, kind: EntityKind, raw_name: str) -> Entity:
+        entity = self._repository.resolve_entity(kind, raw_name)
+        if entity is None:
+            raise ValueError(f"{kind.value.title()} '{raw_name}' not found")
+        return entity
+
+    def _resolve_any_entity(self, raw_name: str) -> Entity:
+        for kind in EntityKind:
+            entity = self._repository.resolve_entity(kind, raw_name)
+            if entity is not None:
+                return entity
+        raise ValueError(f"Entity '{raw_name}' not found")
