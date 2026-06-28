@@ -1127,7 +1127,7 @@ def create_materials_app(
                 items = parsed if isinstance(parsed, list) else [parsed]
                 for item in items:
                     if isinstance(item, dict):
-                        item.setdefault("source_ref", name)
+                        item["_uploaded_from"] = name
                 if isinstance(parsed, list):
                     doc_payload.extend(items)
                 else:
@@ -1137,19 +1137,19 @@ def create_materials_app(
                 for key in ("entities", "materials", "equipment", "properties", "modes", "teams", "documents", "tags", "coverage_rules"):
                     if key in parsed and isinstance(parsed[key], list):
                         for item in parsed[key]:
-                            item.setdefault("source_ref", name)
+                            item["_uploaded_from"] = name
                         ref_payload.setdefault(key, []).extend(parsed[key])
                 if "experiments" in parsed and isinstance(parsed["experiments"], list):
                     for item in parsed["experiments"]:
-                        item.setdefault("source_ref", name)
+                        item["_uploaded_from"] = name
                     exp_payload.extend(parsed["experiments"])
                 if "documents" in parsed and isinstance(parsed["documents"], list):
                     for item in parsed["documents"]:
-                        item.setdefault("source_ref", name)
+                        item["_uploaded_from"] = name
                     doc_payload.extend(parsed["documents"])
                 if not any(k in parsed for k in ("entities", "materials", "experiments", "documents")):
                     if parsed.get("kind") or parsed.get("entity_kind") or parsed.get("type"):
-                        parsed.setdefault("source_ref", name)
+                        parsed["_uploaded_from"] = name
                         ref_payload.setdefault("entities", []).append(parsed)
                     else:
                         doc_payload.append({"document_id": name, "title": Path(name).stem, "text": json.dumps(parsed, ensure_ascii=False), "metadata": {"source_file": name}})
@@ -1158,9 +1158,10 @@ def create_materials_app(
                     if not isinstance(item, dict):
                         continue
                     if item.get("kind") or item.get("entity_kind") or item.get("type"):
-                        item.setdefault("source_ref", name)
+                        item["_uploaded_from"] = name
                         ref_payload.setdefault("entities", []).append(item)
                     elif (item.get("experiment_id") or item.get("id")) and (item.get("material_name") or item.get("material")):
+                        item["_uploaded_from"] = name
                         exp_payload.append(item)
                     elif item.get("document_id") or item.get("text") or item.get("content"):
                         doc_payload.append(item)
@@ -1173,6 +1174,14 @@ def create_materials_app(
             results["experiments"] = runtime_service.ingest_experiments(ExperimentCatalogAdapter().from_payload(exp_payload))
         if doc_payload:
             results["documents"] = runtime_service.ingest_documents(DocumentCorpusAdapter().from_payload(doc_payload))
+        repo = runtime_service._repository  # noqa: SLF001
+        for u in uploaded:
+            fname = u["name"]
+            entities = repo.find_entities()
+            for ent in entities:
+                if fname not in ent.source_refs:
+                    ent.source_refs.append(fname)
+                    repo.upsert_entity(ent)
         results["uploaded"] = uploaded
         results["overview"] = runtime_service.get_source_overview()
         results["suggested_questions"] = runtime_service.get_suggested_questions()
