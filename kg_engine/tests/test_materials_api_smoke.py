@@ -147,6 +147,20 @@ def test_demo_load_sample_powers_notebook_ui_queries() -> None:
     assert answer_body["experiments"]
     assert answer_body["related_entities"]
 
+    hypotheses = client.post(
+        "/hypotheses/generate",
+        json={
+            "target_kpi": "Tensile Strength",
+            "material": "Ti-6Al-4V",
+            "max_hypotheses": 3,
+        },
+    )
+    assert hypotheses.status_code == 200
+    hypotheses_body = hypotheses.json()
+    assert hypotheses_body["hypotheses"]
+    assert hypotheses_body["hypotheses"][0]["score"]["final_score"] > 0
+    assert hypotheses_body["evidence"] or hypotheses_body["data_gaps"]
+
 
 def test_free_question_material_and_property_fallbacks() -> None:
     app = create_materials_app(

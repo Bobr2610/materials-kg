@@ -708,3 +708,24 @@ class PostgresMaterialsKGRepository:
             metadata=row[5] or {},
             created_at=row[6],
         )
+
+    def clear_all(self) -> None:
+        with self._connection.cursor() as cursor:
+            for table in ("kg_observations", "kg_decision_traces", "kg_relations", "kg_text_units", "kg_evidence", "kg_entities", "kg_coverage_rules"):
+                cursor.execute(f"DELETE FROM {table}")
+        self._connection.commit()
+
+    def delete_source(self, source_id: str) -> int:
+        with self._connection.cursor() as cursor:
+            cursor.execute("SELECT id FROM kg_entities WHERE source_refs @> %s", ([source_id],))
+            entity_ids = [row[0] for row in cursor.fetchall()]
+            removed = len(entity_ids)
+            if entity_ids:
+                cursor.execute("DELETE FROM kg_observations WHERE experiment_id = ANY(%s) OR material_id = ANY(%s)", (entity_ids, entity_ids))
+                cursor.execute("DELETE FROM kg_decision_traces WHERE experiment_id = ANY(%s)", (entity_ids,))
+                cursor.execute("DELETE FROM kg_text_units WHERE source_entity_id = ANY(%s)", (entity_ids,))
+                cursor.execute("DELETE FROM kg_relations WHERE source_entity_id = ANY(%s) OR target_entity_id = ANY(%s)", (entity_ids, entity_ids))
+                cursor.execute("DELETE FROM kg_entities WHERE id = ANY(%s)", (entity_ids,))
+            cursor.execute("DELETE FROM kg_evidence WHERE source_id = %s", (source_id,))
+        self._connection.commit()
+        return removed

@@ -4,6 +4,7 @@ __all__ = [
     "create_materials_repository",
     "InMemoryMaterialsKGRepository",
     "MaterialsKGRepository",
+    "Neo4jMaterialsKGRepository",
     "POSTGRES_SCHEMA_SQL",
     "PostgresMaterialsKGRepository",
 ]

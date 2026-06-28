@@ -215,3 +215,63 @@ class InMemoryMaterialsKGRepository:
                 scored.append(_ScoredTextUnit(score=score, text_unit=text_unit))
         scored.sort(key=lambda item: item.score, reverse=True)
         return [item.text_unit for item in scored[:limit]]
+
+    def clear_all(self) -> None:
+        self._entities.clear()
+        self._alias_index.clear()
+        self._evidence.clear()
+        self._relations.clear()
+        self._observations.clear()
+        self._traces.clear()
+        self._coverage_rules.clear()
+        self._text_units.clear()
+
+    def delete_source(self, source_id: str) -> int:
+        removed = 0
+        entity_ids_to_remove = [
+            eid for eid, e in self._entities.items()
+            if source_id in e.source_refs
+        ]
+        for eid in entity_ids_to_remove:
+            del self._entities[eid]
+            removed += 1
+        self._alias_index = {
+            k: v for k, v in self._alias_index.items()
+            if v not in entity_ids_to_remove
+        }
+        evidence_to_remove = [
+            eid for eid, ev in self._evidence.items()
+            if ev.source_id == source_id
+        ]
+        for eid in evidence_to_remove:
+            del self._evidence[eid]
+            removed += 1
+        self._relations = {
+            rid: r for rid, r in self._relations.items()
+            if r.source_entity_id not in entity_ids_to_remove
+            and r.target_entity_id not in entity_ids_to_remove
+        }
+        obs_to_remove = [
+            oid for oid, o in self._observations.items()
+            if o.experiment_id in entity_ids_to_remove
+            or o.material_id in entity_ids_to_remove
+        ]
+        for oid in obs_to_remove:
+            del self._observations[oid]
+            removed += 1
+        traces_to_remove = [
+            tid for tid, t in self._traces.items()
+            if t.experiment_id in entity_ids_to_remove
+            or any(eid in entity_ids_to_remove for eid in t.entity_ids)
+        ]
+        for tid in traces_to_remove:
+            del self._traces[tid]
+            removed += 1
+        text_to_remove = [
+            tid for tid, tu in self._text_units.items()
+            if tu.source_entity_id in entity_ids_to_remove
+        ]
+        for tid in text_to_remove:
+            del self._text_units[tid]
+            removed += 1
+        return removed

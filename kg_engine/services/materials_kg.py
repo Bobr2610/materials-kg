@@ -20,6 +20,9 @@ from kg_engine.domain.models import Evidence
 from kg_engine.domain.models import EvidencePath
 from kg_engine.domain.models import ExperimentInput
 from kg_engine.domain.models import FindingInput
+from kg_engine.domain.models import HypothesisGenerationResult
+from kg_engine.domain.models import HypothesisInput
+from kg_engine.domain.models import HypothesisScore
 from kg_engine.domain.models import MaterialModeQueryResult
 from kg_engine.domain.models import Observation
 from kg_engine.domain.models import ObservationInput
@@ -30,6 +33,7 @@ from kg_engine.domain.models import ReferenceDataBatch
 from kg_engine.domain.models import RelatedEntitiesQueryResult
 from kg_engine.domain.models import Relation
 from kg_engine.domain.models import RelationType
+from kg_engine.domain.models import ResearchHypothesis
 from kg_engine.domain.models import SearchTextUnit
 from kg_engine.domain.models import SourceKind
 from kg_engine.domain.models import SourceSpan
@@ -806,6 +810,248 @@ class MaterialsKGService:
             ],
             "warnings": warnings,
         }
+
+    def generate_hypotheses(
+        self,
+        request: HypothesisInput,
+    ) -> HypothesisGenerationResult:
+        """Generate transparent, graph-grounded research hypotheses for a KPI."""
+        warnings: list[str] = []
+        lookup_text = " ".join(
+            item for item in (request.target_kpi, request.question) if item
+        )
+        matched_entities = self._match_entities_from_question(lookup_text)
+        material_entity = self._resolve_filter_entity(
+            EntityKind.MATERIAL,
+            request.material,
+            matched_entities,
+            warnings,
+        )
+        mode_entity = self._resolve_filter_entity(
+            EntityKind.MODE,
+            request.mode,
+            matched_entities,
+            warnings,
+        )
+        property_entity = self._resolve_filter_entity(
+            EntityKind.PROPERTY,
+            request.property_name,
+            matched_entities,
+            warnings,
+        )
+        if property_entity is None:
+            property_entity = self._resolve_filter_entity(
+                EntityKind.PROPERTY,
+                request.target_kpi,
+                matched_entities,
+                warnings=[],
+            )
+
+        filters = QueryFilters(
+            material_name=material_entity.canonical_name if material_entity else None,
+            mode_name=mode_entity.canonical_name if mode_entity else None,
+            property_name=property_entity.canonical_name if property_entity else None,
+        )
+        observations = self._collect_hypothesis_observations(
+            material_entity,
+            mode_entity,
+            property_entity,
+        )
+        evidence = self._repository.list_evidence(
+            list(
+                dict.fromkeys(
+                    observation.evidence_id
+                    for observation in observations
+                    if observation.evidence_id
+                )
+            )
+        )
+        data_gaps = self.query_data_gaps(filters=filters)
+        hypotheses: list[ResearchHypothesis] = []
+
+        for gap in data_gaps:
+            material_name = self._entity_name(gap.material_id, "material")
+            mode_name = self._entity_name(gap.mode_id, "mode")
+            property_name = self._entity_name(
+                gap.property_id,
+                property_entity.canonical_name if property_entity else request.target_kpi,
+            )
+            score = self._hypothesis_score(
+                novelty=0.9,
+                risk=0.55,
+                value=0.82,
+                evidence_strength=0.25,
+            )
+            hypotheses.append(
+                ResearchHypothesis(
+                    id=_stable_id("hyp", request.target_kpi, gap.id),
+                    target_kpi=request.target_kpi,
+                    statement=(
+                        f"Проверить, улучшает ли режим {mode_name} для {material_name} "
+                        f"целевой KPI '{property_name}'."
+                    ),
+                    rationale=(
+                        f"В графе есть правило покрытия '{gap.metadata.get('rule_name', gap.rule_id)}', "
+                        f"но отсутствует измерение: {gap.reason}. Это интерпретируемый "
+                        "пробел, из которого получается проверяемая гипотеза."
+                    ),
+                    test_plan=(
+                        f"Провести эксперимент {material_name} / {mode_name}; измерить "
+                        f"{property_name}; сохранить row-level evidence и сравнить с "
+                        "существующими режимами."
+                    ),
+                    score=score,
+                    supporting_entity_ids=[
+                        item
+                        for item in (gap.material_id, gap.mode_id, gap.property_id)
+                        if item
+                    ],
+                    data_gap_ids=[gap.id],
+                    assumptions=[
+                        "Coverage rule отражает ожидаемую матрицу исследований.",
+                        "Отсутствие observation означает непроверенную область, а не отрицательный результат.",
+                    ],
+                    metadata={"source": "coverage_gap"},
+                )
+            )
+
+        for observation in observations:
+            material_name = self._entity_name(observation.material_id, "material")
+            mode_name = self._entity_name(observation.mode_id, "mode")
+            property_name = self._entity_name(observation.property_id, request.target_kpi)
+            evidence_item = self._repository.get_evidence(observation.evidence_id)
+            evidence_strength = observation.confidence
+            if evidence_item is not None:
+                evidence_strength = fmean([observation.confidence, evidence_item.confidence])
+            value_text = (
+                f"{observation.value:g} {observation.unit or ''}".strip()
+                if observation.value is not None
+                else "наблюдаемый эффект"
+            )
+            score = self._hypothesis_score(
+                novelty=0.45,
+                risk=0.35,
+                value=0.78,
+                evidence_strength=evidence_strength,
+            )
+            hypotheses.append(
+                ResearchHypothesis(
+                    id=_stable_id(
+                        "hyp",
+                        request.target_kpi,
+                        observation.id,
+                    ),
+                    target_kpi=request.target_kpi,
+                    statement=(
+                        f"Использовать связку {material_name} / {mode_name} как основу "
+                        f"для повышения KPI '{property_name}'."
+                    ),
+                    rationale=(
+                        f"В графе уже есть измерение {property_name}: {value_text}. "
+                        "Гипотеза не является случайной: она опирается на existing "
+                        "observation и может быть проверена повтором или вариацией режима."
+                    ),
+                    test_plan=(
+                        f"Повторить эксперимент для {material_name} / {mode_name}, затем "
+                        "изменить один технологический параметр и сравнить KPI с базовым "
+                        f"значением {value_text}."
+                    ),
+                    score=score,
+                    supporting_entity_ids=[
+                        item
+                        for item in (
+                            observation.material_id,
+                            observation.mode_id,
+                            observation.property_id,
+                            observation.experiment_id,
+                        )
+                        if item
+                    ],
+                    supporting_evidence_ids=[observation.evidence_id],
+                    supporting_observation_ids=[observation.id],
+                    assumptions=[
+                        "Историческое измерение можно воспроизвести в текущей лабораторной базе.",
+                        "Изменение режима будет сравниваться с тем же KPI и единицами измерения.",
+                    ],
+                    metadata={"source": "observed_effect"},
+                )
+            )
+
+        if request.expert_adjustments:
+            note = "Учтены экспертные корректировки: " + ", ".join(
+                sorted(request.expert_adjustments)
+            )
+            for hypothesis in hypotheses:
+                hypothesis.expert_notes.append(note)
+
+        hypotheses.sort(key=lambda item: item.score.final_score, reverse=True)
+        hypotheses = hypotheses[: request.max_hypotheses]
+        if not hypotheses:
+            warnings.append(
+                "Не удалось построить гипотезы: загрузите источники или уточните KPI/material/mode/property."
+            )
+        return HypothesisGenerationResult(
+            target_kpi=request.target_kpi,
+            resolved_query={
+                "material": material_entity.canonical_name if material_entity else None,
+                "mode": mode_entity.canonical_name if mode_entity else None,
+                "property_name": (
+                    property_entity.canonical_name if property_entity else None
+                ),
+            },
+            hypotheses=hypotheses,
+            evidence=evidence,
+            observations=self._dedupe_by_id(observations),
+            data_gaps=data_gaps,
+            matched_entities=matched_entities,
+            warnings=warnings,
+        )
+
+    def _collect_hypothesis_observations(
+        self,
+        material_entity: Entity | None,
+        mode_entity: Entity | None,
+        property_entity: Entity | None,
+    ) -> list[Observation]:
+        if material_entity is not None:
+            result = self.query_material_mode(
+                material_entity.canonical_name,
+                mode_entity.canonical_name if mode_entity else None,
+                property_entity.canonical_name if property_entity else None,
+            )
+            return self._dedupe_by_id(result.observations)
+        if property_entity is not None:
+            result = self.query_property(property_entity.canonical_name)
+            return self._dedupe_by_id(result.observations)
+        return self._repository.list_observations()
+
+    def _hypothesis_score(
+        self,
+        *,
+        novelty: float,
+        risk: float,
+        value: float,
+        evidence_strength: float,
+    ) -> HypothesisScore:
+        final_score = (
+            0.35 * value
+            + 0.25 * evidence_strength
+            + 0.20 * novelty
+            + 0.20 * (1.0 - risk)
+        )
+        return HypothesisScore(
+            novelty=max(0.0, min(1.0, novelty)),
+            risk=max(0.0, min(1.0, risk)),
+            value=max(0.0, min(1.0, value)),
+            evidence_strength=max(0.0, min(1.0, evidence_strength)),
+            final_score=max(0.0, min(1.0, final_score)),
+        )
+
+    def _entity_name(self, entity_id: str | None, fallback: str) -> str:
+        if entity_id is None:
+            return fallback
+        entity = self._repository.get_entity(entity_id)
+        return entity.canonical_name if entity is not None else fallback
 
     def _build_citations(
         self,

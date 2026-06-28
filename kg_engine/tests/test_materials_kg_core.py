@@ -6,6 +6,7 @@ from kg_engine.domain.models import DocumentInput
 from kg_engine.domain.models import EntityKind
 from kg_engine.domain.models import ExperimentInput
 from kg_engine.domain.models import FindingInput
+from kg_engine.domain.models import HypothesisInput
 from kg_engine.domain.models import ObservationInput
 from kg_engine.domain.models import PropertyFilters
 from kg_engine.domain.models import QueryFilters
@@ -248,3 +249,62 @@ def test_incremental_reingestion_does_not_duplicate_canonical_entities() -> None
 
     assert len(property_result.materials) == 1
     assert len(related.related_entities) >= 1
+
+
+def test_hypothesis_factory_generates_ranked_graph_grounded_candidates() -> None:
+    service = build_service()
+    service.ingest_reference_data(
+        ReferenceDataBatch(
+            entities=[
+                CanonicalEntityInput(kind=EntityKind.MATERIAL, name="CuCrZr"),
+                CanonicalEntityInput(kind=EntityKind.MODE, name="Solution Treated"),
+                CanonicalEntityInput(kind=EntityKind.MODE, name="Aged"),
+                CanonicalEntityInput(
+                    kind=EntityKind.PROPERTY,
+                    name="Electrical Conductivity",
+                ),
+            ],
+            coverage_rules=[
+                CoverageRuleInput(
+                    rule_id="cu-gap",
+                    name="CuCrZr conductivity coverage",
+                    material_names=["CuCrZr"],
+                    mode_names=["Solution Treated", "Aged"],
+                    property_names=["Electrical Conductivity"],
+                )
+            ],
+        )
+    )
+    service.ingest_experiments(
+        [
+            ExperimentInput(
+                experiment_id="exp-cu",
+                title="CuCrZr solution treatment",
+                material_name="CuCrZr",
+                mode_name="Solution Treated",
+                observations=[
+                    ObservationInput(
+                        property_name="Electrical Conductivity",
+                        value=58.0,
+                        unit="%IACS",
+                        row_reference="row-1",
+                    )
+                ],
+            )
+        ]
+    )
+
+    result = service.generate_hypotheses(
+        HypothesisInput(
+            target_kpi="Electrical Conductivity",
+            material="CuCrZr",
+            max_hypotheses=5,
+        )
+    )
+
+    assert result.hypotheses
+    assert result.hypotheses[0].score.final_score >= result.hypotheses[-1].score.final_score
+    assert any(item.data_gap_ids for item in result.hypotheses)
+    assert any(item.supporting_observation_ids for item in result.hypotheses)
+    assert result.evidence
+    assert result.data_gaps

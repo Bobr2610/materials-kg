@@ -92,3 +92,11 @@ class MaterialsKGRepository(Protocol):
 
     def search_text_units(self, query: str, *, limit: int = 5) -> list[SearchTextUnit]:
         ...
+
+    def clear_all(self) -> None:
+        """Remove all data from the repository."""
+        ...
+
+    def delete_source(self, source_id: str) -> int:
+        """Delete all entities/traces/etc originating from source_id. Returns count removed."""
+        ...

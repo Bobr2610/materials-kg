@@ -11,6 +11,7 @@ requires-python = ">=3.11"
 license = "MIT"
 dependencies = [
     "fastapi>=0.100,<1",
+    "neo4j>=5.20,<6",
     "python-multipart>=0.0.6",
     "psycopg[binary]>=3.2,<4",
     "pydantic>=2.0,<3",
@@ -49,29 +50,11 @@ exclude = [
     "build",
     "dist",
     "*.egg-info",
-    "kg_engine/agent",
-    "kg_engine/api/app.py",
-    "kg_engine/api/harmony_parser.py",
-    "kg_engine/api/i18n.py",
-    "kg_engine/api/server.py",
-    "kg_engine/api/stream_helpers.py",
     "kg_engine/config/loader.py",
     "kg_engine/config/schemas.py",
-    "kg_engine/core",
     "kg_engine/graph",
-    "kg_engine/llm",
-    "kg_engine/retrieval",
-    "kg_engine/scripts/build_index.py",
     "kg_engine/scripts/build_knowledge_graph.py",
-    "kg_engine/scripts/rag_indexing_hook.py",
-    "kg_engine/storage",
-    "kg_engine/tests/test_config_settings.py",
-    "kg_engine/tests/test_core_*.py",
     "kg_engine/tests/test_graph.py",
-    "kg_engine/tests/test_llm_*.py",
-    "kg_engine/tests/test_retrieval_*.py",
-    "kg_engine/tests/test_retriever.py",
-    "kg_engine/tests/test_tools_utils.py",
     "kg_engine/tests/test_utils_formatters.py",
     "kg_engine/tools",
     "kg_engine/utils",
@@ -85,45 +68,38 @@ include = ["*.py"]
 # Enable all rules
 select = ["E", "W", "F", "I", "N", "UP", "YTT", "ANN", "S", "BLE", "FBT", "B", "A", "COM", "C4", "DTZ", "T10", "EM", "EXE", "FA", "ISC", "ICN", "G", "INP", "PIE", "T20", "PYI", "PT", "Q", "RSE", "RET", "SLF", "SIM", "TID", "TCH", "ARG", "PTH", "ERA", "PD", "PGH", "PL", "TRY", "FLY", "NPY", "AIR", "PERF", "FURB", "LOG", "RUF"]
 
-# Ignore specific rules that conflict with LangChain/Gradio/HuggingFace/Langfuse/Langsmith patterns
+# Ignore specific rules
 ignore = [
-    "S101",    # Use of assert (common in LangChain tests)
+    "S101",    # Use of assert (common in tests)
     "S112",    # try-except-continue (used for skipping malformed assets)
-    "PLR0913", # Too many arguments (LangChain tools often have many params)
-    "PLR0912", # Too many branches (complex LangChain logic)
-    "PLR0915", # Too many statements (LangChain chains can be long)
     "COM812",  # Missing trailing comma (conflicts with Black)
-    "ISC001",  # Implicitly concatenated string literals (common in prompts)
+    "ISC001",  # Implicitly concatenated string literals
     "F401",    # Unused imports (prevent automatic deletion of useful imports)
-    "F403",    # Star imports (common in LangChain patterns)
-    "PLR2004", # Magic value used in comparison (common in HuggingFace configs)
-    "PLR0911", # Too many return statements (LangGraph state management)
-    "PLR0913", # Too many arguments (Gradio components have many params)
-    "ANN401",  # Dynamically typed expressions (HuggingFace transformers)
+    "F403",    # Star imports
+    "PLR2004", # Magic value used in comparison
+    "PLR0911", # Too many return statements
+    "PLR0912", # Too many branches
+    "PLR0915", # Too many statements
+    "ANN202",  # Missing return type annotation for private function
+    "ANN204",  # Missing return type annotation for special method
+    "ANN401",  # Dynamically typed expressions
+    "N802",    # Function name should be lowercase (pydantic compat)
     "RUF001",  # Ambiguous unicode characters (international datasets)
-    "PLR0913", # Too many arguments (Langfuse/Langsmith tracing functions)
-    "PLR0912", # Too many branches (Langfuse/Langsmith conditional logic)
-    "ANN401",  # Dynamically typed expressions (Langfuse/Langsmith metadata)
-    "PLR2004", # Magic values (Langfuse/Langsmith configuration constants)
-    "T201",    # Print statements (Langfuse/Langsmith debugging)
-    "BLE001",  # Blind except clauses (Langfuse/Langsmith error handling)
+    "T201",    # Print statements (debugging)
+    "BLE001",  # Blind except clauses
     "UP032",   # Do not suggest {e!s} over {str(e)} in f-strings
     "RUF010",  # Do not suggest {e!s} over {str(e)} in f-strings
     "TRY300",  # Consider moving statement to else block (preferential style)
     "TRY401",  # Redundant exception object in logging.exception (preferential style)
     "PTH",     # Path-related suggestions (os.path vs Path - both are valid)
     "DTZ005",  # datetime.now() without tz (intentionally using local timezone is okay)
-    "PLC0415", # Import not at top-level (required for fallback import pattern per AGENTS.md)
-    "TID252",  # Prefer absolute imports (relative imports used in fallback pattern)
-    "ANN202",  # Dynamic package __getattr__ helpers can return multiple schema objects
-    "ANN204",  # Existing classes may omit explicit __init__/__getattr__ annotations
+    "PLC0415", # Import not at top-level (required for fallback import pattern)
     "E402",    # Script entrypoints adjust sys.path before importing local package modules
-    "E501",    # Long domain/model lines are tolerated in this migrated codebase
+    "E501",    # Long domain/model lines are tolerated
     "EM102",   # Existing exceptions often build messages inline
     "ERA001",  # Preserve explanatory migration comments
     "INP001",  # Tests and scripts are allowed without package __init__.py files
-    "I001",    # Keep import layout stable during Materials KG migration
-    "N802",    # Compatibility shim mirrors pydantic-settings public name
+    "I001",    # Keep import layout stable during migration
     "PERF401", # Prefer clarity over micro-optimized list construction
     "PLR1714", # Keep explicit relation direction comparisons readable
     "RET504",  # Keep intermediate names where they aid readability
@@ -194,6 +170,7 @@ python_files = [
     "test_materials_api_smoke.py",
     "test_materials_graph_database_behavior.py",
     "test_materials_kg_core.py",
+    "test_neo4j_repository.py",
     "test_no_donor_brand_in_core.py",
     "test_repository_factory.py",
 ]

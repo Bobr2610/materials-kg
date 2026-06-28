@@ -9,11 +9,20 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass, field
 from typing import Any
 
-from kg_engine.retrieval.retriever import Article
-
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class Article:
+    """Complete article with metadata."""
+
+    kb_id: str
+    content: str
+    metadata: dict[str, Any] = field(default_factory=dict)
+    matched_chunks: list[Any] = field(default_factory=list)
 
 
 def parse_tool_result_to_articles(tool_result: str) -> list[Article]:

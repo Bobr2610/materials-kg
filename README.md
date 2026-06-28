@@ -1,8 +1,12 @@
 # Materials Knowledge Graph
 
-Graph-first materials knowledge graph for structured ingestion, explainable query, and gap analysis.
+Graph-backed Materials Hypothesis Factory for structured ingestion, explainable
+query, gap analysis, and ranked research hypothesis generation.
 
-The current core is centered on typed domain models, repository-backed persistence, and a compact service API. Postgres is the primary persistence target, with `pgvector` used for searchable text units and hybrid evidence lookup.
+The current product path is centered on typed domain models, a Neo4j-backed
+graph repository, and a compact service/API layer. PostgreSQL and in-memory
+repositories remain as legacy/test adapters, but the runtime graph engine for
+the site/API is Neo4j.
 
 ## Current Architecture
 
@@ -10,8 +14,8 @@ The current core is centered on typed domain models, repository-backed persisten
 materials-kg/
   kg_engine/
     domain/        # Typed entities, relations, observations, traces, query DTOs
-    repositories/  # Persistence protocol + Postgres/pgvector and in-memory adapters
-    services/      # Graph-first ingestion/query API
+    repositories/  # Persistence protocol + Neo4j runtime, legacy Postgres, test memory
+    services/      # Ingestion/query/hypothesis API
     api/           # Application-facing HTTP/UI entrypoints
     core/          # Document processing, chunking, indexing helpers
     retrieval/     # Embeddings, reranking, search helpers
@@ -23,12 +27,14 @@ materials-kg/
 
 - `kg_engine/domain/` defines the canonical business objects: entities, evidence, relations, observations, decision traces, coverage rules, and query result envelopes.
 - `kg_engine/repositories/protocols.py` defines the persistence contract used by the service layer.
-- `kg_engine/services/materials_kg.py` is the public graph-first ingestion and query API.
-- `kg_engine/repositories/postgres.py` is the primary durable backend and includes schema bootstrap for Postgres + `pgvector`.
+- `kg_engine/services/materials_kg.py` is the public graph-first ingestion,
+  query, and hypothesis-generation API.
+- `kg_engine/repositories/neo4j.py` is the primary runtime backend and stores
+  graph entities as Neo4j nodes and graph relations as Neo4j relationships.
 
 ## Storage Model
 
-The Postgres repository persists:
+The Neo4j repository persists:
 
 - canonical entities and alias resolution
 - typed relations between entities
@@ -36,7 +42,28 @@ The Postgres repository persists:
 - observations with measured values and units
 - decision traces for explainability and history
 - coverage rules for gap analysis
-- searchable text units with optional `VECTOR(1536)` embeddings
+- searchable text units for evidence lookup
+
+## Hypothesis Factory
+
+The `/hypotheses/generate` endpoint accepts a target KPI plus optional material,
+mode, and property filters. The service generates interpretable candidates from
+graph evidence:
+
+- observed effects become exploitation hypotheses;
+- coverage gaps become exploration hypotheses;
+- every hypothesis includes rationale, test plan, transparent score components,
+  supporting observations/evidence, assumptions, and optional expert notes.
+
+Ranking is deterministic and explainable:
+
+```text
+final_score =
+  0.35 * value
++ 0.25 * evidence_strength
++ 0.20 * novelty
++ 0.20 * (1 - risk)
+```
 
 ## Ingestion API
 
@@ -75,23 +102,30 @@ These entrypoints support three complementary flows:
 
 These return typed result models from `kg_engine/domain/models.py`, not raw graph objects.
 
-## Postgres + pgvector Bootstrap
+## Neo4j Bootstrap
+
+Start a local Neo4j DBMS in Neo4j Desktop or with Docker:
 
 ```bash
-docker compose up -d materials-postgres
+docker compose up -d materials-neo4j
 ```
 
 Use:
 
 ```bash
-set MATERIALS_PG_DSN=postgresql://materials:materials@127.0.0.1:55432/materials_kg
+set MATERIALS_NEO4J_URI=bolt://127.0.0.1:7687
+set MATERIALS_NEO4J_USER=neo4j
+set MATERIALS_NEO4J_PASSWORD=<your-password>
+set MATERIALS_NEO4J_DATABASE=neo4j
+set MATERIALS_REQUIRE_GRAPH_DB=true
 set MATERIALS_API_ENSURE_SCHEMA=true
 ```
 
-`ensure_schema()` creates the materials KG tables and enables the `vector`
-extension required for text-unit embeddings. If `MATERIALS_PG_DSN` is empty,
-the service falls back to the in-memory repository for tests and local smoke
-checks.
+`ensure_schema()` creates Neo4j constraints for entities, relationships,
+evidence, observations, decision traces, text units, and coverage rules. If
+`MATERIALS_REQUIRE_GRAPH_DB=true` and Neo4j is not configured, startup fails
+instead of silently falling back to memory. In-memory storage is intended for
+unit tests only.
 
 ## Quick Start
 
@@ -148,7 +182,9 @@ ruff check kg_engine
 
 ## Legacy Stack Status
 
-`kg_engine/graph/` and `kg_engine/agent/` remain in the repository as a legacy prototype/donor stack. They are still useful as reference implementations, migration material, and tool/UI experiments, but they are no longer the canonical architecture for the new graph-first core.
+`kg_engine/graph/`, `kg_engine/agent/`, and `kg_engine/repositories/postgres.py`
+remain in the repository as legacy/prototype or migration material. They are no
+longer the canonical runtime architecture for the Materials Hypothesis Factory.
 
 ## References
 

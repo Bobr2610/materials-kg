@@ -1,6 +1,10 @@
 # Architecture Guide - Materials Knowledge Graph
 
-This repository now has a graph-first core built around domain models, repository interfaces, and a small service layer. The older `kg_engine/graph/` and `kg_engine/agent/` stack remains as a prototype/donor implementation, but the canonical path for new work is the `domain -> repositories -> services -> api` flow.
+This repository now targets a Neo4j-backed Materials Hypothesis Factory built
+around domain models, repository interfaces, and a small service layer. The
+older `kg_engine/graph/`, `kg_engine/agent/`, and Postgres storage path remain
+as prototype/donor or migration material, but the canonical runtime path is
+`domain -> repositories -> services -> api` with Neo4j as the graph engine.
 
 ---
 
@@ -18,9 +22,9 @@ kg_engine/services/materials_kg.py
         v
 kg_engine/repositories/protocols.py
         |
-        +--> kg_engine/repositories/postgres.py
+        +--> kg_engine/repositories/neo4j.py
         |
-        +--> kg_engine/repositories/memory.py
+        +--> kg_engine/repositories/memory.py (tests only)
         |
         v
 kg_engine/domain/models.py
@@ -36,6 +40,7 @@ kg_engine/domain/models.py
 - observations for measured values
 - decision traces for explainability and historical reasoning
 - coverage rules and gap outputs
+- KPI-driven hypothesis DTOs with transparent ranking fields
 - typed query result envelopes
 
 This layer is the source of truth for business semantics. It is intentionally independent from a concrete storage engine.
@@ -52,8 +57,9 @@ This layer is the source of truth for business semantics. It is intentionally in
 
 Current implementations:
 
-- `InMemoryMaterialsKGRepository` for tests and local validation
-- `PostgresMaterialsKGRepository` for durable storage in Postgres with `pgvector`
+- `Neo4jMaterialsKGRepository` for runtime graph persistence
+- `InMemoryMaterialsKGRepository` for tests only
+- `PostgresMaterialsKGRepository` retained as deprecated migration material
 
 ### Services
 
@@ -65,6 +71,7 @@ Current implementations:
 - provenance creation
 - typed query assembly
 - coverage-rule-based gap detection
+- KPI-driven hypothesis generation and deterministic ranking
 
 The service layer is the preferred integration point for API handlers, scripts, and future orchestration code.
 
@@ -74,40 +81,33 @@ The service layer is the preferred integration point for API handlers, scripts, 
 
 ---
 
-## 2. Persistence: Postgres + pgvector
+## 2. Persistence: Neo4j
 
-`kg_engine/repositories/postgres.py` is the primary durable backend for the new core.
+`kg_engine/repositories/neo4j.py` is the primary durable backend for the
+Materials Hypothesis Factory runtime.
 
 ### Schema Responsibilities
 
-The repository bootstraps:
+The repository bootstraps constraints for:
 
-- `kg_entities`
-- `kg_entity_aliases`
-- `kg_evidence`
-- `kg_relations`
-- `kg_observations`
-- `kg_decision_traces`
-- `kg_coverage_rules`
-- `kg_text_units`
+- `(:Entity {id})`
+- `(:Evidence {id})`
+- `(:Observation {id})`
+- `(:DecisionTrace {id})`
+- `(:CoverageRule {rule_id})`
+- `(:TextUnit {id})`
+- `()-[:KG_RELATION {id}]->()`
 
-It also enables:
+### Why Neo4j
 
-```sql
-CREATE EXTENSION IF NOT EXISTS vector;
-```
+- native graph nodes and relationships;
+- readable Cypher query paths for explanations;
+- direct fit for evidence paths such as material -> experiment -> mode/property;
+- better product story than a custom in-memory graph engine;
+- easier UI graph visualization and debugging.
 
-### Why Postgres
-
-- structured persistence for canonical graph objects
-- transactional upserts for incremental ingestion
-- flexible `JSONB` payloads for metadata and evolving annotations
-- straightforward alias resolution and provenance storage
-- good fit for service-oriented APIs
-
-### Why pgvector
-
-`kg_text_units.embedding VECTOR(1536)` stores optional embeddings for searchable evidence fragments and document chunks. The current repository already persists vector-capable text units, which makes it the natural place to grow hybrid retrieval beyond basic text matching.
+Postgres/pgvector remains in `kg_engine/repositories/postgres.py` only as a
+legacy adapter. It is not the preferred runtime storage for new work.
 
 ---
 

@@ -1,20 +1,21 @@
 services:
-  materials-postgres:
-    image: pgvector/pgvector:pg16
-    container_name: materials-kg-postgres
+  materials-neo4j:
+    image: neo4j:5-community
+    container_name: materials-kg-neo4j
     environment:
-      POSTGRES_USER: materials
-      POSTGRES_PASSWORD: materials
-      POSTGRES_DB: materials_kg
+      NEO4J_AUTH: neo4j/materials123
     ports:
-      - "55432:5432"
+      - "7474:7474"
+      - "7687:7687"
     volumes:
-      - materials_kg_pgdata:/var/lib/postgresql/data
+      - materials_kg_neo4j_data:/data
+      - materials_kg_neo4j_logs:/logs
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U materials -d materials_kg"]
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p materials123 'RETURN 1'"]
       interval: 5s
       timeout: 5s
       retries: 20
 
 volumes:
-  materials_kg_pgdata:
+  materials_kg_neo4j_data:
+  materials_kg_neo4j_logs:

@@ -328,3 +328,56 @@ class DecisionHistoryQueryResult(BaseModel):
     requested_entity: Entity
     traces: list[DecisionTrace] = Field(default_factory=list)
     evidence: list[Evidence] = Field(default_factory=list)
+
+
+class HypothesisInput(BaseModel):
+    """Request for explainable research hypothesis generation."""
+
+    target_kpi: str
+    question: str = Field(default="")
+    material: str | None = Field(default=None)
+    mode: str | None = Field(default=None)
+    property_name: str | None = Field(default=None)
+    max_hypotheses: int = Field(default=5, ge=1, le=20)
+    expert_adjustments: dict[str, Any] = Field(default_factory=dict)
+
+
+class HypothesisScore(BaseModel):
+    """Transparent score components for a generated hypothesis."""
+
+    novelty: float = Field(ge=0.0, le=1.0)
+    risk: float = Field(ge=0.0, le=1.0)
+    value: float = Field(ge=0.0, le=1.0)
+    evidence_strength: float = Field(ge=0.0, le=1.0)
+    final_score: float = Field(ge=0.0, le=1.0)
+
+
+class ResearchHypothesis(BaseModel):
+    """Interpretable, testable hypothesis grounded in graph evidence."""
+
+    id: str
+    target_kpi: str
+    statement: str
+    rationale: str
+    test_plan: str
+    score: HypothesisScore
+    supporting_entity_ids: list[str] = Field(default_factory=list)
+    supporting_evidence_ids: list[str] = Field(default_factory=list)
+    supporting_observation_ids: list[str] = Field(default_factory=list)
+    data_gap_ids: list[str] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
+    expert_notes: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class HypothesisGenerationResult(BaseModel):
+    """Hypothesis Factory response with evidence and ranking details."""
+
+    target_kpi: str
+    resolved_query: dict[str, str | None] = Field(default_factory=dict)
+    hypotheses: list[ResearchHypothesis] = Field(default_factory=list)
+    evidence: list[Evidence] = Field(default_factory=list)
+    observations: list[Observation] = Field(default_factory=list)
+    data_gaps: list[DataGap] = Field(default_factory=list)
+    matched_entities: list[Entity] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)

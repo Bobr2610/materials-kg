@@ -8,6 +8,7 @@ pydantic-settings>=2.0,<3
 uvicorn>=0.20
 pytest>=8.0
 httpx>=0.24
+neo4j>=5.20,<6
 
 # Postgres repository (optional — only needed when materials_pg_dsn is set)
 # psycopg>=3.0,<4

@@ -18,6 +18,7 @@ from pydantic import Field
 
 from kg_engine.domain.models import DocumentInput
 from kg_engine.domain.models import ExperimentInput
+from kg_engine.domain.models import HypothesisInput
 from kg_engine.domain.models import PropertyFilters
 from kg_engine.domain.models import QueryFilters
 from kg_engine.domain.models import ReferenceDataBatch
@@ -462,6 +463,13 @@ def _notebook_dashboard_html() -> str:
       width: 16px; height: 16px; accent-color: #1a73e8; cursor: pointer;
     }
     .source-row { position: relative; padding-left: 34px; }
+    .source-delete {
+      position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+      width: 24px; height: 24px; border: none; background: none;
+      border-radius: 50%; font-size: 16px; color: #9aa0a6; cursor: pointer;
+      display: grid; place-items: center;
+    }
+    .source-delete:hover { background: #fce8e6; color: #d93025; }
     .citation {
       display: inline-block;
       background: #e8f0fe;
@@ -569,44 +577,29 @@ def _notebook_dashboard_html() -> str:
       width: 10px; height: 10px;
       border-radius: 3px;
     }
-    .graph-svg-wrap {
+    .graph-vis-wrap {
       border: 1px solid #e8eaed;
       border-radius: 10px;
       background: #f8f9fa;
-      overflow: auto;
-      min-height: 300px;
+      min-height: 400px;
+      max-height: 600px;
     }
-    .graph-svg-wrap svg {
-      display: block;
-    }
+    .graph-vis-wrap #graphVis { width: 100%; height: 400px; }
     .graph-stats {
       font-size: 12px; color: #9aa0a6;
       text-align: center;
     }
-    .graph-node-rect {
-      cursor: pointer;
-      transition: opacity 0.2s;
+    .graph-neo4j-link {
+      display: inline-flex; align-items: center; gap: 4px;
+      font-size: 12px; color: #1a73e8; text-decoration: none;
+      cursor: pointer; margin-top: 4px;
     }
-    .graph-node-rect:hover { opacity: 0.8; }
-    .graph-edge { transition: opacity 0.2s; }
-    .graph-edge.dimmed { opacity: 0.1; }
-    .graph-node-rect.dimmed { opacity: 0.25; }
-    .graph-tooltip {
-      position: fixed;
-      background: #202124;
-      color: #fff;
-      font-size: 12px;
-      padding: 4px 8px;
-      border-radius: 4px;
-      pointer-events: none;
-      z-index: 300;
-      display: none;
-      white-space: nowrap;
-    }
+    .graph-neo4j-link:hover { text-decoration: underline; }
     @media (max-width: 860px) {
       .graph-panel { width: 100%; }
     }
   </style>
+  <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
 </head>
 <body>
   <div class="drop-overlay" id="dropOverlay">Перетащите файлы сюда</div>
@@ -644,6 +637,7 @@ def _notebook_dashboard_html() -> str:
           <button id="menuButton" title="Меню">&vellip;</button>
           <div class="menu-popover" id="menuPopover">
             <button id="loadSample" type="button">Загрузить пример данных</button>
+            <button id="clearAllSources" type="button">Удалить все источники</button>
             <button id="clearChat" type="button">Очистить чат</button>
           </div>
         </div>
@@ -669,7 +663,6 @@ def _notebook_dashboard_html() -> str:
       </div>
     </section>
   </div>
-  <div class="graph-tooltip" id="graphTooltip"></div>
   <div class="graph-panel" id="graphPanel">
     <div class="graph-panel-top">
       <span>Граф знаний</span>
@@ -677,8 +670,9 @@ def _notebook_dashboard_html() -> str:
     </div>
     <div class="graph-body">
       <div class="graph-legend" id="graphLegend"></div>
-      <div class="graph-svg-wrap" id="graphSvgWrap"></div>
+      <div class="graph-vis-wrap"><div id="graphVis"></div></div>
       <div class="graph-stats" id="graphStats"></div>
+      <div><a class="graph-neo4j-link" href="http://localhost:7474" target="_blank">Открыть Neo4j Browser →</a></div>
     </div>
   </div>
   <script>
@@ -749,13 +743,16 @@ def _notebook_dashboard_html() -> str:
         const t = f.type || "unknown";
         return '<div class="source-row"><input type="checkbox" class="source-check" checked data-name="' + escapeHtml(f.name) + '">' +
           '<div class="source-icon ' + t + '">' + t.toUpperCase() + "</div>" +
-          '<div class="source-info"><b>' + escapeHtml(f.name) + "</b><span>" + formatSize(f.size) + "</span></div></div>";
+          '<div class="source-info"><b>' + escapeHtml(f.name) + "</b><span>" + formatSize(f.size) + "</span></div>" +
+          '<button class="source-delete" data-name="' + escapeHtml(f.name) + '" title="Удалить">&times;</button></div>';
       }).join("");
+      document.querySelectorAll(".source-delete").forEach(btn => {
+        btn.addEventListener("click", () => deleteSource(btn.dataset.name));
+      });
       if (uploadResult.overview) {
         const ov = uploadResult.overview;
         addMsg("assistant", '<div class="overview-card">' + escapeHtml(ov.summary) + "</div>");
       }
-      graphData = null;
       if (uploadResult.suggested_questions?.length) {
         renderSuggestions(uploadResult.suggested_questions);
       }
@@ -845,6 +842,39 @@ def _notebook_dashboard_html() -> str:
         $("loadSample").disabled = false;
       }
     }
+    async function deleteSource(name) {
+      try {
+        const r = await fetch("/sources/" + encodeURIComponent(name), { method: "DELETE" });
+        if (!r.ok) throw new Error(await r.text() || r.statusText);
+        const data = await r.json();
+        state.files = state.files.filter(f => f.name !== name);
+        state.total = state.files.length;
+        $("sourceNote").textContent = state.total + " источников";
+        $("notebookMeta").textContent = state.total + " источников";
+        renderSources({ uploaded: [], overview: data.overview, suggested_questions: [] });
+        addMsg("assistant", '<div class="bubble">Источник "' + escapeHtml(name) + '" удалён. Удалено записей: ' + data.removed_records + "</div>");
+  
+      } catch(e) {
+        addMsg("assistant", '<div class="bubble error">' + escapeHtml(e.message) + "</div>");
+      }
+    }
+    async function clearAllSources() {
+      try {
+        const r = await fetch("/sources", { method: "DELETE" });
+        if (!r.ok) throw new Error(await r.text() || r.statusText);
+        const data = await r.json();
+        state.files = [];
+        state.total = 0;
+        $("sourceNote").textContent = "0 источников";
+        $("notebookMeta").textContent = "0 источников";
+        $("sources").innerHTML = '<div class="source-empty" id="sourceEmpty"><div><div class="doc-icon"><svg viewBox="0 0 24 24"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg></div><strong>Здесь появятся загруженные источники</strong><p>Нажмите «Добавить источник» или перетащите файлы: JSON, JSONL, CSV, TSV, TXT, MD</p></div></div>';
+        addMsg("assistant", '<div class="bubble">Все источники удалены. Граф пуст.</div>');
+  
+        if (data.suggested_questions?.length) renderSuggestions(data.suggested_questions);
+      } catch(e) {
+        addMsg("assistant", '<div class="bubble error">' + escapeHtml(e.message) + "</div>");
+      }
+    }
     function clearChat() {
       $("menuPopover").classList.remove("open");
       $("chatBody").innerHTML = '<div class="hero" id="hero"><div class="hero-inner"><div class="hero-icon">&#128218;</div><h1>Блокнот материалов</h1><p id="notebookMeta">' + state.total + ' источников</p></div></div><div class="suggestions" id="suggestions"></div>';
@@ -859,6 +889,7 @@ def _notebook_dashboard_html() -> str:
     $("restoreSources").addEventListener("click", () => $("appShell").classList.remove("sources-collapsed"));
     $("menuButton").addEventListener("click", e => { e.stopPropagation(); $("menuPopover").classList.toggle("open"); });
     $("loadSample").addEventListener("click", loadSampleData);
+    $("clearAllSources").addEventListener("click", () => { $("menuPopover").classList.remove("open"); clearAllSources(); });
     $("clearChat").addEventListener("click", clearChat);
     document.addEventListener("click", e => { if (!$("menuPopover").contains(e.target) && e.target !== $("menuButton")) $("menuPopover").classList.remove("open"); });
     let dragTimer;
@@ -876,137 +907,70 @@ def _notebook_dashboard_html() -> str:
       experiment: "Эксперимент", equipment: "Оборудование", team: "Команда",
       document: "Документ", tag: "Тег"
     };
-    const EDGE_COLORS = {
-      evaluates_material: "#1a73e8", uses_mode: "#f9ab00",
-      measures_property: "#34a853", uses_equipment: "#9aa0a6",
-      performed_by: "#9334e6", documented_in: "#fbbc04",
-      tagged_with: "#00897b", references: "#607d8b", related_to: "#455a64"
-    };
-    let graphData = null;
-    let selectedNodeId = null;
     function buildLegend() {
       $("graphLegend").innerHTML = Object.keys(KIND_COLORS).map(k =>
         '<span class="legend-item"><span class="legend-dot" style="background:' + KIND_COLORS[k] + '"></span>' + (KIND_LABELS[k]||k) + '</span>'
       ).join("");
     }
     async function loadGraph() {
-      if (graphData) { renderGraph(); return; }
-      $("graphStats").textContent = "Загрузка...";
+      $("graphStats").textContent = "Загрузка из Neo4j...";
       try {
-        const resp = await fetch("/graph/data");
-        if (!resp.ok) throw new Error(resp.statusText);
-        graphData = await resp.json();
-        renderGraph();
+        const resp = await fetch("/neo4j/cypher", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ statements: [{ statement: "MATCH (n)-[r]->(m) RETURN n, r, m LIMIT 500", resultDataContents: ["graph"] }] })
+        });
+        if (!resp.ok) throw new Error("HTTP " + resp.status);
+        const data = await resp.json();
+        if (data.errors?.length) throw new Error(data.errors[0].message);
+        const rows = data.results?.[0]?.data || [];
+        if (!rows.length) {
+          $("graphVis").innerHTML = '<div style="padding:40px;text-align:center;color:#9aa0a6">Граф пуст — загрузите данные</div>';
+          $("graphStats").textContent = "0 узлов, 0 связей";
+          return;
+        }
+        const nodesMap = {};
+        const edges = [];
+        rows.forEach(row => {
+          const n = row.graph?.nodes?.[0];
+          const m = row.graph?.nodes?.[1];
+          const r = row.graph?.relationships?.[0];
+          if (n && !nodesMap[n.id]) nodesMap[n.id] = n;
+          if (m && !nodesMap[m.id]) nodesMap[m.id] = m;
+          if (r) edges.push(r);
+        });
+        const visNodes = Object.values(nodesMap).map(n => ({
+          id: n.id,
+          label: (n.properties?.canonical_name || n.properties?.name || n.id).substring(0, 25),
+          title: JSON.stringify(n.properties, null, 2),
+          color: { background: "#fff", border: KIND_COLORS[n.labels?.[0]?.toLowerCase()] || "#5f6368", highlight: { border: "#1a73e8" } },
+          borderWidth: 2,
+          font: { size: 11, color: "#202124" },
+          shape: "dot",
+          size: 12,
+        }));
+        const visEdges = edges.map(e => ({
+          id: e.id,
+          from: e.startNode,
+          to: e.endNode,
+          label: e.type,
+          title: e.type,
+          arrows: "to",
+          color: { color: "#9aa0a6", opacity: 0.5 },
+          font: { size: 9, color: "#9aa0a6", strokeWidth: 0 },
+        }));
+        const container = $("graphVis");
+        const network = new vis.Network(container, { nodes: new vis.DataSet(visNodes), edges: new vis.DataSet(visEdges) }, {
+          physics: { barnesHut: { gravitationalConstant: -3000, springLength: 150, springConstant: 0.02 }, stabilization: { iterations: 100 } },
+          interaction: { hover: true, tooltipDelay: 200, zoomView: true, dragView: true },
+          nodes: { font: { face: "system-ui" } },
+          edges: { smooth: { type: "continuous" } },
+        });
+        $("graphStats").textContent = visNodes.length + " узлов, " + visEdges.length + " связей";
       } catch(e) {
-        $("graphStats").textContent = "Ошибка: " + e.message;
-        $("graphSvgWrap").innerHTML = "";
+        $("graphVis").innerHTML = '<div style="padding:40px;text-align:center;color:#d93025">Ошибка: ' + escapeHtml(e.message) + '<br>Убедитесь что Neo4j запущен: docker compose up -d</div>';
+        $("graphStats").textContent = "";
       }
-    }
-    function renderGraph() {
-      const nodes = graphData.nodes || [];
-      const edges = graphData.edges || [];
-      if (!nodes.length) {
-        $("graphSvgWrap").innerHTML = '<div style="padding:24px;text-align:center;color:#9aa0a6;font-size:13px">Нет данных для отображения</div>';
-        $("graphStats").textContent = "0 узлов, 0 связей";
-        return;
-      }
-      const kindBuckets = {};
-      nodes.forEach(n => { (kindBuckets[n.kind] = kindBuckets[n.kind] || []).push(n); });
-      const kindOrder = Object.keys(KIND_COLORS);
-      const presentKinds = kindOrder.filter(k => kindBuckets[k]);
-      const colW = 130, rowH = 32, gap = 8, padX = 16, padY = 16;
-      let maxColH = 0;
-      presentKinds.forEach(k => {
-        const h = kindBuckets[k].length * (rowH + gap);
-        if (h > maxColH) maxColH = h;
-      });
-      maxColH = Math.max(maxColH, rowH);
-      const svgW = presentKinds.length * colW + padX * 2;
-      const svgH = maxColH + padY * 2 + 28;
-      const nodePos = {};
-      presentKinds.forEach((kind, ci) => {
-        const col = kindBuckets[kind];
-        col.forEach((n, ri) => {
-          const x = padX + ci * colW;
-          const y = padY + 28 + ri * (rowH + gap);
-          nodePos[n.id] = { x, y, kind };
-        });
-      });
-      let svg = '<svg xmlns="http://www.w3.org/2000/svg" width="' + svgW + '" height="' + svgH + '" style="font-family:system-ui,sans-serif">';
-      svg += '<defs>';
-      presentKinds.forEach(k => {
-        svg += '<marker id="arrow-' + k + '" markerWidth="6" markerHeight="4" refX="5" refY="2" orient="auto"><path d="M0,0 L6,2 L0,4" fill="#9aa0a6" opacity="0.5"/></marker>';
-      });
-      svg += '</defs>';
-      presentKinds.forEach((kind, ci) => {
-        const x = padX + ci * colW + 4;
-        svg += '<text x="' + x + '" y="' + (padY + 16) + '" font-size="11" font-weight="600" fill="' + KIND_COLORS[kind] + '">' + (KIND_LABELS[kind] || kind) + '</text>';
-      });
-      const connectedIds = new Set();
-      edges.forEach(e => { connectedIds.add(e.source); connectedIds.add(e.target); });
-      edges.forEach(e => {
-        const s = nodePos[e.source], t = nodePos[e.target];
-        if (!s || !t) return;
-        const sx = s.x + 4, sy = s.y + rowH / 2;
-        const tx = t.x + 4, ty = t.y + rowH / 2;
-        const edgeKind = (s.kind < t.kind) ? s.kind : t.kind;
-        const color = EDGE_COLORS[e.type] || "#9aa0a6";
-        svg += '<line class="graph-edge" data-source="' + e.source + '" data-target="' + e.target + '" x1="' + sx + '" y1="' + sy + '" x2="' + tx + '" y2="' + ty + '" stroke="' + color + '" stroke-width="1" opacity="0.35" marker-end="url(#arrow-' + edgeKind + ')"/>';
-      });
-      nodes.forEach(n => {
-        const p = nodePos[n.id];
-        if (!p) return;
-        const color = KIND_COLORS[n.kind] || "#5f6368";
-        const label = n.name.length > 14 ? n.name.substring(0, 12) + "..." : n.name;
-        const isConn = connectedIds.has(n.id);
-        svg += '<g class="graph-node-rect" data-id="' + n.id + '" data-name="' + escapeHtml(n.name) + '" data-kind="' + n.kind + '">';
-        svg += '<rect x="' + p.x + '" y="' + p.y + '" width="120" height="' + rowH + '" rx="6" fill="#fff" stroke="' + color + '" stroke-width="1.5"/>';
-        svg += '<rect x="' + p.x + '" y="' + p.y + '" width="4" height="' + rowH + '" rx="2" fill="' + color + '"/>';
-        svg += '<text x="' + (p.x + 10) + '" y="' + (p.y + rowH / 2 + 4) + '" font-size="11" fill="#202124" font-weight="' + (isConn ? "600" : "400") + '">' + escapeHtml(label) + '</text>';
-        svg += '</g>';
-      });
-      svg += '</svg>';
-      $("graphSvgWrap").innerHTML = svg;
-      $("graphStats").textContent = nodes.length + " узлов, " + edges.length + " связей";
-      attachGraphEvents();
-    }
-    function attachGraphEvents() {
-      const tooltip = $("graphTooltip");
-      document.querySelectorAll(".graph-node-rect").forEach(g => {
-        g.addEventListener("mouseenter", e => {
-          tooltip.style.display = "block";
-          tooltip.textContent = g.dataset.name + " (" + (KIND_LABELS[g.dataset.kind] || g.dataset.kind) + ")";
-        });
-        g.addEventListener("mousemove", e => {
-          tooltip.style.left = (e.clientX + 12) + "px";
-          tooltip.style.top = (e.clientY - 8) + "px";
-        });
-        g.addEventListener("mouseleave", () => { tooltip.style.display = "none"; });
-        g.addEventListener("click", () => {
-          const clickedId = g.dataset.id;
-          if (selectedNodeId === clickedId) {
-            selectedNodeId = null;
-            document.querySelectorAll(".graph-node-rect").forEach(n => n.classList.remove("dimmed"));
-            document.querySelectorAll(".graph-edge").forEach(e => e.classList.remove("dimmed"));
-            return;
-          }
-          selectedNodeId = clickedId;
-          const neighbors = new Set([clickedId]);
-          document.querySelectorAll(".graph-edge").forEach(e => {
-            if (e.dataset.source === clickedId || e.dataset.target === clickedId) {
-              neighbors.add(e.dataset.source);
-              neighbors.add(e.dataset.target);
-              e.classList.remove("dimmed");
-            } else {
-              e.classList.add("dimmed");
-            }
-          });
-          document.querySelectorAll(".graph-node-rect").forEach(n => {
-            if (neighbors.has(n.dataset.id)) n.classList.remove("dimmed");
-            else n.classList.add("dimmed");
-          });
-        });
-      });
     }
     $("graphToggle").addEventListener("click", () => {
       $("graphPanel").classList.toggle("open");
@@ -1015,7 +979,38 @@ def _notebook_dashboard_html() -> str:
         loadGraph();
       }
     });
-    $("graphClose").addEventListener("click", () => { $("graphPanel").classList.remove("open"); });
+    $("graphClose").addEventListener("click", () => {
+      $("graphPanel").classList.remove("open");
+    });
+    async function loadInitialState() {
+      try {
+        const r = await fetch("/state");
+        if (!r.ok) return;
+        const data = await r.json();
+        if (data.source_files?.length) {
+          state.files = data.source_files;
+          state.total = state.files.length;
+          $("sourceNote").textContent = state.total + " источников";
+          $("notebookMeta").textContent = state.total + " источников";
+          $("sourceEmpty")?.remove();
+          $("sources").innerHTML = state.files.map(f => {
+            const t = f.type || "unknown";
+            return '<div class="source-row"><input type="checkbox" class="source-check" checked data-name="' + escapeHtml(f.name) + '">' +
+              '<div class="source-icon ' + t + '">' + t.toUpperCase() + "</div>" +
+              '<div class="source-info"><b>' + escapeHtml(f.name) + "</b><span>" + formatSize(f.size) + "</span></div>" +
+              '<button class="source-delete" data-name="' + escapeHtml(f.name) + '" title="Удалить">&times;</button></div>';
+          }).join("");
+          document.querySelectorAll(".source-delete").forEach(btn => {
+            btn.addEventListener("click", () => deleteSource(btn.dataset.name));
+          });
+          if (data.overview?.summary) {
+            addMsg("assistant", '<div class="overview-card">' + escapeHtml(data.overview.summary) + "</div>");
+          }
+          if (data.suggested_questions?.length) renderSuggestions(data.suggested_questions);
+        }
+      } catch(e) { /* silent on startup */ }
+    }
+    loadInitialState();
   </script>
 </body>
 </html>
@@ -1060,6 +1055,7 @@ def create_materials_app(
         llm_provider=_create_llm_provider(),
     )
     app = FastAPI(title=api_title)
+    _source_files: list[dict] = []
 
     @app.get("/", response_class=HTMLResponse)
     def dashboard() -> Response:
@@ -1077,6 +1073,15 @@ def create_materials_app(
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok", "service": "materials-kg-core"}
+
+    @app.get("/state")
+    def get_state() -> dict:
+        overview = runtime_service.get_source_overview()
+        return {
+            "source_files": list(_source_files),
+            "overview": overview,
+            "suggested_questions": runtime_service.get_suggested_questions(),
+        }
 
     @app.get("/graph/data")
     def graph_data() -> dict:
@@ -1118,21 +1123,32 @@ def create_materials_app(
                 doc_payload.append({"document_id": name, "title": Path(name).stem, "text": content.decode("utf-8", errors="replace"), "metadata": {"source_file": name}})
                 continue
             if suffix in _TEXT_SUFFIXES:
+                items = parsed if isinstance(parsed, list) else [parsed]
+                for item in items:
+                    if isinstance(item, dict):
+                        item.setdefault("source_ref", name)
                 if isinstance(parsed, list):
-                    doc_payload.extend(parsed)
+                    doc_payload.extend(items)
                 else:
                     doc_payload.append(parsed)
                 continue
             if isinstance(parsed, dict):
                 for key in ("entities", "materials", "equipment", "properties", "modes", "teams", "documents", "tags", "coverage_rules"):
                     if key in parsed and isinstance(parsed[key], list):
+                        for item in parsed[key]:
+                            item.setdefault("source_ref", name)
                         ref_payload.setdefault(key, []).extend(parsed[key])
                 if "experiments" in parsed and isinstance(parsed["experiments"], list):
+                    for item in parsed["experiments"]:
+                        item.setdefault("source_ref", name)
                     exp_payload.extend(parsed["experiments"])
                 if "documents" in parsed and isinstance(parsed["documents"], list):
+                    for item in parsed["documents"]:
+                        item.setdefault("source_ref", name)
                     doc_payload.extend(parsed["documents"])
                 if not any(k in parsed for k in ("entities", "materials", "experiments", "documents")):
                     if parsed.get("kind") or parsed.get("entity_kind") or parsed.get("type"):
+                        parsed.setdefault("source_ref", name)
                         ref_payload.setdefault("entities", []).append(parsed)
                     else:
                         doc_payload.append({"document_id": name, "title": Path(name).stem, "text": json.dumps(parsed, ensure_ascii=False), "metadata": {"source_file": name}})
@@ -1141,6 +1157,7 @@ def create_materials_app(
                     if not isinstance(item, dict):
                         continue
                     if item.get("kind") or item.get("entity_kind") or item.get("type"):
+                        item.setdefault("source_ref", name)
                         ref_payload.setdefault("entities", []).append(item)
                     elif (item.get("experiment_id") or item.get("id")) and (item.get("material_name") or item.get("material")):
                         exp_payload.append(item)
@@ -1158,6 +1175,7 @@ def create_materials_app(
         results["uploaded"] = uploaded
         results["overview"] = runtime_service.get_source_overview()
         results["suggested_questions"] = runtime_service.get_suggested_questions()
+        _source_files.extend(uploaded)
         return results
 
     @app.post("/demo/load-sample")
@@ -1172,6 +1190,18 @@ def create_materials_app(
         with documents_path.open("r", encoding="utf-8") as file:
             documents_payload = json.load(file)
 
+        for section_key in ("entities", "materials", "equipment", "properties", "modes", "teams", "documents", "tags", "coverage_rules"):
+            for item in reference_payload.get(section_key, []):
+                item.setdefault("source_ref", reference_path.name)
+        exp_items = experiments_payload.get("experiments", []) if isinstance(experiments_payload, dict) else experiments_payload
+        for item in exp_items:
+            if isinstance(item, dict):
+                item.setdefault("source_ref", experiments_path.name)
+        doc_items = documents_payload.get("documents", []) if isinstance(documents_payload, dict) else documents_payload
+        for item in doc_items:
+            if isinstance(item, dict):
+                item.setdefault("source_ref", documents_path.name)
+
         results = {
             "reference": runtime_service.ingest_reference_data(
                 ReferenceDataAdapter().from_payload(reference_payload)
@@ -1183,25 +1213,14 @@ def create_materials_app(
                 DocumentCorpusAdapter().from_payload(documents_payload)
             ),
             "uploaded": [
-                {
-                    "name": reference_path.name,
-                    "size": reference_path.stat().st_size,
-                    "type": reference_path.suffix.lstrip("."),
-                },
-                {
-                    "name": experiments_path.name,
-                    "size": experiments_path.stat().st_size,
-                    "type": experiments_path.suffix.lstrip("."),
-                },
-                {
-                    "name": documents_path.name,
-                    "size": documents_path.stat().st_size,
-                    "type": documents_path.suffix.lstrip("."),
-                },
+                {"name": reference_path.name, "size": reference_path.stat().st_size, "type": "json"},
+                {"name": experiments_path.name, "size": experiments_path.stat().st_size, "type": "json"},
+                {"name": documents_path.name, "size": documents_path.stat().st_size, "type": "json"},
             ],
         }
         results["overview"] = runtime_service.get_source_overview()
         results["suggested_questions"] = runtime_service.get_suggested_questions()
+        _source_files.extend(results["uploaded"])
         return results
 
     @app.post("/ingest/reference")
@@ -1226,9 +1245,15 @@ def create_materials_app(
             source_ids=request.source_ids,
         )
 
+    @app.post("/hypotheses/generate")
+    def generate_hypotheses(request: HypothesisInput) -> dict:
+        return runtime_service.generate_hypotheses(request).model_dump(mode="json")
+
     @app.get("/source/overview")
     def source_overview() -> dict:
-        return runtime_service.get_source_overview()
+        overview = runtime_service.get_source_overview()
+        overview["uploaded_files"] = list(_source_files)
+        return overview
 
     @app.get("/source/suggestions")
     def source_suggestions() -> list[str]:
@@ -1274,6 +1299,41 @@ def create_materials_app(
             gap.model_dump(mode="json")
             for gap in runtime_service.query_data_gaps(request.scope, request.filters)
         ]
+
+    @app.get("/sources")
+    def list_sources() -> list[dict]:
+        return list(_source_files)
+
+    @app.delete("/sources/{source_name}")
+    def delete_source(source_name: str) -> dict:
+        removed = runtime_service._repository.delete_source(source_name)  # noqa: SLF001
+        _source_files[:] = [s for s in _source_files if s.get("name") != source_name]
+        return {
+            "deleted": source_name,
+            "removed_records": removed,
+            "overview": runtime_service.get_source_overview(),
+        }
+
+    @app.delete("/sources")
+    def clear_all_sources() -> dict:
+        runtime_service._repository.clear_all()  # noqa: SLF001
+        _source_files.clear()
+        return {
+            "cleared": True,
+            "overview": runtime_service.get_source_overview(),
+            "suggested_questions": runtime_service.get_suggested_questions(),
+        }
+
+    @app.post("/neo4j/cypher")
+    async def neo4j_cypher(request: dict) -> dict:
+        import httpx
+
+        from kg_engine.config.settings import Settings
+        s = Settings()
+        url = "http://localhost:7474/db/neo4j/tx/commit"
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(url, json=request, auth=(s.materials_neo4j_user, s.materials_neo4j_password), timeout=10)
+            return resp.json()
 
     return app
 
