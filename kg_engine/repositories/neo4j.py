@@ -445,7 +445,7 @@ class Neo4jMaterialsKGRepository:
 
     def delete_source(self, source_id: str) -> int:
         rows = self._read(
-            "MATCH (n:Entity) WHERE $sid IN n.source_refs RETURN n.id AS id",
+            "MATCH (n:Entity) WHERE $sid IN n.source_refs OR n.properties CONTAINS $sid RETURN n.id AS id",
             {"sid": source_id},
         )
         entity_ids = [row["id"] for row in rows]
