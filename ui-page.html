@@ -4,34 +4,46 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Materials KG</title>
+  <title>Фабрика гипотез — Materials KG</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Google+Sans+Flex:opsz,wght@6..144,400;6..144,500;6..144,600&display=swap" rel="stylesheet">
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html { height: 100%; }
     body {
       height: 100vh;
-      background: #f0f2f5;
+      background: #e8eaed;
       color: #202124;
-      font-family: "Google Sans", "Segoe UI", system-ui, -apple-system, sans-serif;
+      font-family: "Google Sans Flex", "Google Sans", "Segoe UI", system-ui, sans-serif;
       -webkit-font-smoothing: antialiased;
       overflow: hidden;
     }
-    .app {
+    .workspace {
       height: 100vh;
+      padding: 8px;
+      background: #e8eaed;
+      min-height: 0;
+    }
+    .app {
+      height: 100%;
       display: grid;
-      grid-template-columns: minmax(320px, 380px) minmax(0, 1fr);
-      gap: 0;
+      grid-template-columns: minmax(300px, 380px) minmax(0, 1fr);
+      gap: 8px;
       min-width: 0;
     }
-    .app.sources-collapsed { grid-template-columns: 0 1fr; }
-    .app.sources-collapsed .sources {
+    .app.sources-collapsed { grid-template-columns: 0 minmax(0, 1fr); }
+    .panel {
+      background: #fff;
+      border-radius: 16px;
+      box-shadow: 0 1px 3px rgba(60,64,67,0.08), 0 1px 2px rgba(60,64,67,0.04);
+      min-width: 0; min-height: 0;
       overflow: hidden;
-      border-right: 0;
-      min-width: 0;
+    }
+    .app.sources-collapsed .sources {
+      overflow: hidden; min-width: 0; opacity: 0; pointer-events: none;
     }
     .sources {
-      background: #fff;
-      border-right: 1px solid #dadce0;
       display: grid;
       grid-template-rows: 48px auto auto auto minmax(0, 1fr);
       min-width: 0;
@@ -41,8 +53,8 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 0 12px 0 20px;
-      border-bottom: 1px solid #dadce0;
+      padding: 0 12px 0 16px;
+      border-bottom: 1px solid #f1f3f4;
     }
     .sources-top span { font-size: 15px; font-weight: 500; }
     .sources-top button {
@@ -95,30 +107,10 @@
     .source-actions {
       display: flex;
       align-items: center;
-      justify-content: space-between;
-      gap: 8px;
+      justify-content: flex-end;
       min-height: 28px;
       min-width: 0;
     }
-    .source-actions-group {
-      display: flex;
-      gap: 4px;
-      align-items: center;
-      min-width: 0;
-    }
-    .source-action {
-      height: 28px;
-      border: 1px solid #dadce0;
-      border-radius: 7px;
-      background: #fff;
-      padding: 0 8px;
-      font: inherit;
-      font-size: 12px;
-      color: #5f6368;
-      cursor: pointer;
-      white-space: nowrap;
-    }
-    .source-action:hover { background: #f8f9fa; color: #202124; }
     .source-summary {
       font-size: 11px;
       color: #9aa0a6;
@@ -257,8 +249,7 @@
     .source-more:hover { background: #f8f9fa; }
     .chat {
       display: grid;
-      grid-template-rows: 48px 1fr auto;
-      background: #fff;
+      grid-template-rows: 48px minmax(0, 1fr) auto auto;
       min-width: 0;
       min-height: 0;
     }
@@ -266,8 +257,8 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 0 12px 0 20px;
-      border-bottom: 1px solid #dadce0;
+      padding: 0 12px 0 16px;
+      border-bottom: 1px solid #f1f3f4;
       min-width: 0;
     }
     .chat-top span { font-size: 15px; font-weight: 500; }
@@ -291,6 +282,84 @@
       gap: 6px;
     }
     .app.sources-collapsed .restore-sources { display: inline-flex; }
+    .graph-toggle {
+      width: 32px; height: 32px;
+      border: none; background: none;
+      border-radius: 50%;
+      display: grid; place-items: center;
+      color: #5f6368; font-size: 18px;
+      cursor: pointer;
+    }
+    .graph-toggle:hover { background: #f1f3f4; }
+    .graph-toggle svg { width: 20px; height: 20px; fill: currentColor; }
+    .graph-panel {
+      position: fixed;
+      top: 0; right: 0;
+      width: min(440px, 42vw);
+      height: 100vh;
+      background: #fff;
+      box-shadow: -4px 0 24px rgba(60,64,67,0.12);
+      z-index: 100;
+      transform: translateX(100%);
+      transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+      display: grid;
+      grid-template-rows: 48px 1fr;
+      border-left: 1px solid #dadce0;
+    }
+    .graph-panel.open { transform: translateX(0); }
+    .graph-panel-top {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 12px 0 16px;
+      border-bottom: 1px solid #f1f3f4;
+    }
+    .graph-panel-top span { font-size: 15px; font-weight: 500; }
+    .graph-close {
+      width: 32px; height: 32px;
+      border: none; background: none;
+      border-radius: 50%;
+      display: grid; place-items: center;
+      color: #5f6368; font-size: 20px; cursor: pointer;
+    }
+    .graph-close:hover { background: #f1f3f4; }
+    .graph-body {
+      overflow: auto; padding: 12px 14px;
+      display: grid; gap: 10px; align-content: start;
+      min-height: 0;
+    }
+    .graph-empty {
+      min-height: 280px;
+      display: grid; place-items: center;
+      text-align: center; padding: 32px 20px;
+      color: #9aa0a6; font-size: 13px; line-height: 1.5;
+    }
+    .graph-legend {
+      display: flex; flex-wrap: wrap; gap: 6px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid #e8eaed;
+    }
+    .legend-item {
+      display: inline-flex; align-items: center; gap: 4px;
+      font-size: 11px; color: #5f6368;
+    }
+    .legend-dot { width: 10px; height: 10px; border-radius: 3px; }
+    .graph-vis-wrap {
+      border: 1px solid #e8eaed; border-radius: 12px;
+      background: #fafafa; flex: 1; min-height: 360px; min-width: 0; overflow: hidden;
+    }
+    .graph-vis-wrap #graphVis { width: 100%; height: calc(100vh - 200px); min-height: 360px; }
+    .graph-stats { font-size: 12px; color: #9aa0a6; text-align: center; }
+    @media (max-width: 960px) {
+      .app, .app.sources-collapsed { grid-template-columns: 1fr; }
+      .sources { max-height: 280px; }
+      .app.sources-collapsed .sources { display: none; }
+      .graph-panel { width: 100%; }
+      .chat-top { padding-left: 14px; }
+      .msg { padding: 12px 14px; }
+      .composer-wrap { padding: 8px 12px 14px; }
+      .composer { grid-template-columns: minmax(0, 1fr) 40px; border-radius: 18px; }
+      .composer .src-label { display: none; }
+      .suggestions { padding: 8px 14px; overflow: hidden; }
+    }
     .menu-popover {
       display: none;
       position: absolute;
@@ -324,23 +393,23 @@
       min-width: 0;
     }
     .hero {
-      min-height: calc(100vh - 160px);
+      min-height: 320px;
       display: grid;
       place-items: center;
       text-align: center;
       padding: 40px 20px;
     }
-    .hero-inner { display: grid; gap: 8px; justify-items: center; }
+    .hero-inner { display: grid; gap: 8px; justify-items: center; max-width: 480px; }
     .hero-icon {
-      width: 48px; height: 48px;
-      border-radius: 10px;
+      width: 56px; height: 56px;
+      border-radius: 14px;
       background: linear-gradient(135deg, #7c4dff 0%, #536dfe 100%);
       display: grid; place-items: center;
-      color: #fff; font-size: 20px;
-      box-shadow: 0 2px 8px rgba(124,77,255,0.3);
+      color: #fff; font-size: 24px;
+      box-shadow: 0 4px 12px rgba(124,77,255,0.25);
     }
-    .hero h1 { margin: 16px 0 0; font-size: 24px; font-weight: 400; color: #202124; }
-    .hero p { font-size: 13px; color: #9aa0a6; max-width: 340px; }
+    .hero h1 { margin: 16px 0 0; font-size: 28px; font-weight: 400; color: #202124; letter-spacing: -0.3px; }
+    .hero p { font-size: 14px; color: #9aa0a6; max-width: 380px; line-height: 1.5; }
     .msg {
       max-width: 800px;
       width: 100%;
@@ -526,106 +595,10 @@
     }
     .suggestion:hover { background: #f1f3f4; border-color: #1a73e8; color: #1a73e8; }
     .overview-card {
-      border: 1px solid #e8eaed; border-radius: 10px;
-      padding: 10px; background: #f8f9fa;
-      font-size: 13px; color: #5f6368; line-height: 1.45;
+      border: 1px solid #e8eaed; border-radius: 14px;
+      padding: 14px 16px; background: #fafbff;
+      font-size: 14px; color: #3c4043; line-height: 1.55;
       overflow-wrap: anywhere;
-    }
-    @media (max-width: 860px) {
-      .app { grid-template-columns: 1fr; }
-      .sources { display: none; }
-      .app.sources-collapsed { grid-template-columns: 1fr; }
-      .restore-sources { display: none !important; }
-      .chat-top { padding-left: 14px; }
-      .msg { padding: 12px 14px; }
-      .composer-wrap { padding: 8px 12px 14px; }
-      .composer {
-        grid-template-columns: minmax(0, 1fr) 40px;
-        border-radius: 18px;
-      }
-      .composer .src-label { display: none; }
-      .suggestions { padding: 8px 14px; overflow: hidden; }
-    }
-    .graph-toggle {
-      width: 32px; height: 32px;
-      border: none; background: none;
-      border-radius: 50%;
-      display: grid; place-items: center;
-      color: #5f6368; font-size: 18px;
-      cursor: pointer;
-    }
-    .graph-toggle:hover { background: #f1f3f4; }
-    .graph-toggle svg { width: 20px; height: 20px; fill: currentColor; }
-    .graph-panel {
-      position: fixed; top: 0; right: 0;
-      width: 400px; height: 100vh;
-      background: #fff;
-      box-shadow: -2px 0 12px rgba(0,0,0,0.1);
-      z-index: 200;
-      transform: translateX(100%);
-      transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-      display: grid;
-      grid-template-rows: 48px 1fr;
-    }
-    .graph-panel.open { transform: translateX(0); }
-    .graph-panel-top {
-      display: flex; align-items: center;
-      justify-content: space-between;
-      padding: 0 12px 0 16px;
-      border-bottom: 1px solid #dadce0;
-    }
-    .graph-panel-top span { font-size: 15px; font-weight: 500; }
-    .graph-close {
-      width: 32px; height: 32px;
-      border: none; background: none;
-      border-radius: 50%;
-      display: grid; place-items: center;
-      color: #5f6368; font-size: 18px;
-      cursor: pointer;
-    }
-    .graph-close:hover { background: #f1f3f4; }
-    .graph-body {
-      overflow: auto; padding: 12px;
-      display: grid; gap: 12px;
-      align-content: start;
-    }
-    .graph-legend {
-      display: flex; flex-wrap: wrap; gap: 6px;
-      padding-bottom: 8px;
-      border-bottom: 1px solid #e8eaed;
-    }
-    .legend-item {
-      display: inline-flex; align-items: center; gap: 4px;
-      font-size: 11px; color: #5f6368;
-    }
-    .legend-dot {
-      width: 10px; height: 10px;
-      border-radius: 3px;
-    }
-    .graph-vis-wrap {
-      border: 1px solid #e8eaed;
-      border-radius: 10px;
-      background: #f8f9fa;
-      min-height: 400px;
-      max-height: 600px;
-      min-width: 0;
-      overflow: hidden;
-    }
-    .graph-vis-wrap #graphVis { width: 100%; height: 400px; }
-    .graph-stats {
-      font-size: 12px; color: #9aa0a6;
-      text-align: center;
-    }
-    .graph-neo4j-link {
-      display: inline-flex; align-items: center; gap: 4px;
-      font-size: 12px; color: #1a73e8; text-decoration: none;
-      cursor: pointer; margin-top: 4px;
-    }
-    .graph-neo4j-link:hover { text-decoration: underline; }
-    @media (max-width: 860px) {
-      .graph-panel { width: 100%; }
-      .graph-vis-wrap { min-height: 320px; }
-      .graph-vis-wrap #graphVis { height: 320px; }
     }
     @media (max-width: 420px) {
       .top-actions { gap: 2px; }
@@ -640,8 +613,9 @@
 <body>
   <div class="drop-overlay" id="dropOverlay">Перетащите файлы сюда</div>
   <input type="file" id="fileInput" multiple accept=".json,.jsonl,.csv,.tsv,.txt,.md" style="display:none">
+  <div class="workspace">
   <div class="app" id="appShell">
-    <aside class="sources">
+    <aside class="sources panel">
       <div class="sources-top">
         <span>Источники</span>
         <button id="collapseSources" title="Свернуть">&#9634;</button>
@@ -652,10 +626,6 @@
       <div class="source-tools">
         <input class="source-search" id="sourceSearch" type="search" placeholder="Найти источник" aria-label="Найти источник">
         <div class="source-actions">
-          <div class="source-actions-group">
-            <button class="source-action" id="selectAllSources" type="button">Все</button>
-            <button class="source-action" id="selectNoSources" type="button">Ни один</button>
-          </div>
           <span class="source-summary" id="sourceSummary">0 выбрано</span>
         </div>
       </div>
@@ -675,7 +645,7 @@
         </div>
       </div>
     </aside>
-    <section class="chat">
+    <section class="chat panel">
       <div class="chat-top">
         <span>Чат</span>
         <div class="top-actions">
@@ -685,7 +655,6 @@
           </button>
           <button id="menuButton" title="Меню">&vellip;</button>
           <div class="menu-popover" id="menuPopover">
-            <button id="loadSample" type="button">Загрузить пример данных</button>
             <button id="clearAllSources" type="button">Удалить все источники</button>
             <button id="clearChat" type="button">Очистить чат</button>
           </div>
@@ -694,13 +663,13 @@
       <main class="chat-body" id="chatBody">
         <div class="hero" id="hero">
           <div class="hero-inner">
-            <div class="hero-icon">&#128218;</div>
-            <h1>Блокнот материалов</h1>
-            <p id="notebookMeta">0 источников</p>
+            <div class="hero-icon">&#9883;</div>
+            <h1>Фабрика гипотез</h1>
+            <p id="notebookMeta">Добавьте источники слева и задавайте вопросы в чате. Граф знаний строится только из загруженных данных.</p>
           </div>
         </div>
-        <div class="suggestions" id="suggestions"></div>
       </main>
+      <div class="suggestions" id="suggestions"></div>
       <div class="composer-wrap">
         <div class="composer">
           <textarea id="question" rows="1" placeholder="Введите текст..." aria-label="Исследовательский вопрос"></textarea>
@@ -711,6 +680,7 @@
         </div>
       </div>
     </section>
+  </div>
   </div>
   <div class="graph-panel" id="graphPanel">
     <div class="graph-panel-top">
@@ -758,7 +728,8 @@
       sourceEmptyBody: "Нажмите &laquo;Добавить источники&raquo; или перетащите файлы: JSON, JSONL, CSV, TSV, TXT, MD",
       sourceNotFoundTitle: "Источники не найдены",
       sourceNotFoundBody: "Измените строку поиска или загрузите другой файл.",
-      graphEmpty: "Граф пуст — загрузите данные",
+      graphEmpty: "Граф пуст — загрузите источники слева",
+      graphNoSelection: "Отметьте галочкой хотя бы один источник",
       graphLoadErrorHint: "Убедитесь что Neo4j запущен: docker compose up -d",
       sampleLoaded: "Пример данных загружен.",
       allSourcesRemoved: "Все источники удалены. Граф пуст.",
@@ -769,7 +740,8 @@
       selected: new Set(),
       sourceFilter: "",
       sourceLimit: UI_CONFIG.sourcePageSize,
-      total: 0
+      total: 0,
+      overview: null
     };
 
     function escapeHtml(v) {
@@ -812,8 +784,18 @@
       const totalText = formatCount(state.total, "источник", "источника", "источников");
       const selectedText = selectedCount + " выбрано";
       if ($("sourceNote")) $("sourceNote").textContent = state.total ? selectedText : "0 источников";
-      if ($("notebookMeta")) $("notebookMeta").textContent = totalText;
       if ($("sourceSummary")) $("sourceSummary").textContent = state.total ? selectedText + " из " + state.total : "0 выбрано";
+    }
+    function closeGraphPanel() {
+      $("graphPanel")?.classList.remove("open");
+    }
+    function refreshGraphIfOpen() {
+      if ($("graphPanel")?.classList.contains("open")) loadGraph();
+    }
+    function showGraphEmpty(message) {
+      const container = $("graphVis");
+      if (container) container.innerHTML = '<div class="graph-empty">' + escapeHtml(message) + '</div>';
+      if ($("graphStats")) $("graphStats").textContent = "0 узлов, 0 связей";
     }
     function mergeFiles(files, selectNew = true) {
       const byName = new Map(state.files.map(f => [f.name, f]));
@@ -889,7 +871,7 @@
         return '<div class="source-row' + muted + '"><input type="checkbox" class="source-check"' + checked + ' data-name="' + escapeHtml(f.name) + '">' +
           '<div class="source-icon ' + t + '">' + t.toUpperCase() + "</div>" +
           '<div class="source-info"><b title="' + escapeHtml(f.name) + '">' + escapeHtml(f.name) + "</b><span>" + formatSize(f.size) + "</span></div>" +
-          '<button class="source-delete" data-name="' + escapeHtml(f.name) + '" title="Удалить">&times;</button></div>';
+          '<button class="source-delete" data-name="' + escapeHtml(f.name) + '" title="Удалить из базы">&times;</button></div>';
       }).join("") + (filtered.length > visible.length
         ? '<button class="source-more" id="showMoreSources" type="button">Показать ещё ' + Math.min(UI_CONFIG.sourcePageSize, filtered.length - visible.length) + '</button>'
         : "");
@@ -902,16 +884,17 @@
     function renderSources(uploadResult, options = {}) {
       const uploaded = uploadResult.uploaded || [];
       if (uploaded.length) mergeFiles(uploaded);
+      if (uploadResult.overview) state.overview = uploadResult.overview;
       renderSourceList();
-      if (uploadResult.overview && options.notify !== false) {
-        const ov = uploadResult.overview;
-        addMsg("assistant", '<div class="overview-card">' + escapeHtml(ov.summary) + "</div>");
-      }
       if (uploadResult.suggested_questions?.length) {
         renderSuggestions(uploadResult.suggested_questions);
       }
     }
     function renderSuggestions(questions) {
+      if (!state.total) {
+        $("suggestions").innerHTML = "";
+        return;
+      }
       $("suggestions").innerHTML = questions.map(q =>
         '<button class="suggestion" type="button">' + escapeHtml(q) + "</button>"
       ).join("");
@@ -977,9 +960,9 @@
         if (totals.entities) counts.push(totals.entities + " сущностей");
         if (totals.experiments) counts.push(totals.experiments + " экспериментов");
         if (totals.documents) counts.push(totals.documents + " документов");
-        if (lastOverview) addMsg("assistant", '<div class="overview-card">' + escapeHtml(lastOverview.summary) + "</div>");
         if (lastQuestions.length) renderSuggestions(lastQuestions);
         addMsg("assistant", '<div class="bubble">Готово: ' + formatCount(files.length, "файл", "файла", "файлов") + ". " + (counts.join(", ") || UI_TEXT.filesAccepted) + ".</div>");
+        refreshGraphIfOpen();
       } catch(e) {
         addMsg("assistant", '<div class="bubble error">' + escapeHtml(e.message) + "</div>");
       } finally {
@@ -1011,19 +994,11 @@
         $("sendQuestion").disabled = false;
       }
     }
-    async function loadSampleData() {
-      $("menuPopover").classList.remove("open");
-      $("loadSample").disabled = true;
-      try {
-        const data = await postJson("/demo/load-sample");
-        renderSources(data);
-        const firstQuestion = data.suggested_questions?.[0];
-        addMsg("assistant", '<div class="bubble">' + UI_TEXT.sampleLoaded + (firstQuestion ? " Первый вопрос уже в подсказках." : "") + "</div>");
-      } catch(e) {
-        addMsg("assistant", '<div class="bubble error">' + escapeHtml(e.message) + "</div>");
-      } finally {
-        $("loadSample").disabled = false;
-      }
+    function graphDataUrl() {
+      const selected = state.files.filter(f => state.selected.has(f.name)).map(f => f.name);
+      if (!selected.length) return null;
+      const params = selected.map(name => "sources=" + encodeURIComponent(name)).join("&");
+      return "/graph/data?" + params + "&_=" + Date.now();
     }
     async function deleteSource(name) {
       try {
@@ -1032,10 +1007,11 @@
         const data = await r.json();
         state.files = state.files.filter(f => f.name !== name);
         state.selected.delete(name);
+        if (!state.files.length) state.overview = null;
         setSourceStats();
-        renderSources({ uploaded: [], overview: data.overview, suggested_questions: [] });
-        addMsg("assistant", '<div class="bubble">Источник "' + escapeHtml(name) + '" удалён. Удалено записей: ' + data.removed_records + "</div>");
-
+        renderSourceList();
+        addMsg("assistant", '<div class="bubble">Источник "' + escapeHtml(name) + '" удалён из базы. Убрано записей: ' + data.removed_records + ".</div>");
+        refreshGraphIfOpen();
       } catch(e) {
         addMsg("assistant", '<div class="bubble error">' + escapeHtml(e.message) + "</div>");
       }
@@ -1047,11 +1023,12 @@
         const data = await r.json();
         state.files = [];
         state.selected.clear();
+        state.overview = null;
         state.sourceLimit = UI_CONFIG.sourcePageSize;
         setSourceStats();
         renderSourceList();
         addMsg("assistant", '<div class="bubble">' + UI_TEXT.allSourcesRemoved + "</div>");
-
+        refreshGraphIfOpen();
         if (data.suggested_questions?.length) renderSuggestions(data.suggested_questions);
       } catch(e) {
         addMsg("assistant", '<div class="bubble error">' + escapeHtml(e.message) + "</div>");
@@ -1059,8 +1036,10 @@
     }
     function clearChat() {
       $("menuPopover").classList.remove("open");
-      $("chatBody").innerHTML = '<div class="hero" id="hero"><div class="hero-inner"><div class="hero-icon">&#128218;</div><h1>Блокнот материалов</h1><p id="notebookMeta">' + formatCount(state.total, "источник", "источника", "источников") + '</p></div></div><div class="suggestions" id="suggestions"></div>';
-      fetch("/source/suggestions").then(r => r.json()).then(renderSuggestions).catch(() => {});
+      $("chatBody").innerHTML =
+        '<div class="hero" id="hero"><div class="hero-inner"><div class="hero-icon">&#9883;</div><h1>Фабрика гипотез</h1><p id="notebookMeta">Добавьте источники слева и задавайте вопросы в чате. Граф знаний строится только из загруженных данных.</p></div></div>';
+      if ($("suggestions")) $("suggestions").innerHTML = "";
+      fetch("/source/suggestions").then(r => r.json()).then(q => { if (state.total) renderSuggestions(q); }).catch(() => {});
     }
     $("addSources").addEventListener("click", () => $("fileInput").click());
     $("fileInput").addEventListener("change", e => { uploadFiles(Array.from(e.target.files)); e.target.value = ""; });
@@ -1069,21 +1048,17 @@
     $("question").addEventListener("input", function() { this.style.height = "auto"; this.style.height = Math.min(this.scrollHeight, 120) + "px"; });
     $("collapseSources").addEventListener("click", () => $("appShell").classList.add("sources-collapsed"));
     $("restoreSources").addEventListener("click", () => $("appShell").classList.remove("sources-collapsed"));
+    $("graphToggle").addEventListener("click", () => {
+      $("graphPanel").classList.toggle("open");
+      if ($("graphPanel").classList.contains("open")) { buildLegend(); loadGraph(); }
+    });
+    $("graphClose").addEventListener("click", closeGraphPanel);
     $("menuButton").addEventListener("click", e => { e.stopPropagation(); $("menuPopover").classList.toggle("open"); });
-    $("loadSample").addEventListener("click", loadSampleData);
     $("clearAllSources").addEventListener("click", () => { $("menuPopover").classList.remove("open"); clearAllSources(); });
     $("clearChat").addEventListener("click", clearChat);
     $("sourceSearch").addEventListener("input", e => {
       state.sourceFilter = e.target.value;
       state.sourceLimit = UI_CONFIG.sourcePageSize;
-      renderSourceList();
-    });
-    $("selectAllSources").addEventListener("click", () => {
-      state.files.forEach(f => state.selected.add(f.name));
-      renderSourceList();
-    });
-    $("selectNoSources").addEventListener("click", () => {
-      state.selected.clear();
       renderSourceList();
     });
     $("sources").addEventListener("change", e => {
@@ -1094,6 +1069,7 @@
       else state.selected.delete(name);
       setSourceStats();
       e.target.closest(".source-row")?.classList.toggle("is-muted", !e.target.checked);
+      refreshGraphIfOpen();
     });
     $("sources").addEventListener("click", e => {
       const btn = e.target.closest(".source-delete");
@@ -1106,25 +1082,37 @@
     document.addEventListener("dragleave", e => { e.preventDefault(); dragTimer = setTimeout(() => $("dropOverlay").classList.remove("active"), 200); });
     document.addEventListener("drop", e => { e.preventDefault(); $("dropOverlay").classList.remove("active"); if (e.dataTransfer.files.length) uploadFiles(Array.from(e.dataTransfer.files)); });
     function buildLegend() {
-      $("graphLegend").innerHTML = Object.keys(UI_CONFIG.graph.colors).map(k =>
+      const el = $("graphLegend");
+      if (!el) return;
+      el.innerHTML = Object.keys(UI_CONFIG.graph.colors).map(k =>
         '<span class="legend-item"><span class="legend-dot" style="background:' + UI_CONFIG.graph.colors[k] + '"></span>' + (UI_CONFIG.graph.labels[k]||k) + '</span>'
       ).join("");
     }
     async function loadGraph() {
-      $("graphStats").textContent = "Загрузка графа...";
+      const stats = $("graphStats");
+      if (!state.total) {
+        showGraphEmpty(UI_TEXT.graphEmpty);
+        return;
+      }
+      const url = graphDataUrl();
+      if (!url) {
+        showGraphEmpty(UI_TEXT.graphNoSelection);
+        return;
+      }
+      if (stats) stats.textContent = "Загрузка графа...";
       try {
-        const resp = await fetch("/graph/data");
+        const resp = await fetch(url);
         if (!resp.ok) throw new Error("HTTP " + resp.status);
         const data = await resp.json();
         const nodes = data.nodes || [];
         const edges = data.edges || [];
+        const container = $("graphVis");
+        if (!container) return;
         if (!nodes.length) {
-          $("graphVis").innerHTML = '<div style="padding:40px;text-align:center;color:#9aa0a6">Граф пуст — загрузите данные</div>';
-          $("graphStats").textContent = "0 узлов, 0 связей";
+          showGraphEmpty(UI_TEXT.graphEmpty);
           return;
         }
-        const nodesMap = {};
-        nodes.forEach(n => { nodesMap[n.id] = n; });
+        container.innerHTML = "";
         const visNodes = nodes.map(n => ({
           id: n.id,
           label: (n.name || n.id).substring(0, 25),
@@ -1136,50 +1124,39 @@
           size: 12,
         }));
         const visEdges = edges.map(e => ({
-          id: e.id,
-          from: e.source,
-          to: e.target,
-          label: e.type,
-          title: e.type,
+          id: e.id, from: e.source, to: e.target, label: e.type, title: e.type,
           arrows: "to",
           color: { color: "#9aa0a6", opacity: 0.5 },
           font: { size: 9, color: "#9aa0a6", strokeWidth: 0 },
         }));
-        const container = $("graphVis");
-        const network = new vis.Network(container, { nodes: new vis.DataSet(visNodes), edges: new vis.DataSet(visEdges) }, {
+        new vis.Network(container, { nodes: new vis.DataSet(visNodes), edges: new vis.DataSet(visEdges) }, {
           physics: { barnesHut: { gravitationalConstant: -3000, springLength: 150, springConstant: 0.02 }, stabilization: { iterations: 100 } },
           interaction: { hover: true, tooltipDelay: 200, zoomView: true, dragView: true },
           nodes: { font: { face: "system-ui" } },
           edges: { smooth: { type: "continuous" } },
         });
-        $("graphStats").textContent = visNodes.length + " узлов, " + visEdges.length + " связей";
+        if (stats) stats.textContent = visNodes.length + " узлов, " + visEdges.length + " связей";
       } catch(e) {
-        $("graphVis").innerHTML = '<div style="padding:40px;text-align:center;color:#d93025">Ошибка: ' + escapeHtml(e.message) + '<br>Убедитесь что Neo4j запущен: docker compose up -d</div>';
-        $("graphStats").textContent = "";
+        const container = $("graphVis");
+        if (container) container.innerHTML = '<div class="graph-empty error">Ошибка: ' + escapeHtml(e.message) + '<br>' + UI_TEXT.graphLoadErrorHint + '</div>';
+        if (stats) stats.textContent = "";
       }
     }
-    $("graphToggle").addEventListener("click", () => {
-      $("graphPanel").classList.toggle("open");
-      if ($("graphPanel").classList.contains("open")) {
-        buildLegend();
-        loadGraph();
-      }
-    });
-    $("graphClose").addEventListener("click", () => {
-      $("graphPanel").classList.remove("open");
-    });
     async function loadInitialState() {
       try {
         const r = await fetch("/state");
         if (!r.ok) return;
         const data = await r.json();
+        if (data.overview) state.overview = data.overview;
         if (data.source_files?.length) {
           mergeFiles(data.source_files);
           renderSourceList();
-          if (data.overview?.summary) {
-            addMsg("assistant", '<div class="overview-card">' + escapeHtml(data.overview.summary) + "</div>");
-          }
           if (data.suggested_questions?.length) renderSuggestions(data.suggested_questions);
+        } else {
+          state.files = [];
+          state.selected.clear();
+          state.overview = null;
+          renderSourceList();
         }
       } catch(e) { /* silent on startup */ }
     }

@@ -458,11 +458,27 @@ class Neo4jMaterialsKGRepository:
 
     def delete_source(self, source_id: str) -> int:
         rows = self._read(
-            "MATCH (n:Entity) WHERE $sid IN n.source_refs RETURN n.id AS id",
+            """
+            MATCH (n:Entity)
+            WHERE $sid IN n.source_refs
+            RETURN n.id AS id, n.source_refs AS source_refs
+            """,
             {"sid": source_id},
         )
-        entity_ids = [row["id"] for row in rows]
-        removed = len(entity_ids)
+        removed = 0
+        entity_ids: list[str] = []
+        for row in rows:
+            refs = list(row.get("source_refs") or [])
+            if len(refs) <= 1:
+                entity_ids.append(row["id"])
+                continue
+            new_refs = [ref for ref in refs if ref != source_id]
+            self._write(
+                "MATCH (n:Entity {id: $id}) SET n.source_refs = $refs",
+                {"id": row["id"], "refs": new_refs},
+            )
+            removed += 1
+        removed += len(entity_ids)
         if entity_ids:
             self._write(
                 "MATCH (n:TextUnit) WHERE n.source_entity_id IN $ids DETACH DELETE n",

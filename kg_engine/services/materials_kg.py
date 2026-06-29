@@ -154,18 +154,23 @@ class MaterialsKGService:
         trace_count = 0
         for experiment in batch:
             provenance_ref = experiment.source_ref or experiment.experiment_id
+            upload_file = experiment.metadata.get("source_file") or experiment.metadata.get(
+                "_uploaded_from"
+            )
             experiment_entity = self._ensure_entity(
                 EntityKind.EXPERIMENT,
                 experiment.title,
                 entity_id=experiment.experiment_id,
                 aliases=[experiment.experiment_id],
                 source_ref=provenance_ref,
+                upload_file=upload_file,
                 properties=experiment.metadata,
             )
             material = self._ensure_entity(
                 EntityKind.MATERIAL,
                 experiment.material_name,
                 source_ref=provenance_ref,
+                upload_file=upload_file,
             )
             self._link_entities(
                 experiment_entity.id,
@@ -180,6 +185,7 @@ class MaterialsKGService:
                     EntityKind.MODE,
                     experiment.mode_name,
                     source_ref=provenance_ref,
+                    upload_file=upload_file,
                 )
                 self._link_entities(
                     experiment_entity.id,
@@ -192,6 +198,7 @@ class MaterialsKGService:
                     EntityKind.TEAM,
                     experiment.team_name,
                     source_ref=provenance_ref,
+                    upload_file=upload_file,
                 )
                 self._link_entities(
                     experiment_entity.id,
@@ -204,6 +211,7 @@ class MaterialsKGService:
                     EntityKind.EQUIPMENT,
                     equipment_name,
                     source_ref=provenance_ref,
+                    upload_file=upload_file,
                 )
                 self._link_entities(
                     experiment_entity.id,
@@ -218,6 +226,7 @@ class MaterialsKGService:
                     entity_id=experiment.document_id,
                     aliases=[experiment.document_id],
                     source_ref=provenance_ref,
+                    upload_file=upload_file,
                 )
                 self._link_entities(
                     experiment_entity.id,
@@ -235,6 +244,7 @@ class MaterialsKGService:
                     mode_entity=mode_entity,
                     observation_input=observation_input,
                     provenance_ref=provenance_ref,
+                    upload_file=upload_file,
                 )
                 observation_ids.append(observation.id)
                 observation_count += 1
@@ -1685,6 +1695,56 @@ class MaterialsKGService:
             )
         return citations
 
+    def get_graph_data(self, source_ids: list[str]) -> dict[str, Any]:
+        """Return nodes/edges for visualization, filtered by uploaded source file names."""
+        source_set = {item.strip() for item in source_ids if item and item.strip()}
+        all_entities = self._repository.find_entities()
+        all_relations = self._repository.list_relations()
+        if not source_set:
+            return {"nodes": [], "edges": []}
+
+        seed_ids = {
+            entity.id
+            for entity in all_entities
+            if _entity_matches_sources(entity, source_set)
+        }
+        kept_ids = set(seed_ids)
+        for relation in all_relations:
+            if (
+                relation.source_entity_id in seed_ids
+                or relation.target_entity_id in seed_ids
+            ):
+                kept_ids.add(relation.source_entity_id)
+                kept_ids.add(relation.target_entity_id)
+
+        entities = [entity for entity in all_entities if entity.id in kept_ids]
+        entity_ids = {entity.id for entity in entities}
+        relations = [
+            relation
+            for relation in all_relations
+            if relation.source_entity_id in entity_ids
+            and relation.target_entity_id in entity_ids
+        ]
+        return {
+            "nodes": [
+                {
+                    "id": entity.id,
+                    "kind": entity.kind.value,
+                    "name": entity.canonical_name,
+                }
+                for entity in entities
+            ],
+            "edges": [
+                {
+                    "id": relation.id,
+                    "type": relation.relation_type.value,
+                    "source": relation.source_entity_id,
+                    "target": relation.target_entity_id,
+                }
+                for relation in relations
+            ],
+        }
+
     def get_source_overview(self) -> dict[str, Any]:
         """Generate overview of all loaded sources."""
         entities = self._repository.find_entities()
@@ -1878,12 +1938,14 @@ class MaterialsKGService:
         mode_entity: Entity | None,
         observation_input: ObservationInput,
         provenance_ref: str | None = None,
+        upload_file: str | None = None,
     ) -> Observation:
         src = provenance_ref or experiment.source_ref or experiment.experiment_id
         property_entity = self._ensure_entity(
             EntityKind.PROPERTY,
             observation_input.property_name,
             source_ref=src,
+            upload_file=upload_file,
         )
         evidence = self._create_evidence(
             source_kind=SourceKind.EXPERIMENT,
@@ -1970,15 +2032,36 @@ class MaterialsKGService:
 
     def _upsert_reference_entity(self, record: CanonicalEntityInput) -> Entity:
         entity_id = record.canonical_id or _stable_id(record.kind.value, record.name)
+        source_refs: list[str] = []
+        if record.source_ref:
+            source_refs.append(record.source_ref)
+        for key in ("source_file", "_uploaded_from"):
+            value = record.properties.get(key)
+            if value and value not in source_refs:
+                source_refs.append(value)
         entity = Entity(
             id=entity_id,
             kind=record.kind,
             canonical_name=record.name,
             aliases=record.aliases,
             properties=record.properties,
-            source_refs=[record.source_ref] if record.source_ref else [],
+            source_refs=source_refs,
         )
         return self._repository.upsert_entity(entity)
+
+    @staticmethod
+    def _merge_source_refs(
+        existing_refs: list[str] | None,
+        *,
+        source_ref: str | None,
+        upload_file: str | None,
+    ) -> list[str]:
+        refs = set(existing_refs or [])
+        if source_ref:
+            refs.add(source_ref)
+        if upload_file:
+            refs.add(upload_file)
+        return list(refs)
 
     def _ensure_entity(
         self,
@@ -1988,6 +2071,7 @@ class MaterialsKGService:
         entity_id: str | None = None,
         aliases: list[str] | None = None,
         source_ref: str | None = None,
+        upload_file: str | None = None,
         properties: dict[str, Any] | None = None,
     ) -> Entity:
         existing = self._repository.resolve_entity(kind, name)
@@ -1995,11 +2079,10 @@ class MaterialsKGService:
             updates: dict[str, Any] = {
                 "aliases": list({*existing.aliases, *(aliases or [])}),
                 "properties": {**existing.properties, **(properties or {})},
-                "source_refs": list(
-                    {
-                        *existing.source_refs,
-                        *([source_ref] if source_ref else []),
-                    }
+                "source_refs": self._merge_source_refs(
+                    existing.source_refs,
+                    source_ref=source_ref,
+                    upload_file=upload_file,
                 ),
             }
             return self._repository.upsert_entity(existing.model_copy(update=updates))
@@ -2009,7 +2092,11 @@ class MaterialsKGService:
             canonical_name=name,
             aliases=aliases or [],
             properties=properties or {},
-            source_refs=[source_ref] if source_ref else [],
+            source_refs=self._merge_source_refs(
+                None,
+                source_ref=source_ref,
+                upload_file=upload_file,
+            ),
         )
         return self._repository.upsert_entity(entity)
 

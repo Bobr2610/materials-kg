@@ -241,9 +241,16 @@ class InMemoryMaterialsKGRepository:
 
     def delete_source(self, source_id: str) -> int:
         removed = 0
-        entity_ids_to_remove = [
-            eid for eid, e in self._entities.items() if source_id in e.source_refs
-        ]
+        entity_ids_to_remove: list[str] = []
+        for eid, entity in list(self._entities.items()):
+            if source_id not in entity.source_refs:
+                continue
+            if len(entity.source_refs) <= 1:
+                entity_ids_to_remove.append(eid)
+                continue
+            new_refs = [ref for ref in entity.source_refs if ref != source_id]
+            self._entities[eid] = entity.model_copy(update={"source_refs": new_refs})
+            removed += 1
         for eid in entity_ids_to_remove:
             del self._entities[eid]
             removed += 1
