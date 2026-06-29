@@ -37,7 +37,10 @@ class CircuitBreaker:
 
     @property
     def state(self) -> str:
-        if self._state == "open" and time.monotonic() - self._last_failure_time >= self._recovery_timeout:
+        if (
+            self._state == "open"
+            and time.monotonic() - self._last_failure_time >= self._recovery_timeout
+        ):
             self._state = "half_open"
         return self._state
 
@@ -56,7 +59,8 @@ class CircuitBreaker:
             self._state = "open"
             logger.warning(
                 "Circuit breaker opened after %d failures (recovery in %.0fs)",
-                self._failure_count, self._recovery_timeout,
+                self._failure_count,
+                self._recovery_timeout,
             )
 
     @property

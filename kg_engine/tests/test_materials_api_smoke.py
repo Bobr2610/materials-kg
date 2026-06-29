@@ -75,26 +75,35 @@ def test_dashboard_and_sample_data_flow() -> None:
     assert 'id="restoreSources"' in dashboard.text
     assert 'id="menuButton"' in dashboard.text
     assert 'id="loadSample"' in dashboard.text
+    assert 'id="sourceSearch"' in dashboard.text
+    assert 'id="selectAllSources"' in dashboard.text
+    assert 'id="selectNoSources"' in dashboard.text
+    assert "uploadBatchSize" in dashboard.text
+    assert "renderSourceList" in dashboard.text
     assert 'addEventListener("click", loadSampleData)' in dashboard.text
 
-    ref_json = json.dumps({
-        "entities": [
-            {"kind": "material", "name": "Ti-6Al-4V", "aliases": ["Ti6Al4V"]},
-            {"kind": "mode", "name": "Annealed"},
-            {"kind": "property", "name": "Tensile Strength"},
-        ]
-    }).encode()
-    exp_json = json.dumps([
+    ref_json = json.dumps(
         {
-            "experiment_id": "exp-ui",
-            "title": "UI test",
-            "material_name": "Ti6Al4V",
-            "mode_name": "Annealed",
-            "observations": [
-                {"property_name": "Tensile Strength", "value": 950.0, "unit": "MPa"}
-            ],
+            "entities": [
+                {"kind": "material", "name": "Ti-6Al-4V", "aliases": ["Ti6Al4V"]},
+                {"kind": "mode", "name": "Annealed"},
+                {"kind": "property", "name": "Tensile Strength"},
+            ]
         }
-    ]).encode()
+    ).encode()
+    exp_json = json.dumps(
+        [
+            {
+                "experiment_id": "exp-ui",
+                "title": "UI test",
+                "material_name": "Ti6Al4V",
+                "mode_name": "Annealed",
+                "observations": [
+                    {"property_name": "Tensile Strength", "value": 950.0, "unit": "MPa"}
+                ],
+            }
+        ]
+    ).encode()
     upload = client.post(
         "/ingest/upload",
         files=[
@@ -169,24 +178,29 @@ def test_free_question_material_and_property_fallbacks() -> None:
     client = TestClient(app)
 
     import io
-    reference_json = json.dumps({
-        "entities": [
-            {"kind": "material", "name": "IN718", "aliases": ["Inconel 718"]},
-            {"kind": "property", "name": "Hardness"},
-            {"kind": "mode", "name": "Aged"},
-        ]
-    }).encode()
-    experiments_json = json.dumps([
+
+    reference_json = json.dumps(
         {
-            "experiment_id": "exp-in718",
-            "title": "IN718 test",
-            "material_name": "IN718",
-            "mode_name": "Aged",
-            "observations": [
-                {"property_name": "Hardness", "value": 42.0, "unit": "HRC"}
-            ],
+            "entities": [
+                {"kind": "material", "name": "IN718", "aliases": ["Inconel 718"]},
+                {"kind": "property", "name": "Hardness"},
+                {"kind": "mode", "name": "Aged"},
+            ]
         }
-    ]).encode()
+    ).encode()
+    experiments_json = json.dumps(
+        [
+            {
+                "experiment_id": "exp-in718",
+                "title": "IN718 test",
+                "material_name": "IN718",
+                "mode_name": "Aged",
+                "observations": [
+                    {"property_name": "Hardness", "value": 42.0, "unit": "HRC"}
+                ],
+            }
+        ]
+    ).encode()
 
     upload = client.post(
         "/ingest/upload",
@@ -228,8 +242,18 @@ def test_llm_extraction_and_answer_generation() -> None:
     mock_llm.embed.return_value = [[0.1] * 128]
     mock_llm.chat_json.return_value = {
         "entities": [
-            {"kind": "material", "name": "Ti-6Al-4V", "aliases": ["Ti64"], "properties": {"density": "4.43 g/cm3"}},
-            {"kind": "property", "name": "Tensile Strength", "aliases": ["UTS"], "properties": {}},
+            {
+                "kind": "material",
+                "name": "Ti-6Al-4V",
+                "aliases": ["Ti64"],
+                "properties": {"density": "4.43 g/cm3"},
+            },
+            {
+                "kind": "property",
+                "name": "Tensile Strength",
+                "aliases": ["UTS"],
+                "properties": {},
+            },
         ],
         "experiments": [
             {
@@ -238,9 +262,19 @@ def test_llm_extraction_and_answer_generation() -> None:
                 "material_name": "Ti-6Al-4V",
                 "mode_name": "Annealed",
                 "observations": [
-                    {"property_name": "Tensile Strength", "value": 950, "unit": "MPa", "confidence": 0.9}
+                    {
+                        "property_name": "Tensile Strength",
+                        "value": 950,
+                        "unit": "MPa",
+                        "confidence": 0.9,
+                    }
                 ],
-                "findings": [{"summary": "Annealed Ti64 shows good ductility", "confidence": 0.85}],
+                "findings": [
+                    {
+                        "summary": "Annealed Ti64 shows good ductility",
+                        "confidence": 0.85,
+                    }
+                ],
             }
         ],
         "relationships": [],
@@ -279,3 +313,25 @@ def test_llm_extraction_and_answer_generation() -> None:
     body = answer_resp.json()
     assert body["answer"]
     assert "950" in body["answer"] or "Tensile" in body["answer"]
+
+
+class TestDestructiveEndpoints:
+    """Verify DELETE endpoints are guarded by MATERIALS_ENABLE_DESTRUCTIVE_API."""
+
+    def test_delete_source_returns_403_by_default(self) -> None:
+        app = create_materials_app(
+            service=MaterialsKGService(InMemoryMaterialsKGRepository())
+        )
+        client = TestClient(app)
+        resp = client.delete("/sources/some-file.json")
+        assert resp.status_code == 403
+        assert "Destructive API disabled" in resp.text
+
+    def test_delete_all_sources_returns_403_by_default(self) -> None:
+        app = create_materials_app(
+            service=MaterialsKGService(InMemoryMaterialsKGRepository())
+        )
+        client = TestClient(app)
+        resp = client.delete("/sources")
+        assert resp.status_code == 403
+        assert "Destructive API disabled" in resp.text

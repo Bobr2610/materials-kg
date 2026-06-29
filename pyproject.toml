@@ -13,7 +13,6 @@ dependencies = [
     "fastapi>=0.100,<1",
     "neo4j>=5.20,<6",
     "python-multipart>=0.0.6",
-    "psycopg[binary]>=3.2,<4",
     "pydantic>=2.0,<3",
     "pydantic-settings>=2.0,<3",
     "uvicorn>=0.20",
@@ -29,17 +28,12 @@ dev = [
 
 [tool.setuptools.packages.find]
 include = ["kg_engine*"]
+exclude = ["kg_engine/tests*"]
 
 [tool.ruff]
-# Ruff configuration for materials-kg
-
-# Target Python version
 target-version = "py311"
-
-# Line length (PEP 8 standard)
 line-length = 88
 
-# Exclude directories
 exclude = [
     "__pycache__",
     ".git",
@@ -50,112 +44,101 @@ exclude = [
     "build",
     "dist",
     "*.egg-info",
+    ".agents",
+    ".cursor",
+    ".opencode",
     "kg_engine/config/loader.py",
     "kg_engine/config/schemas.py",
-    "kg_engine/graph",
     "kg_engine/scripts/build_knowledge_graph.py",
-    "kg_engine/tests/test_graph.py",
-    "kg_engine/tests/test_utils_formatters.py",
-    "kg_engine/tools",
-    "kg_engine/utils",
 ]
 
-# Include patterns
 include = ["*.py"]
 
-# Rule configuration
 [tool.ruff.lint]
-# Enable all rules
 select = ["E", "W", "F", "I", "N", "UP", "YTT", "ANN", "S", "BLE", "FBT", "B", "A", "COM", "C4", "DTZ", "T10", "EM", "EXE", "FA", "ISC", "ICN", "G", "INP", "PIE", "T20", "PYI", "PT", "Q", "RSE", "RET", "SLF", "SIM", "TID", "TCH", "ARG", "PTH", "ERA", "PD", "PGH", "PL", "TRY", "FLY", "NPY", "AIR", "PERF", "FURB", "LOG", "RUF"]
 
-# Ignore specific rules
 ignore = [
-    "S101",    # Use of assert (common in tests)
-    "S112",    # try-except-continue (used for skipping malformed assets)
-    "COM812",  # Missing trailing comma (conflicts with Black)
-    "ISC001",  # Implicitly concatenated string literals
-    "F401",    # Unused imports (prevent automatic deletion of useful imports)
-    "F403",    # Star imports
-    "PLR2004", # Magic value used in comparison
-    "PLR0911", # Too many return statements
-    "PLR0912", # Too many branches
-    "PLR0915", # Too many statements
-    "ANN202",  # Missing return type annotation for private function
-    "ANN204",  # Missing return type annotation for special method
-    "ANN401",  # Dynamically typed expressions
-    "N802",    # Function name should be lowercase (pydantic compat)
-    "RUF001",  # Ambiguous unicode characters (international datasets)
-    "T201",    # Print statements (debugging)
-    "BLE001",  # Blind except clauses
-    "UP032",   # Do not suggest {e!s} over {str(e)} in f-strings
-    "RUF010",  # Do not suggest {e!s} over {str(e)} in f-strings
-    "TRY300",  # Consider moving statement to else block (preferential style)
-    "TRY401",  # Redundant exception object in logging.exception (preferential style)
-    "PTH",     # Path-related suggestions (os.path vs Path - both are valid)
-    "DTZ005",  # datetime.now() without tz (intentionally using local timezone is okay)
-    "PLC0415", # Import not at top-level (required for fallback import pattern)
-    "E402",    # Script entrypoints adjust sys.path before importing local package modules
-    "E501",    # Long domain/model lines are tolerated
-    "EM102",   # Existing exceptions often build messages inline
-    "ERA001",  # Preserve explanatory migration comments
-    "INP001",  # Tests and scripts are allowed without package __init__.py files
-    "I001",    # Keep import layout stable during migration
-    "PERF401", # Prefer clarity over micro-optimized list construction
-    "PLR1714", # Keep explicit relation direction comparisons readable
-    "RET504",  # Keep intermediate names where they aid readability
-    "RUF022",  # Do not force __all__ sorting during migration
-    "RUF034",  # Preserve explicit conversion guards in repository row mapping
-    "S104",    # Local dev/API defaults intentionally bind to all interfaces
-    "S324",    # Stable non-security IDs use sha1 only for deterministic identifiers
-    "S608",    # SQL fragments use controlled clauses with bound parameters
-    "TC001",   # Runtime imports are acceptable for Pydantic/domain models
-    "TRY003",  # Existing exception message style is accepted
-    "UP042",   # str + Enum remains compatible with Pydantic/OpenAPI serialization
+    "S101",
+    "S112",
+    "COM812",
+    "ISC001",
+    "F401",
+    "F403",
+    "PLR2004",
+    "PLR0911",
+    "PLR0912",
+    "PLR0915",
+    "ANN202",
+    "ANN204",
+    "ANN401",
+    "N802",
+    "RUF001",
+    "T201",
+    "BLE001",
+    "UP032",
+    "RUF010",
+    "TRY300",
+    "TRY401",
+    "PTH",
+    "DTZ005",
+    "PLC0415",
+    "E402",
+    "E501",
+    "EM102",
+    "ERA001",
+    "INP001",
+    "I001",
+    "PERF401",
+    "PLR1714",
+    "RET504",
+    "RUF022",
+    "RUF034",
+    "S104",
+    "S324",
+    "S608",
+    "TC001",
+    "TRY003",
+    "UP042",
+    "S603",
+    "S607",
 ]
 
-# Rules that should not be automatically fixed to prevent deletion of useful code
 unfixable = [
-    "F401",    # Unused imports - flag but don't auto-remove
-    "F403",    # Star imports - flag but don't auto-remove
-    "F405",    # Name may be undefined due to star import
-    "T201",    # Print statements - flag but don't auto-remove (used for debugging)
-    "T10",     # Debugger statements - flag but don't auto-remove (used for debugging)
-    "BLE001",  # Blind except clauses - flag but don't auto-remove (may be intentional)
-    "C4",      # Comprehension rules - flag but don't auto-remove (preferential style)
-    "DTZ",     # Datetime rules - flag but don't auto-remove (preferential style)
-    "RET",     # Return rules - flag but don't auto-remove (preferential style)
-    "PLR",     # Pylint rules - flag but don't auto-remove (mostly preferential)
-    "ANN",     # Type annotations - flag but don't auto-remove (preferential)
-    "COM",     # Commas - flag but don't auto-remove (preferential style)
-    "ISC",     # Implicit string concatenation - flag but don't auto-remove (preferential)
-    "LOG",     # Logging rules - flag but don't auto-remove (Langfuse/Langsmith logging)
-    "PERF",    # Performance rules - flag but don't auto-remove (observability overhead)
-    "UP032",   # Do not rewrite str(e) to e!s in f-strings
+    "F401",
+    "F403",
+    "F405",
+    "T201",
+    "T10",
+    "BLE001",
+    "C4",
+    "DTZ",
+    "RET",
+    "PLR",
+    "ANN",
+    "COM",
+    "ISC",
+    "LOG",
+    "PERF",
+    "UP032",
 ]
 
-# Allow specific patterns
 [tool.ruff.lint.per-file-ignores]
 "**/tests/**/*.py" = ["S101", "PLR2004", "ANN001", "T201", "T10"]
 
-# Import sorting
 [tool.ruff.lint.isort]
 known-first-party = ["kg_engine"]
 force-sort-within-sections = true
-# Preserve existing import structure
 combine-as-imports = false
 split-on-trailing-comma = false
 
-# String formatting
 [tool.ruff.lint.flake8-quotes]
 docstring-quotes = "double"
 inline-quotes = "double"
 
-# Type checking
 [tool.ruff.lint.flake8-annotations]
 allow-star-arg-any = true
 ignore-fully-untyped = true
 
-# LangChain specific configurations
 [tool.ruff.lint.pylint]
 max-args = 10
 max-locals = 20
@@ -175,13 +158,11 @@ python_files = [
     "test_repository_factory.py",
 ]
 
-# Optional dev tooling (pip >= 25: pip install --group dev ; else: pip install "mypy>=1.11")
 [dependency-groups]
 dev = [
     "mypy>=1.11.0,<2",
 ]
 
-# Static typing
 [tool.mypy]
 python_version = "3.11"
 explicit_package_bases = true

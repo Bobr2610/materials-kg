@@ -12,20 +12,18 @@ TEST_NEO4J_PASSWORD = "unit-test-password"  # noqa: S105
 
 
 class TestRepositoryFactory:
-    def test_returns_memory_repository_when_no_dsn(self) -> None:
+    def test_returns_memory_repository_when_no_uri(self) -> None:
         settings = MagicMock()
         settings.materials_neo4j_uri = ""
-        settings.materials_pg_dsn = ""
         settings.materials_require_graph_db = False
 
         repo = create_materials_repository(settings)
 
         assert isinstance(repo, InMemoryMaterialsKGRepository)
 
-    def test_returns_memory_repository_when_dsn_is_none(self) -> None:
+    def test_returns_memory_repository_when_uri_is_none(self) -> None:
         settings = MagicMock()
-        settings.materials_neo4j_uri = ""
-        settings.materials_pg_dsn = None
+        settings.materials_neo4j_uri = None
         settings.materials_require_graph_db = False
 
         repo = create_materials_repository(settings)
@@ -42,7 +40,6 @@ class TestRepositoryFactory:
         settings.materials_neo4j_user = "neo4j"
         settings.materials_neo4j_password = TEST_NEO4J_PASSWORD
         settings.materials_neo4j_database = "neo4j"
-        settings.materials_pg_dsn = "postgresql://localhost/test"
         mock_repo = MagicMock()
         mock_create_neo4j_repository.return_value = mock_repo
 
@@ -66,7 +63,6 @@ class TestRepositoryFactory:
         settings.materials_neo4j_user = "neo4j"
         settings.materials_neo4j_password = TEST_NEO4J_PASSWORD
         settings.materials_neo4j_database = ""
-        settings.materials_pg_dsn = ""
         mock_repo = MagicMock()
         mock_create_neo4j_repository.return_value = mock_repo
 
@@ -77,62 +73,7 @@ class TestRepositoryFactory:
     def test_strict_runtime_requires_graph_database(self) -> None:
         settings = MagicMock()
         settings.materials_neo4j_uri = ""
-        settings.materials_pg_dsn = ""
         settings.materials_require_graph_db = True
 
-        with pytest.raises(RuntimeError, match="requires a graph database"):
+        with pytest.raises(RuntimeError, match="Neo4j is required for runtime"):
             create_materials_repository(settings)
-
-    @patch("kg_engine.repositories.factory.PostgresMaterialsKGRepository")
-    def test_returns_postgres_repository_when_dsn_set(
-        self,
-        mock_pg_repo_cls: MagicMock,
-    ) -> None:
-        settings = MagicMock()
-        settings.materials_neo4j_uri = ""
-        settings.materials_pg_dsn = "postgresql://localhost/test"
-
-        mock_psycopg = MagicMock()
-        mock_pg_repo_cls.return_value = MagicMock()
-
-        with patch.dict("sys.modules", {"psycopg": mock_psycopg}):
-            repo = create_materials_repository(settings)
-
-        mock_psycopg.connect.assert_called_once_with(
-            "postgresql://localhost/test",
-        )
-        assert repo is mock_pg_repo_cls.return_value
-
-    @patch("kg_engine.repositories.factory.PostgresMaterialsKGRepository")
-    def test_ensure_schema_called_when_flag_set(
-        self,
-        mock_pg_repo_cls: MagicMock,
-    ) -> None:
-        settings = MagicMock()
-        settings.materials_neo4j_uri = ""
-        settings.materials_pg_dsn = "postgresql://localhost/test"
-
-        mock_repo = MagicMock()
-        mock_pg_repo_cls.return_value = mock_repo
-
-        with patch.dict("sys.modules", {"psycopg": MagicMock()}):
-            create_materials_repository(settings, ensure_schema=True)
-
-        mock_repo.ensure_schema.assert_called_once()
-
-    @patch("kg_engine.repositories.factory.PostgresMaterialsKGRepository")
-    def test_ensure_schema_not_called_by_default(
-        self,
-        mock_pg_repo_cls: MagicMock,
-    ) -> None:
-        settings = MagicMock()
-        settings.materials_neo4j_uri = ""
-        settings.materials_pg_dsn = "postgresql://localhost/test"
-
-        mock_repo = MagicMock()
-        mock_pg_repo_cls.return_value = mock_repo
-
-        with patch.dict("sys.modules", {"psycopg": MagicMock()}):
-            create_materials_repository(settings)
-
-        mock_repo.ensure_schema.assert_not_called()

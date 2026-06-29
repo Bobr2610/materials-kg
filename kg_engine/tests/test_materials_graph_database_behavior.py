@@ -153,7 +153,9 @@ EXPERIMENTS_DATA = [
             },
         ],
         "text_units": [
-            {"content": "Microstructural SEM analysis of TEST-MATERIAL-001 confirmed grain size"}
+            {
+                "content": "Microstructural SEM analysis of TEST-MATERIAL-001 confirmed grain size"
+            }
         ],
     },
     {
@@ -200,15 +202,11 @@ def _build_test_graph() -> tuple[InMemoryMaterialsKGRepository, MaterialsKGServi
     repository = InMemoryMaterialsKGRepository()
     service = MaterialsKGService(repository)
 
-    service.ingest_reference_data(
-        ReferenceDataAdapter().from_payload(REFERENCE_DATA)
-    )
+    service.ingest_reference_data(ReferenceDataAdapter().from_payload(REFERENCE_DATA))
     service.ingest_experiments(
         ExperimentCatalogAdapter().from_payload(EXPERIMENTS_DATA)
     )
-    service.ingest_documents(
-        DocumentCorpusAdapter().from_payload(DOCUMENTS_DATA)
-    )
+    service.ingest_documents(DocumentCorpusAdapter().from_payload(DOCUMENTS_DATA))
     return repository, service
 
 

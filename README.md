@@ -4,9 +4,8 @@ Graph-backed Materials Hypothesis Factory for structured ingestion, explainable
 query, gap analysis, and ranked research hypothesis generation.
 
 The current product path is centered on typed domain models, a Neo4j-backed
-graph repository, and a compact service/API layer. PostgreSQL and in-memory
-repositories remain as legacy/test adapters, but the runtime graph engine for
-the site/API is Neo4j.
+graph repository, and a compact service/API layer. The runtime graph engine for
+the site/API is Neo4j. In-memory storage is used only for unit tests.
 
 ## Current Architecture
 
@@ -14,13 +13,11 @@ the site/API is Neo4j.
 materials-kg/
   kg_engine/
     domain/        # Typed entities, relations, observations, traces, query DTOs
-    repositories/  # Persistence protocol + Neo4j runtime, legacy Postgres, test memory
+    repositories/  # Persistence protocol + Neo4j runtime, test memory
     services/      # Ingestion/query/hypothesis API
     api/           # Application-facing HTTP/UI entrypoints
-    core/          # Document processing, chunking, indexing helpers
-    retrieval/     # Embeddings, reranking, search helpers
-    graph/         # Legacy prototype graph pipeline and agent-facing tools
-    agent/         # Legacy/prototype agent stack and orchestration
+    ingestion/     # File parsing and payload adapters
+    llm_core/      # LLM provider, extraction, answer generation
 ```
 
 ## What Is Source Of Truth
@@ -31,6 +28,7 @@ materials-kg/
   query, and hypothesis-generation API.
 - `kg_engine/repositories/neo4j.py` is the primary runtime backend and stores
   graph entities as Neo4j nodes and graph relations as Neo4j relationships.
+- `kg_engine/repositories/memory.py` is used only for unit tests.
 
 ## Storage Model
 
@@ -70,14 +68,11 @@ final_score =
 The main service surface is `MaterialsKGService`:
 
 ```python
-from kg_engine.repositories.memory import InMemoryMaterialsKGRepository
 from kg_engine.services.materials_kg import MaterialsKGService
+from kg_engine.repositories.factory import create_materials_repository
 
-service = MaterialsKGService(InMemoryMaterialsKGRepository())
-
-service.ingest_reference_data(...)
-service.ingest_experiments(...)
-service.ingest_documents(...)
+repository = create_materials_repository(settings, ensure_schema=True)
+service = MaterialsKGService(repository)
 ```
 
 These entrypoints support three complementary flows:
@@ -110,7 +105,7 @@ Start a local Neo4j DBMS in Neo4j Desktop or with Docker:
 docker compose up -d materials-neo4j
 ```
 
-Use:
+Set environment variables (see `.env.example`):
 
 ```bash
 set MATERIALS_NEO4J_URI=bolt://127.0.0.1:7687
@@ -180,11 +175,15 @@ python -m pytest -q
 ruff check kg_engine
 ```
 
+### Destructive API
+
+By default, `DELETE /sources/{name}` and `DELETE /sources` return 403.
+To enable, set `MATERIALS_ENABLE_DESTRUCTIVE_API=true` in `.env`.
+
 ## Legacy Stack Status
 
-`kg_engine/graph/`, `kg_engine/agent/`, and `kg_engine/repositories/postgres.py`
-remain in the repository as legacy/prototype or migration material. They are no
-longer the canonical runtime architecture for the Materials Hypothesis Factory.
+The canonical runtime architecture for the Materials Hypothesis Factory is
+Neo4j-first with in-memory storage for unit tests only.
 
 ## References
 

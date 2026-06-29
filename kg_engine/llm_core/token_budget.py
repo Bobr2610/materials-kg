@@ -56,7 +56,11 @@ def fit_context_to_budget(
 
     available = budget - system_prompt_tokens - safety_margin
     if available <= 0:
-        logger.warning("Token budget exhausted before context: budget=%d, system=%d", budget, system_prompt_tokens)
+        logger.warning(
+            "Token budget exhausted before context: budget=%d, system=%d",
+            budget,
+            system_prompt_tokens,
+        )
         return {}
 
     priority_groups = [
@@ -111,7 +115,9 @@ def fit_context_to_budget(
                 result[key] = value
             logger.debug(
                 "Truncated '%s' from %d to ~%d tokens",
-                key, current_tokens, token_limit,
+                key,
+                current_tokens,
+                token_limit,
             )
 
     return result

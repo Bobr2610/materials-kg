@@ -5,6 +5,4 @@ __all__ = [
     "InMemoryMaterialsKGRepository",
     "MaterialsKGRepository",
     "Neo4jMaterialsKGRepository",
-    "POSTGRES_SCHEMA_SQL",
-    "PostgresMaterialsKGRepository",
 ]

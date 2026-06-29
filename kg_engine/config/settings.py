@@ -37,7 +37,7 @@ except ImportError:
 class Settings(BaseSettings):
     """Application settings loaded from .env file.
 
-    Only materials KG core settings — no legacy RAG/ChromaDB/Gradio fields.
+    Materials KG core settings — Neo4j-first, LLM providers, and API config.
     """
 
     # LLM (used by llm_core for extraction and answer generation)
@@ -62,11 +62,11 @@ class Settings(BaseSettings):
     materials_neo4j_password: str = ""
     materials_neo4j_database: str = ""
     materials_require_graph_db: bool = False
-    materials_pg_dsn: str = ""
     materials_api_host: str = "0.0.0.0"
     materials_api_port: int = 8090
     materials_api_title: str = "Materials KG Core API"
     materials_api_ensure_schema: bool = False
+    materials_enable_destructive_api: bool = False
 
     # LLM context management
     llm_context_window: int = 128000

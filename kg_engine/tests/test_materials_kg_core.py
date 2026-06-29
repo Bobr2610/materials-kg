@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from kg_engine.domain.models import CanonicalEntityInput
 from kg_engine.domain.models import CoverageRuleInput
 from kg_engine.domain.models import DocumentInput
@@ -221,7 +223,9 @@ def test_material_mode_query_returns_experiments_findings_and_evidence_paths() -
     assert len(result.findings) == 1
     assert len(result.evidence) == 2
     assert result.search_hits
-    assert any(path.entity_ids[-1] != path.entity_ids[0] for path in related.evidence_paths)
+    assert any(
+        path.entity_ids[-1] != path.entity_ids[0] for path in related.evidence_paths
+    )
     assert len(history.traces) == 1
 
 
@@ -304,7 +308,10 @@ def test_hypothesis_factory_generates_ranked_graph_grounded_candidates() -> None
     )
 
     assert result.hypotheses
-    assert result.hypotheses[0].score.final_score >= result.hypotheses[-1].score.final_score
+    assert (
+        result.hypotheses[0].score.final_score
+        >= result.hypotheses[-1].score.final_score
+    )
     assert any(item.data_gap_ids for item in result.hypotheses)
     assert any(item.supporting_observation_ids for item in result.hypotheses)
     assert result.evidence
@@ -385,15 +392,15 @@ class TestSourceGrounding:
 
         assert result["warnings"], "Should warn when no entities match"
         assert any(
-            "не найден" in w or "не удалось" in w.lower() or "не сопоставить" in w.lower()
+            "не найден" in w
+            or "не удалось" in w.lower()
+            or "не сопоставить" in w.lower()
             for w in result["warnings"]
         ), f"Warning should indicate entity not found, got: {result['warnings']}"
 
     def test_answer_includes_source_fragments(self) -> None:
         service = self._build_service_with_data()
-        result = service.answer_question(
-            question="Hardness Ti-6Al-4V Annealing"
-        )
+        result = service.answer_question(question="Hardness Ti-6Al-4V Annealing")
 
         evidence = result.get("evidence", [])
         assert evidence, "Evidence list should not be empty for matched query"
@@ -406,9 +413,7 @@ class TestSourceGrounding:
 
     def test_search_hits_are_included_for_text_match(self) -> None:
         service = self._build_service_with_data()
-        result = service.answer_question(
-            question="hardness annealing Ti-6Al-4V"
-        )
+        result = service.answer_question(question="hardness annealing Ti-6Al-4V")
 
         search_hits = result.get("search_hits", [])
         assert search_hits, "Text search should find relevant units"
@@ -416,3 +421,401 @@ class TestSourceGrounding:
         hit = search_hits[0]
         assert "source_entity_id" in hit, "Search hit must reference source entity"
         assert "content" in hit, "Search hit must include content fragment"
+
+
+class TestSourceIdsIsolation:
+    """Verify that source_ids filters all returned structures by source file."""
+
+    def _build_two_source_service(self) -> MaterialsKGService:
+        service = build_service()
+        service.ingest_reference_data(
+            ReferenceDataBatch(
+                entities=[
+                    CanonicalEntityInput(kind=EntityKind.MATERIAL, name="Material-A"),
+                    CanonicalEntityInput(kind=EntityKind.PROPERTY, name="KPI-A"),
+                    CanonicalEntityInput(kind=EntityKind.MODE, name="Mode-A"),
+                    CanonicalEntityInput(kind=EntityKind.MATERIAL, name="Material-B"),
+                    CanonicalEntityInput(kind=EntityKind.PROPERTY, name="KPI-B"),
+                    CanonicalEntityInput(kind=EntityKind.MODE, name="Mode-B"),
+                ],
+                coverage_rules=[
+                    CoverageRuleInput(
+                        rule_id="rule-a",
+                        name="Material-A coverage",
+                        material_names=["Material-A"],
+                        mode_names=["Mode-A"],
+                        property_names=["KPI-A", "KPI-B"],
+                    ),
+                    CoverageRuleInput(
+                        rule_id="rule-b",
+                        name="Material-B coverage",
+                        material_names=["Material-B"],
+                        mode_names=["Mode-B"],
+                        property_names=["KPI-A", "KPI-B"],
+                    ),
+                ],
+            )
+        )
+        service.ingest_experiments(
+            [
+                ExperimentInput(
+                    experiment_id="exp-a",
+                    title="Experiment A",
+                    material_name="Material-A",
+                    mode_name="Mode-A",
+                    source_ref="file-a.json",
+                    observations=[
+                        ObservationInput(
+                            property_name="KPI-A",
+                            value=100.0,
+                            unit="MPa",
+                            fragment="Material-A KPI-A = 100 MPa",
+                        )
+                    ],
+                    findings=[
+                        FindingInput(summary="Material-A result", confidence=0.9)
+                    ],
+                    text_units=[
+                        TextUnitInput(content="Material-A experiment result for KPI-A")
+                    ],
+                ),
+                ExperimentInput(
+                    experiment_id="exp-b",
+                    title="Experiment B",
+                    material_name="Material-B",
+                    mode_name="Mode-B",
+                    source_ref="file-b.json",
+                    observations=[
+                        ObservationInput(
+                            property_name="KPI-B",
+                            value=200.0,
+                            unit="MPa",
+                            fragment="Material-B KPI-B = 200 MPa",
+                        )
+                    ],
+                    findings=[
+                        FindingInput(summary="Material-B result", confidence=0.9)
+                    ],
+                    text_units=[
+                        TextUnitInput(content="Material-B experiment result for KPI-B")
+                    ],
+                ),
+            ]
+        )
+        return service
+
+    def test_answer_source_ids_filters_all_structures(self) -> None:
+        service = self._build_two_source_service()
+        result_a = service.answer_question(
+            question="Material KPI values",
+            source_ids=["file-a.json"],
+        )
+
+        assert all(
+            "file-a.json" in e.get("metadata", {}).get("source_file", "")
+            or e["source_id"] == "file-a.json"
+            for e in result_a["evidence"]
+        )
+        assert all(
+            "file-b.json" not in e.get("metadata", {}).get("source_file", "")
+            for e in result_a["evidence"]
+        )
+        assert not any(
+            "Material-B" in e.get("canonical_name", "")
+            for e in result_a["matched_entities"]
+        )
+        assert all(
+            "file-b.json" not in h.get("metadata", {}).get("source_file", "")
+            for h in result_a["search_hits"]
+        )
+
+    def test_answer_empty_source_ids_returns_nothing(self) -> None:
+        service = self._build_two_source_service()
+        result = service.answer_question(
+            question="Material KPI values",
+            source_ids=[],
+        )
+        assert result["evidence"] == []
+        assert result["observations"] == []
+        assert result["experiments"] == []
+        assert result["relations"] == []
+        assert result["matched_entities"] == []
+        assert result["resolved_query"] == {
+            "material": None,
+            "mode": None,
+            "property_name": None,
+        }
+
+    def test_answer_source_ids_excludes_explicit_foreign_entity(self) -> None:
+        service = self._build_two_source_service()
+        result = service.answer_question(
+            question="Material-B KPI-B",
+            material="Material-B",
+            source_ids=["file-a.json"],
+        )
+
+        assert result["matched_entities"] == []
+        assert result["resolved_query"]["material"] is None
+        assert result["evidence"] == []
+        assert result["observations"] == []
+        assert result["experiments"] == []
+        assert not any("Material-B" in hit["content"] for hit in result["search_hits"])
+
+    def test_stream_source_ids_excludes_foreign_graph_context(self) -> None:
+        class CaptureLLM:
+            def __init__(self) -> None:
+                self.messages: list[dict[str, str]] = []
+
+            async def chat_stream(
+                self,
+                messages: list[dict[str, str]],
+                *,
+                temperature: float,
+                max_tokens: int,
+            ):
+                _ = (temperature, max_tokens)
+                self.messages = messages
+                yield "ok"
+
+        llm = CaptureLLM()
+        service = self._build_two_source_service()
+        service._llm = llm  # noqa: SLF001
+
+        async def collect() -> list[str]:
+            chunks: list[str] = []
+            async for chunk in service.answer_question_stream(
+                question="Material-B KPI-B",
+                material="Material-B",
+                source_ids=["file-a.json"],
+            ):
+                chunks.append(chunk)
+            return chunks
+
+        assert asyncio.run(collect()) == ["ok"]
+        graph_prompt = "\n".join(msg["content"] for msg in llm.messages)
+        assert "Experiment B" not in graph_prompt
+        assert "Material-B KPI-B = 200 MPa" not in graph_prompt
+
+    def test_hypotheses_source_ids_filters(self) -> None:
+        service = self._build_two_source_service()
+        result_a = service.generate_hypotheses(
+            HypothesisInput(
+                target_kpi="KPI-A",
+                material="Material-A",
+                source_ids=["file-a.json"],
+            )
+        )
+        all_supporting = set()
+        for hyp in result_a.hypotheses:
+            all_supporting.update(hyp.supporting_entity_ids)
+            all_supporting.update(hyp.supporting_evidence_ids)
+            all_supporting.update(hyp.supporting_observation_ids)
+        material_b_entity = service._repository.resolve_entity(  # noqa: SLF001
+            EntityKind.MATERIAL, "Material-B"
+        )
+        if material_b_entity:
+            assert material_b_entity.id not in all_supporting
+        for obs in result_a.observations:
+            if obs.experiment_id:
+                exp_entity = service._repository.get_entity(obs.experiment_id)  # noqa: SLF001
+                if exp_entity:
+                    assert exp_entity.canonical_name != "Material-B"
+
+    def test_source_overview_shows_files_not_ids(self) -> None:
+        service = self._build_two_source_service()
+        overview = service.get_source_overview()
+        source_files = overview["source_files"]
+        assert "file-a.json" in source_files
+        assert "file-b.json" in source_files
+        assert "exp-a" not in source_files
+        assert "exp-b" not in source_files
+
+    def test_hypothesis_no_literal_placeholders(self) -> None:
+        service = self._build_two_source_service()
+        result = service.generate_hypotheses(
+            HypothesisInput(
+                target_kpi="KPI-A",
+                material="Material-A",
+            )
+        )
+        for hyp in result.hypotheses:
+            for field_value in [
+                hyp.statement,
+                hyp.rationale,
+                hyp.test_plan,
+                hyp.novelty_rationale,
+                hyp.value_rationale,
+                *hyp.falsification_criteria,
+                *hyp.required_evidence,
+            ]:
+                assert "{prop_name}" not in field_value, (
+                    f"Literal placeholder {{prop_name}} found in {field_value!r}"
+                )
+                assert "{mat_name}" not in field_value, (
+                    f"Literal placeholder {{mat_name}} found in {field_value!r}"
+                )
+                assert "{mode_name}" not in field_value, (
+                    f"Literal placeholder {{mode_name}} found in {field_value!r}"
+                )
+
+
+class TestExpertAdjustments:
+    """Verify expert adjustments properly recalculate final_score."""
+
+    def test_value_adjustment_changes_final_score(self) -> None:
+        service = build_service()
+        service.ingest_reference_data(
+            ReferenceDataBatch(
+                entities=[
+                    CanonicalEntityInput(kind=EntityKind.MATERIAL, name="TestMat"),
+                    CanonicalEntityInput(kind=EntityKind.MODE, name="TestMode"),
+                    CanonicalEntityInput(kind=EntityKind.PROPERTY, name="TestKPI"),
+                ],
+                coverage_rules=[
+                    CoverageRuleInput(
+                        rule_id="test-rule",
+                        name="Test coverage",
+                        material_names=["TestMat"],
+                        mode_names=["TestMode"],
+                        property_names=["TestKPI"],
+                    )
+                ],
+            )
+        )
+        service.ingest_experiments(
+            [
+                ExperimentInput(
+                    experiment_id="exp-test",
+                    title="Test experiment",
+                    material_name="TestMat",
+                    mode_name="TestMode",
+                    observations=[
+                        ObservationInput(
+                            property_name="TestKPI",
+                            value=50.0,
+                            unit="MPa",
+                        )
+                    ],
+                )
+            ]
+        )
+        result_before = service.generate_hypotheses(
+            HypothesisInput(target_kpi="TestKPI", material="TestMat", max_hypotheses=1)
+        )
+        hyp_id = result_before.hypotheses[0].id
+        old_score = result_before.hypotheses[0].score.final_score
+
+        result_after = service.generate_hypotheses(
+            HypothesisInput(
+                target_kpi="TestKPI",
+                material="TestMat",
+                max_hypotheses=1,
+                expert_adjustments={hyp_id: {"value_adjustment": 0.5}},
+            )
+        )
+        new_score = result_after.hypotheses[0].score.final_score
+        assert new_score > old_score, (
+            f"value_adjustment should increase final_score: {old_score} -> {new_score}"
+        )
+
+    def test_risk_adjustment_changes_final_score(self) -> None:
+        service = build_service()
+        service.ingest_reference_data(
+            ReferenceDataBatch(
+                entities=[
+                    CanonicalEntityInput(kind=EntityKind.MATERIAL, name="TestMat"),
+                    CanonicalEntityInput(kind=EntityKind.MODE, name="TestMode"),
+                    CanonicalEntityInput(kind=EntityKind.PROPERTY, name="TestKPI"),
+                ],
+                coverage_rules=[
+                    CoverageRuleInput(
+                        rule_id="test-rule",
+                        name="Test coverage",
+                        material_names=["TestMat"],
+                        mode_names=["TestMode"],
+                        property_names=["TestKPI"],
+                    )
+                ],
+            )
+        )
+        service.ingest_experiments(
+            [
+                ExperimentInput(
+                    experiment_id="exp-test",
+                    title="Test experiment",
+                    material_name="TestMat",
+                    mode_name="TestMode",
+                    observations=[
+                        ObservationInput(
+                            property_name="TestKPI",
+                            value=50.0,
+                            unit="MPa",
+                        )
+                    ],
+                )
+            ]
+        )
+        result_before = service.generate_hypotheses(
+            HypothesisInput(target_kpi="TestKPI", material="TestMat", max_hypotheses=1)
+        )
+        hyp_id = result_before.hypotheses[0].id
+        old_score = result_before.hypotheses[0].score.final_score
+
+        result_after = service.generate_hypotheses(
+            HypothesisInput(
+                target_kpi="TestKPI",
+                material="TestMat",
+                max_hypotheses=1,
+                expert_adjustments={hyp_id: {"risk_adjustment": -0.3}},
+            )
+        )
+        new_score = result_after.hypotheses[0].score.final_score
+        assert new_score > old_score, (
+            f"risk_adjustment should change final_score: {old_score} -> {new_score}"
+        )
+
+    def test_reject_sets_final_score_zero(self) -> None:
+        service = build_service()
+        service.ingest_reference_data(
+            ReferenceDataBatch(
+                entities=[
+                    CanonicalEntityInput(kind=EntityKind.MATERIAL, name="TestMat"),
+                    CanonicalEntityInput(kind=EntityKind.MODE, name="TestMode"),
+                    CanonicalEntityInput(kind=EntityKind.PROPERTY, name="TestKPI"),
+                ],
+            )
+        )
+        service.ingest_experiments(
+            [
+                ExperimentInput(
+                    experiment_id="exp-test",
+                    title="Test experiment",
+                    material_name="TestMat",
+                    mode_name="TestMode",
+                    observations=[
+                        ObservationInput(
+                            property_name="TestKPI",
+                            value=50.0,
+                            unit="MPa",
+                        )
+                    ],
+                )
+            ]
+        )
+        result = service.generate_hypotheses(
+            HypothesisInput(
+                target_kpi="TestKPI",
+                material="TestMat",
+                max_hypotheses=10,
+                expert_adjustments={
+                    h.id: {"reject": True}
+                    for h in service.generate_hypotheses(
+                        HypothesisInput(target_kpi="TestKPI", material="TestMat")
+                    ).hypotheses
+                },
+            )
+        )
+        for hyp in result.hypotheses:
+            assert hyp.score.final_score == 0, (
+                f"Rejected hypothesis should have final_score=0, got {hyp.score.final_score}"
+            )

@@ -20,7 +20,9 @@ def _build_graph_context_str(graph_context: dict[str, Any]) -> str:
     parts: list[str] = []
 
     if graph_context.get("matched_entities"):
-        names = [e.get("canonical_name", "") for e in graph_context["matched_entities"][:10]]
+        names = [
+            e.get("canonical_name", "") for e in graph_context["matched_entities"][:10]
+        ]
         parts.append(f"Matched entities: {', '.join(names)}")
 
     if graph_context.get("experiments"):
@@ -38,12 +40,20 @@ def _build_graph_context_str(graph_context: dict[str, Any]) -> str:
         for ev in graph_context["evidence"][:8]:
             source_id = ev.get("source_id", "")
             source_kind = ev.get("source_kind", "")
-            fragment = ev.get("span", {}).get("fragment", "") if isinstance(ev.get("span"), dict) else ""
-            parts.append(f"Evidence [{source_kind}] from '{source_id}': {fragment[:300]}")
+            fragment = (
+                ev.get("span", {}).get("fragment", "")
+                if isinstance(ev.get("span"), dict)
+                else ""
+            )
+            parts.append(
+                f"Evidence [{source_kind}] from '{source_id}': {fragment[:300]}"
+            )
 
     if graph_context.get("search_hits"):
         for h in graph_context["search_hits"][:5]:
-            parts.append(f"Source text from '{h.get('source_entity_id', '')}': {h.get('content', '')[:400]}")
+            parts.append(
+                f"Source text from '{h.get('source_entity_id', '')}': {h.get('content', '')[:400]}"
+            )
 
     return "\n".join(parts) if parts else "No data found in knowledge graph."
 
@@ -97,10 +107,16 @@ def extract_entities_from_document(
     """Use LLM to extract entities, experiments, and relationships from a document."""
     from kg_engine.config.settings import settings
 
-    truncated = text[:settings.llm_embedding_truncation_chars]
+    truncated = text[: settings.llm_embedding_truncation_chars]
     messages = [
-        {"role": "system", "content": "You are a materials science knowledge graph extractor. Return only valid JSON."},
-        {"role": "user", "content": _EXTRACT_PROMPT.format(title=title, content=truncated)},
+        {
+            "role": "system",
+            "content": "You are a materials science knowledge graph extractor. Return only valid JSON.",
+        },
+        {
+            "role": "user",
+            "content": _EXTRACT_PROMPT.format(title=title, content=truncated),
+        },
     ]
     result = provider.chat_json(messages, temperature=0.1, max_tokens=4096)
     if not result:
@@ -121,13 +137,19 @@ def llm_enhance_reference_entities(
         return entities
     names = [e.get("name", "") for e in entities[:50]]
     messages = [
-        {"role": "system", "content": "You are a materials science ontology enricher. Return only valid JSON."},
-        {"role": "user", "content": (
-            "For each entity below, suggest additional aliases (alternative names, abbreviations, "
-            "common references) and any known properties. Return JSON: "
-            '{"enriched": [{"name": "...", "aliases": [...], "properties": {...}}]}'
-            f"\n\nEntities: {names}"
-        )},
+        {
+            "role": "system",
+            "content": "You are a materials science ontology enricher. Return only valid JSON.",
+        },
+        {
+            "role": "user",
+            "content": (
+                "For each entity below, suggest additional aliases (alternative names, abbreviations, "
+                "common references) and any known properties. Return JSON: "
+                '{"enriched": [{"name": "...", "aliases": [...], "properties": {...}}]}'
+                f"\n\nEntities: {names}"
+            ),
+        },
     ]
     result = provider.chat_json(messages, temperature=0.2, max_tokens=2048)
     enriched_list = result.get("enriched", [])
@@ -160,13 +182,17 @@ def llm_generate_answer(
     context_parts: list[str] = []
 
     if graph_context.get("matched_entities"):
-        names = [e.get("canonical_name", "") for e in graph_context["matched_entities"][:10]]
+        names = [
+            e.get("canonical_name", "") for e in graph_context["matched_entities"][:10]
+        ]
         context_parts.append(f"Matched entities: {', '.join(names)}")
 
     if graph_context.get("experiments"):
         exps = graph_context["experiments"][:5]
         for exp in exps:
-            context_parts.append(f"Experiment: {exp.get('canonical_name', exp.get('id', ''))}")
+            context_parts.append(
+                f"Experiment: {exp.get('canonical_name', exp.get('id', ''))}"
+            )
 
     if graph_context.get("observations"):
         obs = graph_context["observations"][:10]
@@ -191,7 +217,11 @@ def llm_generate_answer(
         for ev in evidence_items:
             source_id = ev.get("source_id", "")
             source_kind = ev.get("source_kind", "")
-            fragment = ev.get("span", {}).get("fragment", "") if isinstance(ev.get("span"), dict) else ""
+            fragment = (
+                ev.get("span", {}).get("fragment", "")
+                if isinstance(ev.get("span"), dict)
+                else ""
+            )
             confidence = ev.get("confidence", "")
             context_parts.append(
                 f"Evidence [{source_kind}] from '{source_id}' "
@@ -215,7 +245,11 @@ def llm_generate_answer(
             tgt = rel.get("target_entity_id", "")
             context_parts.append(f"Relation: {src} --[{rel_type}]--> {tgt}")
 
-    context_str = "\n".join(context_parts) if context_parts else "No data found in knowledge graph."
+    context_str = (
+        "\n".join(context_parts)
+        if context_parts
+        else "No data found in knowledge graph."
+    )
 
     system_prompt = (
         "You are a materials science research assistant.\n\n"
@@ -244,7 +278,10 @@ def llm_generate_answer(
     messages.append({"role": "user", "content": user_content})
 
     try:
-        from kg_engine.llm_core.token_budget import count_messages_tokens, fit_context_to_budget
+        from kg_engine.llm_core.token_budget import (
+            count_messages_tokens,
+            fit_context_to_budget,
+        )
         from kg_engine.config.settings import settings
 
         total_tokens = count_messages_tokens(messages)
@@ -259,12 +296,23 @@ def llm_generate_answer(
                 safety_margin=safety_margin + count_messages_tokens([messages[-1]]),
             )
             import json
+
             new_context_parts = []
-            for key in ["matched_entities", "experiments", "observations", "decision_history",
-                        "data_gaps", "evidence", "search_hits", "relations"]:
+            for key in [
+                "matched_entities",
+                "experiments",
+                "observations",
+                "decision_history",
+                "data_gaps",
+                "evidence",
+                "search_hits",
+                "relations",
+            ]:
                 val = truncated_parts.get(key)
                 if val:
-                    new_context_parts.append(f"{key}: {json.dumps(val, ensure_ascii=False, default=str)[:500]}")
+                    new_context_parts.append(
+                        f"{key}: {json.dumps(val, ensure_ascii=False, default=str)[:500]}"
+                    )
             user_content = f"Knowledge graph data:\n{'  '.join(new_context_parts)}\n\nQuestion: {question}"
             messages[-1] = {"role": "user", "content": user_content}
     except Exception:

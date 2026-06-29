@@ -180,13 +180,13 @@ class Neo4jMaterialsKGRepository:
         return [by_id[item] for item in evidence_ids if item in by_id]
 
     def upsert_relation(self, relation: Relation) -> Relation:
-        self._write(
+        rows = self._write(
             """
             MATCH (source:Entity {id: $source_id})
             MATCH (target:Entity {id: $target_id})
             MERGE (source)-[r:KG_RELATION {id: $id}]->(target)
             SET r += $payload
-            RETURN r
+            RETURN r, source.id AS source_id, target.id AS target_id
             """,
             {
                 "id": relation.id,
@@ -195,8 +195,9 @@ class Neo4jMaterialsKGRepository:
                 "payload": self._relation_to_properties(relation),
             },
         )
-        matches = self.list_relations(entity_id=relation.source_entity_id)
-        return next((item for item in matches if item.id == relation.id), relation)
+        if rows:
+            return self._record_to_relation(rows[0])
+        return relation
 
     def list_relations(
         self,
@@ -260,13 +261,21 @@ class Neo4jMaterialsKGRepository:
         mode_id: str | None = None,
     ) -> list[Observation]:
         rows = self._read("MATCH (n:Observation) RETURN n", {})
-        observations = [self._node_to_observation(_record_value(row, "n")) for row in rows]
+        observations = [
+            self._node_to_observation(_record_value(row, "n")) for row in rows
+        ]
         if material_id is not None:
-            observations = [item for item in observations if item.material_id == material_id]
+            observations = [
+                item for item in observations if item.material_id == material_id
+            ]
         if property_id is not None:
-            observations = [item for item in observations if item.property_id == property_id]
+            observations = [
+                item for item in observations if item.property_id == property_id
+            ]
         if experiment_id is not None:
-            observations = [item for item in observations if item.experiment_id == experiment_id]
+            observations = [
+                item for item in observations if item.experiment_id == experiment_id
+            ]
         if mode_id is not None:
             observations = [item for item in observations if item.mode_id == mode_id]
         return observations
@@ -306,9 +315,7 @@ class Neo4jMaterialsKGRepository:
             """,
             {
                 "rule_id": rule.rule_id,
-                "payload": _neo4j_properties(
-                    _jsonable(rule.model_dump(mode="json"))
-                ),
+                "payload": _neo4j_properties(_jsonable(rule.model_dump(mode="json"))),
             },
         )
         return rule
@@ -367,12 +374,16 @@ class Neo4jMaterialsKGRepository:
             return list(result)
 
     def _entity_to_properties(self, entity: Entity) -> dict[str, Any]:
-        return _neo4j_properties({
-            **_jsonable(entity.model_dump(mode="json")),
-            "kind": entity.kind.value,
-            "normalized_name": normalize_name(entity.canonical_name),
-            "normalized_aliases": [normalize_name(alias) for alias in entity.aliases],
-        })
+        return _neo4j_properties(
+            {
+                **_jsonable(entity.model_dump(mode="json")),
+                "kind": entity.kind.value,
+                "normalized_name": normalize_name(entity.canonical_name),
+                "normalized_aliases": [
+                    normalize_name(alias) for alias in entity.aliases
+                ],
+            }
+        )
 
     def _node_to_entity(self, node: Any) -> Entity:
         data = dict(node)
@@ -384,14 +395,16 @@ class Neo4jMaterialsKGRepository:
     def _evidence_to_properties(self, evidence: Evidence) -> dict[str, Any]:
         data = evidence.model_dump(mode="json")
         span = data.pop("span")
-        return _neo4j_properties({
-            **_jsonable(data),
-            "span_fragment": span.get("fragment"),
-            "span_start_offset": span.get("start_offset"),
-            "span_end_offset": span.get("end_offset"),
-            "span_row_reference": span.get("row_reference"),
-            "span_section": span.get("section"),
-        })
+        return _neo4j_properties(
+            {
+                **_jsonable(data),
+                "span_fragment": span.get("fragment"),
+                "span_start_offset": span.get("start_offset"),
+                "span_end_offset": span.get("end_offset"),
+                "span_row_reference": span.get("row_reference"),
+                "span_section": span.get("section"),
+            }
+        )
 
     def _node_to_evidence(self, node: Any) -> Evidence:
         data = dict(node)
@@ -445,12 +458,28 @@ class Neo4jMaterialsKGRepository:
 
     def delete_source(self, source_id: str) -> int:
         rows = self._read(
-            "MATCH (n:Entity) WHERE $sid IN n.source_refs OR n.properties CONTAINS $sid RETURN n.id AS id",
+            "MATCH (n:Entity) WHERE $sid IN n.source_refs RETURN n.id AS id",
             {"sid": source_id},
         )
         entity_ids = [row["id"] for row in rows]
         removed = len(entity_ids)
         if entity_ids:
+            self._write(
+                "MATCH (n:TextUnit) WHERE n.source_entity_id IN $ids DETACH DELETE n",
+                {"ids": entity_ids},
+            )
+            self._write(
+                "MATCH (n:Observation) WHERE n.experiment_id IN $ids OR n.material_id IN $ids DETACH DELETE n",
+                {"ids": entity_ids},
+            )
+            self._write(
+                "MATCH (n:DecisionTrace) WHERE n.experiment_id IN $ids OR any(eid IN n.entity_ids WHERE eid IN $ids) DETACH DELETE n",
+                {"ids": entity_ids},
+            )
+            self._write(
+                "MATCH ()-[r:KG_RELATION]->() WHERE r.source_entity_id IN $ids OR r.target_entity_id IN $ids DELETE r",
+                {"ids": entity_ids},
+            )
             self._write(
                 "MATCH (n:Entity) WHERE n.id IN $ids DETACH DELETE n",
                 {"ids": entity_ids},
@@ -458,18 +487,6 @@ class Neo4jMaterialsKGRepository:
         self._write(
             "MATCH (n:Evidence) WHERE n.source_id = $sid DETACH DELETE n",
             {"sid": source_id},
-        )
-        self._write(
-            "MATCH (n:TextUnit) WHERE n.source_entity_id IN $ids DETACH DELETE n",
-            {"ids": entity_ids},
-        )
-        self._write(
-            "MATCH (n:Observation) WHERE n.experiment_id IN $ids OR n.material_id IN $ids DETACH DELETE n",
-            {"ids": entity_ids},
-        )
-        self._write(
-            "MATCH (n:DecisionTrace) WHERE n.experiment_id IN $ids DETACH DELETE n",
-            {"ids": entity_ids},
         )
         return removed
 

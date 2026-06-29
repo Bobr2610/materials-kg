@@ -36,7 +36,9 @@ def _as_list(value: Any) -> list[Any]:
                 return parsed
         for separator in (";", "|"):
             if separator in stripped:
-                return [part.strip() for part in stripped.split(separator) if part.strip()]
+                return [
+                    part.strip() for part in stripped.split(separator) if part.strip()
+                ]
         return [stripped]
     return [value]
 
@@ -143,7 +145,7 @@ def _entity_from_item(
         canonical_id=_first(item, "canonical_id", "id", "code"),
         aliases=_as_list(item.get("aliases")),
         properties=properties,
-        source_ref=_first(item, "source_ref", "source", "file"),
+        source_ref=_first(item, "source_ref", "source", "file", "_uploaded_from"),
     )
 
 
@@ -252,7 +254,9 @@ class ExperimentCatalogAdapter:
                 observations_payload = [item]
             observations = [
                 ObservationInput(
-                    property_name=_first(entry, "property_name", "property", "property_id"),
+                    property_name=_first(
+                        entry, "property_name", "property", "property_id"
+                    ),
                     value=_as_float(_first(entry, "value", "measurement", "result")),
                     unit=_first(entry, "unit", "units"),
                     comparator=entry.get("comparator"),
@@ -272,7 +276,9 @@ class ExperimentCatalogAdapter:
                 if _first(entry, "property_name", "property", "property_id")
             ]
             findings_payload = _record_list(item.get("findings"))
-            if not findings_payload and _first(item, "finding", "summary", "conclusion"):
+            if not findings_payload and _first(
+                item, "finding", "summary", "conclusion"
+            ):
                 findings_payload = [item]
             findings = [
                 FindingInput(
@@ -312,10 +318,15 @@ class ExperimentCatalogAdapter:
                     title=_first(item, "title", "name", default=experiment_id),
                     material_name=material_name,
                     mode_name=_first(item, "mode_name", "mode", "regime"),
-                    equipment_names=_as_list(_first(item, "equipment_names", "equipment")),
+                    equipment_names=_as_list(
+                        _first(item, "equipment_names", "equipment")
+                    ),
                     team_name=_first(item, "team_name", "team", "lab", "laboratory"),
                     document_id=item.get("document_id"),
                     source_version=item.get("source_version"),
+                    source_ref=_first(
+                        item, "_uploaded_from", "source_ref", "source", "file"
+                    ),
                     observations=observations,
                     findings=findings,
                     text_units=text_units,
@@ -399,13 +410,22 @@ class DocumentCorpusAdapter:
                     document_id=document_id,
                     title=_first(item, "title", "name", default=document_id),
                     text=text,
-                    material_names=_as_list(_first(item, "material_names", "materials")),
+                    material_names=_as_list(
+                        _first(item, "material_names", "materials")
+                    ),
                     mode_names=_as_list(_first(item, "mode_names", "modes")),
-                    property_names=_as_list(_first(item, "property_names", "properties")),
-                    equipment_names=_as_list(_first(item, "equipment_names", "equipment")),
+                    property_names=_as_list(
+                        _first(item, "property_names", "properties")
+                    ),
+                    equipment_names=_as_list(
+                        _first(item, "equipment_names", "equipment")
+                    ),
                     team_names=_as_list(_first(item, "team_names", "teams", "labs")),
                     tag_names=_as_list(_first(item, "tag_names", "tags")),
                     experiment_ids=_as_list(item.get("experiment_ids")),
+                    source_ref=_first(
+                        item, "_uploaded_from", "source_ref", "source", "file"
+                    ),
                     findings=findings,
                     text_units=text_units,
                     metadata={

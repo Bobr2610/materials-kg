@@ -2,9 +2,8 @@
 
 This repository now targets a Neo4j-backed Materials Hypothesis Factory built
 around domain models, repository interfaces, and a small service layer. The
-older `kg_engine/graph/`, `kg_engine/agent/`, and Postgres storage path remain
-as prototype/donor or migration material, but the canonical runtime path is
-`domain -> repositories -> services -> api` with Neo4j as the graph engine.
+canonical runtime path is `domain -> repositories -> services -> api` with
+Neo4j as the graph engine. Legacy prototype code has been moved to `legacy/`.
 
 ---
 
@@ -59,7 +58,6 @@ Current implementations:
 
 - `Neo4jMaterialsKGRepository` for runtime graph persistence
 - `InMemoryMaterialsKGRepository` for tests only
-- `PostgresMaterialsKGRepository` retained as deprecated migration material
 
 ### Services
 
@@ -105,9 +103,6 @@ The repository bootstraps constraints for:
 - direct fit for evidence paths such as material -> experiment -> mode/property;
 - better product story than a custom in-memory graph engine;
 - easier UI graph visualization and debugging.
-
-Postgres/pgvector remains in `kg_engine/repositories/postgres.py` only as a
-legacy adapter. It is not the preferred runtime storage for new work.
 
 ---
 
@@ -217,11 +212,10 @@ Gap detection is rule-driven. It compares observed material/mode/property combin
 ## 5. Example Wiring
 
 ```python
-from kg_engine.repositories.postgres import PostgresMaterialsKGRepository
+from kg_engine.repositories.factory import create_materials_repository
 from kg_engine.services.materials_kg import MaterialsKGService
 
-repository = PostgresMaterialsKGRepository(connection)
-repository.ensure_schema()
+repository = create_materials_repository(settings, ensure_schema=True)
 
 service = MaterialsKGService(repository)
 
@@ -236,20 +230,11 @@ For tests and local checks, the same service can be wired to `InMemoryMaterialsK
 
 ---
 
-## 6. Legacy Prototype / Donor Stack
+## 6. Legacy Status
 
-The repository still contains earlier graph and agent-oriented modules:
-
-- `kg_engine/graph/`
-- `kg_engine/agent/`
-
-Treat them as:
-
-- prototype code that helped validate the problem space
-- donor code for extraction ideas, tool ergonomics, and migration references
-- non-canonical surfaces relative to the new service-backed core
-
-They should not be documented as the primary architecture anymore. New documentation, examples, and integration work should point first to `domain`, `repositories`, `services`, and the Postgres-backed path.
+The canonical runtime architecture is Neo4j-first with in-memory storage for
+unit tests only. New documentation, examples, and integration work should
+point to `domain`, `repositories`, `services`, and the Neo4j-backed path.
 
 ---
 
@@ -262,26 +247,28 @@ kg_engine/
 │   └── resolution.py      Name normalization and canonical resolution helpers
 ├── repositories/
 │   ├── protocols.py       Persistence interface for the service layer
-│   ├── postgres.py        Postgres + pgvector implementation
-│   └── memory.py          In-memory implementation for tests
+│   ├── neo4j.py           Neo4j runtime backend
+│   ├── memory.py          In-memory implementation for tests
+│   └── factory.py         Repository bootstrap from settings
 ├── services/
 │   └── materials_kg.py    Ingestion and query orchestration
+├── ingestion/             File parsing and payload adapters
+├── llm_core/              LLM provider, extraction, answer generation
 ├── api/                   App-facing entrypoints and adapters
 ├── core/                  Chunking, indexing, and document-processing helpers
 ├── retrieval/             Embeddings, reranking, and search helpers
-├── graph/                 Legacy prototype graph pipeline
-└── agent/                 Legacy prototype agent stack
+└── scripts/               CLI entrypoints for ingestion and API launch
 ```
 
 ---
 
 ## 8. Positioning Summary
 
-- The new core is graph-first, but service-backed rather than graph-module-centric.
+- The core is graph-first, service-backed, and Neo4j-first.
 - Domain models define the contract.
-- Repositories isolate persistence and make Postgres the main backend.
-- `pgvector` is part of the storage story for searchable text units and hybrid retrieval growth.
-- Ingestion and query flows should go through `MaterialsKGService`.
-- The old graph/agent stack is retained as prototype/donor material, not as the primary architecture.
+- Repositories isolate persistence with Neo4j as the production backend.
+- In-memory repository is for unit tests only.
+- Ingestion and query flows go through `MaterialsKGService`.
+- Legacy prototype code is in `legacy/`, not the primary architecture.
 
 **Related files:** [README.md](../README.md), [AGENTS.md](../AGENTS.md), [`.agents/skills/materials-knowledge-graph/SKILL.md`](../.agents/skills/materials-knowledge-graph/SKILL.md)

@@ -1,6 +1,5 @@
 # Minimal dependencies for the graph-first materials KG core.
 # Covers: domain, in-memory repository, service layer, REST API, and their tests.
-# Does NOT include: ChromaDB, LangChain, Gradio, ML model downloads, or agent runtime.
 
 fastapi>=0.100,<1
 pydantic>=2.0,<3
@@ -9,6 +8,3 @@ uvicorn>=0.20
 pytest>=8.0
 httpx>=0.24
 neo4j>=5.20,<6
-
-# Postgres repository (optional — only needed when materials_pg_dsn is set)
-# psycopg>=3.0,<4

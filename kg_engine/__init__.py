@@ -3,4 +3,3 @@
 from kg_engine.services.materials_kg import MaterialsKGService
 
 __all__ = ["MaterialsKGService"]
-

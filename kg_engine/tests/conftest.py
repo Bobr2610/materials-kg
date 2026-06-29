@@ -27,4 +27,3 @@ _project_root = _tests_dir.parent  # kg_engine/
 _repo_root = _project_root.parent  # repo root
 if str(_repo_root) not in sys.path:
     sys.path.insert(0, str(_repo_root))
-

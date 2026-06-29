@@ -82,21 +82,32 @@ class LLMProvider:
         for attempt in range(self.max_retries):
             try:
                 resp = self._client.post(
-                    f"{self.base_url}/v1/chat/completions", json=payload,
+                    f"{self.base_url}/v1/chat/completions",
+                    json=payload,
                 )
                 resp.raise_for_status()
                 data = resp.json()
                 return data["choices"][0]["message"]["content"]
-            except (httpx.TimeoutException, httpx.HTTPStatusError, httpx.ConnectError) as exc:
+            except (
+                httpx.TimeoutException,
+                httpx.HTTPStatusError,
+                httpx.ConnectError,
+            ) as exc:
                 if attempt == self.max_retries - 1:
-                    logger.exception("LLM chat call failed after %d attempts", self.max_retries)
+                    logger.exception(
+                        "LLM chat call failed after %d attempts", self.max_retries
+                    )
                     return ""
-                delay = self.retry_base_delay * (2 ** attempt) + random.uniform(0, 0.5)  # noqa: S311
+                delay = self.retry_base_delay * (2**attempt) + random.uniform(0, 0.5)  # noqa: S311
                 logger.warning(
                     "LLM chat attempt %d/%d failed (%s), retrying in %.1fs",
-                    attempt + 1, self.max_retries, exc, delay,
+                    attempt + 1,
+                    self.max_retries,
+                    exc,
+                    delay,
                 )
                 import time
+
                 time.sleep(delay)
             except Exception:
                 logger.exception("LLM chat call failed with unexpected error")
@@ -143,16 +154,26 @@ class LLMProvider:
                 resp.raise_for_status()
                 data = resp.json()
                 return [item["embedding"] for item in data["data"]]
-            except (httpx.TimeoutException, httpx.HTTPStatusError, httpx.ConnectError) as exc:
+            except (
+                httpx.TimeoutException,
+                httpx.HTTPStatusError,
+                httpx.ConnectError,
+            ) as exc:
                 if attempt == self.max_retries - 1:
-                    logger.exception("Embedding call failed after %d attempts", self.max_retries)
+                    logger.exception(
+                        "Embedding call failed after %d attempts", self.max_retries
+                    )
                     return [[] for _ in texts]
-                delay = self.retry_base_delay * (2 ** attempt) + random.uniform(0, 0.5)  # noqa: S311
+                delay = self.retry_base_delay * (2**attempt) + random.uniform(0, 0.5)  # noqa: S311
                 logger.warning(
                     "Embedding attempt %d/%d failed (%s), retrying in %.1fs",
-                    attempt + 1, self.max_retries, exc, delay,
+                    attempt + 1,
+                    self.max_retries,
+                    exc,
+                    delay,
                 )
                 import time
+
                 time.sleep(delay)
             except Exception:
                 logger.exception("Embedding call failed with unexpected error")
@@ -205,14 +226,23 @@ class LLMProvider:
                         except (json.JSONDecodeError, KeyError, IndexError):
                             continue
                 return
-            except (httpx.TimeoutException, httpx.HTTPStatusError, httpx.ConnectError) as exc:
+            except (
+                httpx.TimeoutException,
+                httpx.HTTPStatusError,
+                httpx.ConnectError,
+            ) as exc:
                 if attempt == self.max_retries - 1:
-                    logger.exception("LLM stream failed after %d attempts", self.max_retries)
+                    logger.exception(
+                        "LLM stream failed after %d attempts", self.max_retries
+                    )
                     return
-                delay = self.retry_base_delay * (2 ** attempt) + random.uniform(0, 0.5)  # noqa: S311
+                delay = self.retry_base_delay * (2**attempt) + random.uniform(0, 0.5)  # noqa: S311
                 logger.warning(
                     "LLM stream attempt %d/%d failed (%s), retrying in %.1fs",
-                    attempt + 1, self.max_retries, exc, delay,
+                    attempt + 1,
+                    self.max_retries,
+                    exc,
+                    delay,
                 )
                 await asyncio.sleep(delay)
             except Exception:
@@ -243,14 +273,24 @@ class LLMProvider:
                 resp.raise_for_status()
                 data = resp.json()
                 return [item["embedding"] for item in data["data"]]
-            except (httpx.TimeoutException, httpx.HTTPStatusError, httpx.ConnectError) as exc:
+            except (
+                httpx.TimeoutException,
+                httpx.HTTPStatusError,
+                httpx.ConnectError,
+            ) as exc:
                 if attempt == self.max_retries - 1:
-                    logger.exception("Async embedding call failed after %d attempts", self.max_retries)
+                    logger.exception(
+                        "Async embedding call failed after %d attempts",
+                        self.max_retries,
+                    )
                     return [[] for _ in texts]
-                delay = self.retry_base_delay * (2 ** attempt) + random.uniform(0, 0.5)  # noqa: S311
+                delay = self.retry_base_delay * (2**attempt) + random.uniform(0, 0.5)  # noqa: S311
                 logger.warning(
                     "Async embedding attempt %d/%d failed (%s), retrying in %.1fs",
-                    attempt + 1, self.max_retries, exc, delay,
+                    attempt + 1,
+                    self.max_retries,
+                    exc,
+                    delay,
                 )
                 await asyncio.sleep(delay)
             except Exception:

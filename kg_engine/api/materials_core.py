@@ -58,7 +58,14 @@ def _parse_uploaded_file(name: str, content: bytes) -> object | None:
                 if line.startswith("# "):
                     title = line[2:].strip() or title
                     break
-        return [{"document_id": name, "title": title, "text": text, "metadata": {"source_file": name}}]
+        return [
+            {
+                "document_id": name,
+                "title": title,
+                "text": text,
+                "metadata": {"source_file": name},
+            }
+        ]
     return None
 
 
@@ -107,18 +114,21 @@ def _notebook_dashboard_html() -> str:
   <title>Materials KG</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
+    html { height: 100%; }
     body {
       height: 100vh;
       background: #f0f2f5;
       color: #202124;
       font-family: "Google Sans", "Segoe UI", system-ui, -apple-system, sans-serif;
       -webkit-font-smoothing: antialiased;
+      overflow: hidden;
     }
     .app {
       height: 100vh;
       display: grid;
-      grid-template-columns: 380px 1fr;
+      grid-template-columns: minmax(320px, 380px) minmax(0, 1fr);
       gap: 0;
+      min-width: 0;
     }
     .app.sources-collapsed { grid-template-columns: 0 1fr; }
     .app.sources-collapsed .sources {
@@ -130,8 +140,9 @@ def _notebook_dashboard_html() -> str:
       background: #fff;
       border-right: 1px solid #dadce0;
       display: grid;
-      grid-template-rows: 48px auto 1fr;
+      grid-template-rows: 48px auto auto auto minmax(0, 1fr);
       min-width: 0;
+      min-height: 0;
     }
     .sources-top {
       display: flex;
@@ -153,6 +164,7 @@ def _notebook_dashboard_html() -> str:
     .add-sources {
       margin: 16px 16px 0;
       height: 42px;
+      min-width: 0;
       border: 1px solid #dadce0;
       border-radius: 24px;
       background: #fff;
@@ -165,15 +177,71 @@ def _notebook_dashboard_html() -> str:
       color: #202124;
       cursor: pointer;
       transition: background 0.15s;
+      white-space: nowrap;
     }
     .add-sources:hover { background: #f1f3f4; }
     .add-sources .plus { font-size: 20px; color: #5f6368; }
+    .source-tools {
+      padding: 10px 16px 6px;
+      display: grid;
+      gap: 8px;
+      border-bottom: 1px solid #f1f3f4;
+    }
+    .source-search {
+      height: 34px;
+      border: 1px solid #dadce0;
+      border-radius: 8px;
+      padding: 0 10px;
+      font: inherit;
+      font-size: 13px;
+      color: #202124;
+      background: #fff;
+      outline: none;
+    }
+    .source-search:focus { border-color: #1a73e8; }
+    .source-actions {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      min-height: 28px;
+      min-width: 0;
+    }
+    .source-actions-group {
+      display: flex;
+      gap: 4px;
+      align-items: center;
+      min-width: 0;
+    }
+    .source-action {
+      height: 28px;
+      border: 1px solid #dadce0;
+      border-radius: 7px;
+      background: #fff;
+      padding: 0 8px;
+      font: inherit;
+      font-size: 12px;
+      color: #5f6368;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .source-action:hover { background: #f8f9fa; color: #202124; }
+    .source-summary {
+      font-size: 11px;
+      color: #9aa0a6;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      text-align: right;
+    }
     .source-list {
       padding: 8px 16px 16px;
       overflow: auto;
       display: grid;
       align-content: start;
+      grid-auto-rows: min-content;
       gap: 8px;
+      min-height: 0;
     }
     .source-empty {
       min-height: 300px;
@@ -204,21 +272,25 @@ def _notebook_dashboard_html() -> str:
     }
     .source-row {
       display: grid;
-      grid-template-columns: 36px 1fr auto;
+      grid-template-columns: 18px 36px minmax(0, 1fr) 28px;
       align-items: center;
       gap: 10px;
-      padding: 8px 10px;
+      min-height: 54px;
+      padding: 8px 8px;
       border: 1px solid #e8eaed;
       border-radius: 10px;
       background: #fff;
+      min-width: 0;
     }
     .source-row:hover { background: #f8f9fa; }
+    .source-row.is-muted { opacity: 0.56; }
     .source-icon {
       width: 36px; height: 36px;
       border-radius: 8px;
       display: grid; place-items: center;
       font-size: 11px; font-weight: 700;
       color: #fff;
+      overflow: hidden;
     }
     .source-icon.json { background: #1a73e8; }
     .source-icon.jsonl { background: #1a73e8; }
@@ -227,7 +299,8 @@ def _notebook_dashboard_html() -> str:
     .source-icon.txt { background: #9aa0a6; }
     .source-icon.md { background: #9334e6; }
     .source-icon.unknown { background: #5f6368; }
-    .source-info b { display: block; font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; }
+    .source-info { min-width: 0; }
+    .source-info b { display: block; font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .source-info span { font-size: 11px; color: #9aa0a6; }
     .source-count {
       min-width: 28px; height: 22px;
@@ -254,17 +327,47 @@ def _notebook_dashboard_html() -> str:
     }
     .drop-overlay.active { display: grid; }
     .upload-progress {
-      padding: 8px 16px;
+      margin: 8px 16px 0;
+      padding: 10px 12px;
       font-size: 12px;
       color: #5f6368;
       display: none;
+      border: 1px solid #e8eaed;
+      border-radius: 10px;
+      background: #f8f9fa;
+      gap: 8px;
+      min-width: 0;
     }
-    .upload-progress.active { display: block; }
+    .upload-progress.active { display: grid; }
+    .upload-progress-bar {
+      height: 6px;
+      border-radius: 999px;
+      background: #e8eaed;
+      overflow: hidden;
+    }
+    .upload-progress-fill {
+      height: 100%;
+      width: 0%;
+      background: #1a73e8;
+      transition: width 0.18s ease-out;
+    }
+    .source-more {
+      height: 34px;
+      border: 1px solid #dadce0;
+      border-radius: 8px;
+      background: #fff;
+      color: #1a73e8;
+      font: inherit;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    .source-more:hover { background: #f8f9fa; }
     .chat {
       display: grid;
       grid-template-rows: 48px 1fr auto;
       background: #fff;
       min-width: 0;
+      min-height: 0;
     }
     .chat-top {
       display: flex;
@@ -272,6 +375,7 @@ def _notebook_dashboard_html() -> str:
       justify-content: space-between;
       padding: 0 12px 0 20px;
       border-bottom: 1px solid #dadce0;
+      min-width: 0;
     }
     .chat-top span { font-size: 15px; font-weight: 500; }
     .chat-top button {
@@ -283,7 +387,7 @@ def _notebook_dashboard_html() -> str:
       cursor: pointer;
     }
     .chat-top button:hover { background: #f1f3f4; }
-    .top-actions { position: relative; display: flex; gap: 4px; align-items: center; }
+    .top-actions { position: relative; display: flex; gap: 4px; align-items: center; min-width: 0; }
     .restore-sources {
       display: none;
       width: auto !important;
@@ -323,6 +427,8 @@ def _notebook_dashboard_html() -> str:
       padding: 0;
       display: grid;
       align-content: start;
+      min-height: 0;
+      min-width: 0;
     }
     .hero {
       min-height: calc(100vh - 160px);
@@ -349,6 +455,7 @@ def _notebook_dashboard_html() -> str:
       padding: 16px 20px;
       display: grid;
       gap: 8px;
+      min-width: 0;
     }
     .msg.user { justify-items: end; }
     .bubble {
@@ -358,6 +465,8 @@ def _notebook_dashboard_html() -> str:
       font-size: 14px;
       line-height: 1.5;
       max-width: 700px;
+      min-width: 0;
+      overflow-wrap: anywhere;
     }
     .msg.user .bubble { background: #f1f3f4; }
     .msg.assistant .bubble { background: #fff; border-color: #dadce0; }
@@ -368,6 +477,7 @@ def _notebook_dashboard_html() -> str:
       background: #fff;
       display: grid;
       gap: 10px;
+      min-width: 0;
     }
     .answer-card h3 {
       margin: 0;
@@ -377,7 +487,7 @@ def _notebook_dashboard_html() -> str:
       text-transform: uppercase;
       letter-spacing: 0.3px;
     }
-    .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+    .chips { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
     .chip {
       height: 26px;
       padding: 0 10px;
@@ -389,6 +499,9 @@ def _notebook_dashboard_html() -> str:
       display: inline-flex;
       align-items: center;
       gap: 6px;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
     .chip .kind { color: #9aa0a6; }
     .mini-list { display: grid; gap: 6px; list-style: none; }
@@ -402,11 +515,14 @@ def _notebook_dashboard_html() -> str:
     }
     .mini-list b { font-size: 13px; font-weight: 500; }
     .mini-list span { font-size: 12px; color: #9aa0a6; }
-    table.data { width: 100%; border-collapse: collapse; font-size: 13px; }
+    table.data { width: 100%; border-collapse: collapse; font-size: 13px; table-layout: fixed; }
     table.data th, table.data td {
       padding: 7px 8px;
       border-bottom: 1px solid #e8eaed;
       text-align: left;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
     table.data th { color: #9aa0a6; font-size: 12px; font-weight: 500; background: #f8f9fa; }
     .error { color: #d93025; }
@@ -416,11 +532,12 @@ def _notebook_dashboard_html() -> str:
       border-radius: 24px;
       background: #fff;
       display: grid;
-      grid-template-columns: 1fr auto auto;
+      grid-template-columns: minmax(0, 1fr) auto 40px;
       align-items: end;
       gap: 8px;
       padding: 8px 8px 8px 18px;
       transition: border-color 0.15s;
+      min-width: 0;
     }
     .composer:focus-within { border-color: #1a73e8; }
     .composer textarea {
@@ -443,6 +560,9 @@ def _notebook_dashboard_html() -> str:
       color: #9aa0a6;
       white-space: nowrap;
       padding-bottom: 6px;
+      max-width: 160px;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
     .send-btn {
       width: 40px; height: 40px;
@@ -460,12 +580,9 @@ def _notebook_dashboard_html() -> str:
     .send-btn:disabled { background: #dadce0; cursor: default; }
     .send-btn svg { width: 20px; height: 20px; fill: #fff; }
     .source-check {
-      position: absolute; left: 10px; top: 50%; transform: translateY(-50%);
       width: 16px; height: 16px; accent-color: #1a73e8; cursor: pointer;
     }
-    .source-row { position: relative; padding-left: 34px; }
     .source-delete {
-      position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
       width: 24px; height: 24px; border: none; background: none;
       border-radius: 50%; font-size: 16px; color: #9aa0a6; cursor: pointer;
       display: grid; place-items: center;
@@ -502,6 +619,7 @@ def _notebook_dashboard_html() -> str:
     .suggestions {
       display: flex; flex-wrap: wrap; gap: 6px;
       padding: 8px 20px;
+      min-width: 0;
     }
     .suggestion {
       height: 30px; padding: 0 12px;
@@ -509,18 +627,31 @@ def _notebook_dashboard_html() -> str:
       background: #fff; font-size: 12px; color: #5f6368;
       display: inline-flex; align-items: center;
       cursor: pointer; white-space: nowrap;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
     .suggestion:hover { background: #f1f3f4; border-color: #1a73e8; color: #1a73e8; }
     .overview-card {
       border: 1px solid #e8eaed; border-radius: 10px;
       padding: 10px; background: #f8f9fa;
       font-size: 13px; color: #5f6368; line-height: 1.45;
+      overflow-wrap: anywhere;
     }
     @media (max-width: 860px) {
       .app { grid-template-columns: 1fr; }
       .sources { display: none; }
       .app.sources-collapsed { grid-template-columns: 1fr; }
       .restore-sources { display: none !important; }
+      .chat-top { padding-left: 14px; }
+      .msg { padding: 12px 14px; }
+      .composer-wrap { padding: 8px 12px 14px; }
+      .composer {
+        grid-template-columns: minmax(0, 1fr) 40px;
+        border-radius: 18px;
+      }
+      .composer .src-label { display: none; }
+      .suggestions { padding: 8px 14px; overflow: hidden; }
     }
     .graph-toggle {
       width: 32px; height: 32px;
@@ -584,6 +715,8 @@ def _notebook_dashboard_html() -> str:
       background: #f8f9fa;
       min-height: 400px;
       max-height: 600px;
+      min-width: 0;
+      overflow: hidden;
     }
     .graph-vis-wrap #graphVis { width: 100%; height: 400px; }
     .graph-stats {
@@ -598,6 +731,15 @@ def _notebook_dashboard_html() -> str:
     .graph-neo4j-link:hover { text-decoration: underline; }
     @media (max-width: 860px) {
       .graph-panel { width: 100%; }
+      .graph-vis-wrap { min-height: 320px; }
+      .graph-vis-wrap #graphVis { height: 320px; }
+    }
+    @media (max-width: 420px) {
+      .top-actions { gap: 2px; }
+      .chat-top button { width: 30px; height: 30px; }
+      .bubble { border-radius: 14px; padding: 10px 12px; }
+      .answer-card { padding: 10px; border-radius: 10px; }
+      table.data { font-size: 12px; }
     }
   </style>
   <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
@@ -614,8 +756,20 @@ def _notebook_dashboard_html() -> str:
       <button class="add-sources" id="addSources">
         <span class="plus">+</span> Добавить источники
       </button>
-      <div style="font-size:11px;color:#9aa0a6;padding:0 16px;margin-top:4px">Галочка = источник учитывается в запросах</div>
-      <div class="upload-progress" id="uploadProgress">Загрузка файлов...</div>
+      <div class="source-tools">
+        <input class="source-search" id="sourceSearch" type="search" placeholder="Найти источник" aria-label="Найти источник">
+        <div class="source-actions">
+          <div class="source-actions-group">
+            <button class="source-action" id="selectAllSources" type="button">Все</button>
+            <button class="source-action" id="selectNoSources" type="button">Ни один</button>
+          </div>
+          <span class="source-summary" id="sourceSummary">0 выбрано</span>
+        </div>
+      </div>
+      <div class="upload-progress" id="uploadProgress">
+        <div id="uploadProgressText">Загрузка файлов...</div>
+        <div class="upload-progress-bar"><div class="upload-progress-fill" id="uploadProgressFill"></div></div>
+      </div>
       <div class="source-list" id="sources">
         <div class="source-empty" id="sourceEmpty">
           <div>
@@ -674,12 +828,56 @@ def _notebook_dashboard_html() -> str:
       <div class="graph-legend" id="graphLegend"></div>
       <div class="graph-vis-wrap"><div id="graphVis"></div></div>
       <div class="graph-stats" id="graphStats"></div>
-      <div><a class="graph-neo4j-link" href="http://localhost:7474" target="_blank">Открыть Neo4j Browser →</a></div>
     </div>
   </div>
   <script>
     const $ = (id) => document.getElementById(id);
-    const state = { files: [], total: 0 };
+    const UI_CONFIG = {
+      uploadBatchSize: 25,
+      sourcePageSize: 160,
+      maxChipRows: 20,
+      maxListRows: 8,
+      maxTableRows: 10,
+      maxCitations: 8,
+      supportedTypes: ["json", "jsonl", "csv", "tsv", "txt", "md"],
+      graph: {
+        colors: {
+          material: "#1a73e8", property: "#34a853", mode: "#f9ab00",
+          experiment: "#ea4335", equipment: "#9aa0a6", team: "#9334e6",
+          document: "#fbbc04", tag: "#00897b"
+        },
+        labels: {
+          material: "Материал", property: "Свойство", mode: "Режим",
+          experiment: "Эксперимент", equipment: "Оборудование", team: "Команда",
+          document: "Документ", tag: "Тег"
+        }
+      }
+    };
+    const UI_TEXT = {
+      noData: "Нет данных",
+      noMeasurements: "Измерения не найдены",
+      noExperiments: "Эксперименты не найдены",
+      noDecisionHistory: "История решений не найдена",
+      noGaps: "Пробелы не найдены",
+      answerMissing: "Ответ не сформирован.",
+      citationsTitle: "Источники цитат",
+      sourceEmptyTitle: "Здесь появятся загруженные источники",
+      sourceEmptyBody: "Нажмите &laquo;Добавить источники&raquo; или перетащите файлы: JSON, JSONL, CSV, TSV, TXT, MD",
+      sourceNotFoundTitle: "Источники не найдены",
+      sourceNotFoundBody: "Измените строку поиска или загрузите другой файл.",
+      graphEmpty: "Граф пуст — загрузите данные",
+      graphLoadErrorHint: "Убедитесь что Neo4j запущен: docker compose up -d",
+      sampleLoaded: "Пример данных загружен.",
+      allSourcesRemoved: "Все источники удалены. Граф пуст.",
+      filesAccepted: "источники приняты"
+    };
+    const state = {
+      files: [],
+      selected: new Set(),
+      sourceFilter: "",
+      sourceLimit: UI_CONFIG.sourcePageSize,
+      total: 0
+    };
 
     function escapeHtml(v) {
       return String(v ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
@@ -690,9 +888,52 @@ def _notebook_dashboard_html() -> str:
       return r.json();
     }
     function formatSize(bytes) {
+      bytes = Number(bytes || 0);
       if (bytes < 1024) return bytes + " B";
       if (bytes < 1048576) return (bytes / 1024).toFixed(1) + " KB";
       return (bytes / 1048576).toFixed(1) + " MB";
+    }
+    function formatCount(n, one, few, many) {
+      const mod10 = n % 10;
+      const mod100 = n % 100;
+      if (mod10 === 1 && mod100 !== 11) return n + " " + one;
+      if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return n + " " + few;
+      return n + " " + many;
+    }
+    function sourceType(file) {
+      const ext = file.name?.split(".").pop();
+      return String(ext || file.type || "unknown").toLowerCase();
+    }
+    function normalizeFile(file) {
+      const name = file.name || "unnamed";
+      const type = sourceType(file);
+      return {
+        name,
+        size: Number(file.size || 0),
+        type: UI_CONFIG.supportedTypes.includes(type) ? type : "unknown"
+      };
+    }
+    function setSourceStats() {
+      state.total = state.files.length;
+      const selectedCount = state.files.filter(f => state.selected.has(f.name)).length;
+      const totalText = formatCount(state.total, "источник", "источника", "источников");
+      const selectedText = selectedCount + " выбрано";
+      if ($("sourceNote")) $("sourceNote").textContent = state.total ? selectedText : "0 источников";
+      if ($("notebookMeta")) $("notebookMeta").textContent = totalText;
+      if ($("sourceSummary")) $("sourceSummary").textContent = state.total ? selectedText + " из " + state.total : "0 выбрано";
+    }
+    function mergeFiles(files, selectNew = true) {
+      const byName = new Map(state.files.map(f => [f.name, f]));
+      files.map(normalizeFile).forEach(file => {
+        const existing = byName.get(file.name);
+        byName.set(file.name, existing ? { ...existing, ...file } : file);
+        if (selectNew && !state.selected.has(file.name)) state.selected.add(file.name);
+      });
+      state.files = Array.from(byName.values()).sort((a, b) => a.name.localeCompare(b.name));
+      setSourceStats();
+    }
+    function emptySourcesHtml() {
+      return '<div class="source-empty" id="sourceEmpty"><div><div class="doc-icon"><svg viewBox="0 0 24 24"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg></div><strong>' + UI_TEXT.sourceEmptyTitle + '</strong><p>' + UI_TEXT.sourceEmptyBody + '</p></div></div>';
     }
     function removeHero() { $("hero")?.remove(); }
     function addMsg(role, html) {
@@ -704,54 +945,72 @@ def _notebook_dashboard_html() -> str:
       $("chatBody").scrollTop = $("chatBody").scrollHeight;
     }
     function chipList(rows) {
-      if (!rows?.length) return '<span style="color:#9aa0a6;font-size:13px">Нет данных</span>';
-      return '<div class="chips">' + rows.slice(0,20).map(r =>
+      if (!rows?.length) return '<span style="color:#9aa0a6;font-size:13px">' + UI_TEXT.noData + '</span>';
+      return '<div class="chips">' + rows.slice(0, UI_CONFIG.maxChipRows).map(r =>
         '<span class="chip">' + escapeHtml(r.canonical_name) + ' <span class="kind">' + escapeHtml(r.kind) + "</span></span>"
       ).join("") + "</div>";
     }
     function listBlock(rows, render, empty) {
       if (!rows?.length) return '<span style="color:#9aa0a6;font-size:13px">' + escapeHtml(empty) + "</span>";
-      return '<ul class="mini-list">' + rows.slice(0,8).map(r => "<li>" + render(r) + "</li>").join("") + "</ul>";
+      return '<ul class="mini-list">' + rows.slice(0, UI_CONFIG.maxListRows).map(r => "<li>" + render(r) + "</li>").join("") + "</ul>";
     }
     function tableBlock(rows) {
-      if (!rows?.length) return '<span style="color:#9aa0a6;font-size:13px">Измерения не найдены</span>';
+      if (!rows?.length) return '<span style="color:#9aa0a6;font-size:13px">' + UI_TEXT.noMeasurements + '</span>';
       return '<table class="data"><thead><tr><th>Значение</th><th>Единица</th><th>Confidence</th><th>Evidence</th></tr></thead><tbody>' +
-        rows.slice(0,10).map(r => "<tr><td>" + escapeHtml(r.value??"n/a") + "</td><td>" + escapeHtml(r.unit??"") + "</td><td>" + escapeHtml(r.confidence) + "</td><td>" + escapeHtml(r.evidence_id) + "</td></tr>").join("") +
+        rows.slice(0, UI_CONFIG.maxTableRows).map(r => "<tr><td>" + escapeHtml(r.value??"n/a") + "</td><td>" + escapeHtml(r.unit??"") + "</td><td>" + escapeHtml(r.confidence) + "</td><td>" + escapeHtml(r.evidence_id) + "</td></tr>").join("") +
         "</tbody></table>";
     }
     function renderCitations(citations) {
       if (!citations?.length) return "";
-      const items = citations.slice(0,8).map(c =>
+      const items = citations.slice(0, UI_CONFIG.maxCitations).map(c =>
         '<div class="cite-item"><b>[' + escapeHtml(c.source_kind) + '] ' + escapeHtml(c.source_id) + "</b> — " + escapeHtml((c.fragment||"").substring(0,150)) + (c.fragment?.length > 150 ? "..." : "") + "</div>"
       ).join("");
-      return '<div class="citations-block"><h3>Источники цитат</h3>' + items + "</div>";
+      return '<div class="citations-block"><h3>' + UI_TEXT.citationsTitle + '</h3>' + items + "</div>";
     }
     function getSelectedSources() {
-      const checks = document.querySelectorAll('.source-check:checked');
-      const allChecks = document.querySelectorAll('.source-check');
-      if (!checks.length || checks.length === allChecks.length) return null;
-      return Array.from(checks).map(c => c.dataset.name).filter(Boolean);
+      if (!state.files.length) return null;
+      const selected = state.files.filter(f => state.selected.has(f.name)).map(f => f.name);
+      if (selected.length === state.files.length) return null;
+      return selected;
     }
-    function renderSources(uploadResult) {
-      const uploaded = uploadResult.uploaded || [];
-      uploaded.forEach(f => {
-        if (!state.files.find(x => x.name === f.name)) state.files.push(f);
-      });
-      state.total = state.files.length;
-      if ($("sourceNote")) $("sourceNote").textContent = state.total + " источников";
-      if ($("notebookMeta")) $("notebookMeta").textContent = state.total + " источников";
-      $("sourceEmpty")?.remove();
-      $("sources").innerHTML = state.files.map(f => {
-        const t = f.type || "unknown";
-        return '<div class="source-row"><input type="checkbox" class="source-check" checked data-name="' + escapeHtml(f.name) + '">' +
+    function renderSourceList() {
+      const query = state.sourceFilter.trim().toLowerCase();
+      const filtered = query
+        ? state.files.filter(f => f.name.toLowerCase().includes(query) || sourceType(f).includes(query))
+        : state.files;
+      const visible = filtered.slice(0, state.sourceLimit);
+      if (!state.files.length) {
+        $("sources").innerHTML = emptySourcesHtml();
+        setSourceStats();
+        return;
+      }
+      if (!filtered.length) {
+        $("sources").innerHTML = '<div class="source-empty"><div><strong>' + UI_TEXT.sourceNotFoundTitle + '</strong><p>' + UI_TEXT.sourceNotFoundBody + '</p></div></div>';
+        setSourceStats();
+        return;
+      }
+      $("sources").innerHTML = visible.map(f => {
+        const t = sourceType(f);
+        const checked = state.selected.has(f.name) ? " checked" : "";
+        const muted = checked ? "" : " is-muted";
+        return '<div class="source-row' + muted + '"><input type="checkbox" class="source-check"' + checked + ' data-name="' + escapeHtml(f.name) + '">' +
           '<div class="source-icon ' + t + '">' + t.toUpperCase() + "</div>" +
-          '<div class="source-info"><b>' + escapeHtml(f.name) + "</b><span>" + formatSize(f.size) + "</span></div>" +
+          '<div class="source-info"><b title="' + escapeHtml(f.name) + '">' + escapeHtml(f.name) + "</b><span>" + formatSize(f.size) + "</span></div>" +
           '<button class="source-delete" data-name="' + escapeHtml(f.name) + '" title="Удалить">&times;</button></div>';
-      }).join("");
-      document.querySelectorAll(".source-delete").forEach(btn => {
-        btn.addEventListener("click", () => deleteSource(btn.dataset.name));
+      }).join("") + (filtered.length > visible.length
+        ? '<button class="source-more" id="showMoreSources" type="button">Показать ещё ' + Math.min(UI_CONFIG.sourcePageSize, filtered.length - visible.length) + '</button>'
+        : "");
+      $("showMoreSources")?.addEventListener("click", () => {
+        state.sourceLimit += UI_CONFIG.sourcePageSize;
+        renderSourceList();
       });
-      if (uploadResult.overview) {
+      setSourceStats();
+    }
+    function renderSources(uploadResult, options = {}) {
+      const uploaded = uploadResult.uploaded || [];
+      if (uploaded.length) mergeFiles(uploaded);
+      renderSourceList();
+      if (uploadResult.overview && options.notify !== false) {
         const ov = uploadResult.overview;
         addMsg("assistant", '<div class="overview-card">' + escapeHtml(ov.summary) + "</div>");
       }
@@ -774,37 +1033,65 @@ def _notebook_dashboard_html() -> str:
       const w = (data.warnings||[]).map(r => '<span class="chip" style="border-color:#fdd835;background:#fffde7">' + escapeHtml(r) + "</span>").join("");
       const citations = renderCitations(data.citations);
       addMsg("assistant",
-        '<div class="bubble">' + escapeHtml(data.answer||"Ответ не сформирован.") + "</div>" +
+        '<div class="bubble">' + escapeHtml(data.answer||UI_TEXT.answerMissing) + "</div>" +
         (w ? '<div class="answer-card"><h3>Предупреждения</h3><div class="chips">' + w + "</div></div>" : "") +
         '<div class="answer-card"><h3>Найденные сущности</h3>' + chipList(data.matched_entities) + "</div>" +
-        '<div class="answer-card"><h3>Что уже делали</h3>' + listBlock(data.experiments, r => "<b>" + escapeHtml(r.canonical_name) + "</b><span>" + escapeHtml(r.id) + "</span>", "Эксперименты не найдены") + "</div>" +
+        '<div class="answer-card"><h3>Что уже делали</h3>' + listBlock(data.experiments, r => "<b>" + escapeHtml(r.canonical_name) + "</b><span>" + escapeHtml(r.id) + "</span>", UI_TEXT.noExperiments) + "</div>" +
         '<div class="answer-card"><h3>Эффект и измерения</h3>' + tableBlock(data.observations) + "</div>" +
         (citations ? '<div class="answer-card">' + citations + "</div>" : "") +
         '<div class="answer-card"><h3>Связанные сущности</h3>' + chipList(data.related_entities) + "</div>" +
-        '<div class="answer-card"><h3>История решений</h3>' + listBlock(data.decision_history, r => "<b>" + escapeHtml(r.summary) + "</b><span>" + escapeHtml(r.decision||"вывод") + "</span>", "История решений не найдена") + "</div>" +
-        '<div class="answer-card"><h3>Пробелы данных</h3>' + listBlock(data.data_gaps, r => "<b>" + escapeHtml(r.reason) + "</b><span>" + escapeHtml(r.scope) + "</span>", "Пробелы не найдены") + "</div>"
+        '<div class="answer-card"><h3>История решений</h3>' + listBlock(data.decision_history, r => "<b>" + escapeHtml(r.summary) + "</b><span>" + escapeHtml(r.decision||"вывод") + "</span>", UI_TEXT.noDecisionHistory) + "</div>" +
+        '<div class="answer-card"><h3>Пробелы данных</h3>' + listBlock(data.data_gaps, r => "<b>" + escapeHtml(r.reason) + "</b><span>" + escapeHtml(r.scope) + "</span>", UI_TEXT.noGaps) + "</div>"
       );
+    }
+    function setUploadProgress(done, total, label) {
+      const percent = total ? Math.round((done / total) * 100) : 0;
+      $("uploadProgressText").textContent = label || ("Загружено " + done + " из " + total);
+      $("uploadProgressFill").style.width = percent + "%";
     }
     async function uploadFiles(files) {
       if (!files.length) return;
+      const uploadQueue = files.map(normalizeFile);
+      mergeFiles(uploadQueue);
+      renderSourceList();
       $("uploadProgress").classList.add("active");
       $("addSources").disabled = true;
+      setUploadProgress(0, files.length, "Подготовка " + formatCount(files.length, "файл", "файла", "файлов"));
+      const totals = { entities: 0, experiments: 0, documents: 0 };
+      let lastOverview = null;
+      let lastQuestions = [];
+      let uploadedCount = 0;
       try {
-        const fd = new FormData();
-        for (const f of files) fd.append("files", f);
-        const r = await fetch("/ingest/upload", { method: "POST", body: fd });
-        if (!r.ok) throw new Error(await r.text() || r.statusText);
-        const data = await r.json();
-        renderSources(data);
+        for (let offset = 0; offset < files.length; offset += UI_CONFIG.uploadBatchSize) {
+          const batch = files.slice(offset, offset + UI_CONFIG.uploadBatchSize);
+          const fd = new FormData();
+          for (const f of batch) fd.append("files", f);
+          setUploadProgress(uploadedCount, files.length, "Загрузка " + (offset + 1) + "-" + Math.min(offset + batch.length, files.length) + " из " + files.length);
+          const r = await fetch("/ingest/upload", { method: "POST", body: fd });
+          if (!r.ok) throw new Error(await r.text() || r.statusText);
+          const data = await r.json();
+          uploadedCount += batch.length;
+          totals.entities += data.reference?.entities || 0;
+          totals.experiments += data.experiments?.experiments || 0;
+          totals.documents += data.documents?.documents || 0;
+          lastOverview = data.overview || lastOverview;
+          lastQuestions = data.suggested_questions || lastQuestions;
+          renderSources(data, { notify: false });
+          setUploadProgress(uploadedCount, files.length, "Загружено " + uploadedCount + " из " + files.length);
+          await new Promise(resolve => setTimeout(resolve, 0));
+        }
         const counts = [];
-        if (data.reference?.entities) counts.push(data.reference.entities + " сущностей");
-        if (data.experiments?.experiments) counts.push(data.experiments.experiments + " экспериментов");
-        if (data.documents?.documents) counts.push(data.documents.documents + " документов");
-        addMsg("assistant", '<div class="bubble">Загружено: ' + (counts.join(", ") || "файлы приняты") + ". Задавайте вопросы.</div>");
+        if (totals.entities) counts.push(totals.entities + " сущностей");
+        if (totals.experiments) counts.push(totals.experiments + " экспериментов");
+        if (totals.documents) counts.push(totals.documents + " документов");
+        if (lastOverview) addMsg("assistant", '<div class="overview-card">' + escapeHtml(lastOverview.summary) + "</div>");
+        if (lastQuestions.length) renderSuggestions(lastQuestions);
+        addMsg("assistant", '<div class="bubble">Готово: ' + formatCount(files.length, "файл", "файла", "файлов") + ". " + (counts.join(", ") || UI_TEXT.filesAccepted) + ".</div>");
       } catch(e) {
         addMsg("assistant", '<div class="bubble error">' + escapeHtml(e.message) + "</div>");
       } finally {
         $("uploadProgress").classList.remove("active");
+        $("uploadProgressFill").style.width = "0%";
         $("addSources").disabled = false;
       }
     }
@@ -837,7 +1124,8 @@ def _notebook_dashboard_html() -> str:
       try {
         const data = await postJson("/demo/load-sample");
         renderSources(data);
-        addMsg("assistant", '<div class="bubble">Пример данных загружен. Можно спросить: что уже делали по Ti-6Al-4V после Annealed?</div>');
+        const firstQuestion = data.suggested_questions?.[0];
+        addMsg("assistant", '<div class="bubble">' + UI_TEXT.sampleLoaded + (firstQuestion ? " Первый вопрос уже в подсказках." : "") + "</div>");
       } catch(e) {
         addMsg("assistant", '<div class="bubble error">' + escapeHtml(e.message) + "</div>");
       } finally {
@@ -850,12 +1138,11 @@ def _notebook_dashboard_html() -> str:
         if (!r.ok) throw new Error(await r.text() || r.statusText);
         const data = await r.json();
         state.files = state.files.filter(f => f.name !== name);
-        state.total = state.files.length;
-        if ($("sourceNote")) $("sourceNote").textContent = state.total + " источников";
-        if ($("notebookMeta")) $("notebookMeta").textContent = state.total + " источников";
+        state.selected.delete(name);
+        setSourceStats();
         renderSources({ uploaded: [], overview: data.overview, suggested_questions: [] });
         addMsg("assistant", '<div class="bubble">Источник "' + escapeHtml(name) + '" удалён. Удалено записей: ' + data.removed_records + "</div>");
-  
+
       } catch(e) {
         addMsg("assistant", '<div class="bubble error">' + escapeHtml(e.message) + "</div>");
       }
@@ -866,12 +1153,12 @@ def _notebook_dashboard_html() -> str:
         if (!r.ok) throw new Error(await r.text() || r.statusText);
         const data = await r.json();
         state.files = [];
-        state.total = 0;
-        if ($("sourceNote")) $("sourceNote").textContent = "0 источников";
-        if ($("notebookMeta")) $("notebookMeta").textContent = "0 источников";
-        $("sources").innerHTML = '<div class="source-empty" id="sourceEmpty"><div><div class="doc-icon"><svg viewBox="0 0 24 24"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg></div><strong>Здесь появятся загруженные источники</strong><p>Нажмите «Добавить источник» или перетащите файлы: JSON, JSONL, CSV, TSV, TXT, MD</p></div></div>';
-        addMsg("assistant", '<div class="bubble">Все источники удалены. Граф пуст.</div>');
-  
+        state.selected.clear();
+        state.sourceLimit = UI_CONFIG.sourcePageSize;
+        setSourceStats();
+        renderSourceList();
+        addMsg("assistant", '<div class="bubble">' + UI_TEXT.allSourcesRemoved + "</div>");
+
         if (data.suggested_questions?.length) renderSuggestions(data.suggested_questions);
       } catch(e) {
         addMsg("assistant", '<div class="bubble error">' + escapeHtml(e.message) + "</div>");
@@ -879,7 +1166,7 @@ def _notebook_dashboard_html() -> str:
     }
     function clearChat() {
       $("menuPopover").classList.remove("open");
-      $("chatBody").innerHTML = '<div class="hero" id="hero"><div class="hero-inner"><div class="hero-icon">&#128218;</div><h1>Блокнот материалов</h1><p id="notebookMeta">' + state.total + ' источников</p></div></div><div class="suggestions" id="suggestions"></div>';
+      $("chatBody").innerHTML = '<div class="hero" id="hero"><div class="hero-inner"><div class="hero-icon">&#128218;</div><h1>Блокнот материалов</h1><p id="notebookMeta">' + formatCount(state.total, "источник", "источника", "источников") + '</p></div></div><div class="suggestions" id="suggestions"></div>';
       fetch("/source/suggestions").then(r => r.json()).then(renderSuggestions).catch(() => {});
     }
     $("addSources").addEventListener("click", () => $("fileInput").click());
@@ -893,59 +1180,63 @@ def _notebook_dashboard_html() -> str:
     $("loadSample").addEventListener("click", loadSampleData);
     $("clearAllSources").addEventListener("click", () => { $("menuPopover").classList.remove("open"); clearAllSources(); });
     $("clearChat").addEventListener("click", clearChat);
+    $("sourceSearch").addEventListener("input", e => {
+      state.sourceFilter = e.target.value;
+      state.sourceLimit = UI_CONFIG.sourcePageSize;
+      renderSourceList();
+    });
+    $("selectAllSources").addEventListener("click", () => {
+      state.files.forEach(f => state.selected.add(f.name));
+      renderSourceList();
+    });
+    $("selectNoSources").addEventListener("click", () => {
+      state.selected.clear();
+      renderSourceList();
+    });
+    $("sources").addEventListener("change", e => {
+      if (!e.target.classList.contains("source-check")) return;
+      const name = e.target.dataset.name;
+      if (!name) return;
+      if (e.target.checked) state.selected.add(name);
+      else state.selected.delete(name);
+      setSourceStats();
+      e.target.closest(".source-row")?.classList.toggle("is-muted", !e.target.checked);
+    });
+    $("sources").addEventListener("click", e => {
+      const btn = e.target.closest(".source-delete");
+      if (btn?.dataset.name) deleteSource(btn.dataset.name);
+    });
     document.addEventListener("click", e => { if (!$("menuPopover").contains(e.target) && e.target !== $("menuButton")) $("menuPopover").classList.remove("open"); });
     let dragTimer;
     document.addEventListener("dragenter", e => { e.preventDefault(); clearTimeout(dragTimer); $("dropOverlay").classList.add("active"); });
     document.addEventListener("dragover", e => e.preventDefault());
     document.addEventListener("dragleave", e => { e.preventDefault(); dragTimer = setTimeout(() => $("dropOverlay").classList.remove("active"), 200); });
     document.addEventListener("drop", e => { e.preventDefault(); $("dropOverlay").classList.remove("active"); if (e.dataTransfer.files.length) uploadFiles(Array.from(e.dataTransfer.files)); });
-    const KIND_COLORS = {
-      material: "#1a73e8", property: "#34a853", mode: "#f9ab00",
-      experiment: "#ea4335", equipment: "#9aa0a6", team: "#9334e6",
-      document: "#fbbc04", tag: "#00897b"
-    };
-    const KIND_LABELS = {
-      material: "Материал", property: "Свойство", mode: "Режим",
-      experiment: "Эксперимент", equipment: "Оборудование", team: "Команда",
-      document: "Документ", tag: "Тег"
-    };
     function buildLegend() {
-      $("graphLegend").innerHTML = Object.keys(KIND_COLORS).map(k =>
-        '<span class="legend-item"><span class="legend-dot" style="background:' + KIND_COLORS[k] + '"></span>' + (KIND_LABELS[k]||k) + '</span>'
+      $("graphLegend").innerHTML = Object.keys(UI_CONFIG.graph.colors).map(k =>
+        '<span class="legend-item"><span class="legend-dot" style="background:' + UI_CONFIG.graph.colors[k] + '"></span>' + (UI_CONFIG.graph.labels[k]||k) + '</span>'
       ).join("");
     }
     async function loadGraph() {
-      $("graphStats").textContent = "Загрузка из Neo4j...";
+      $("graphStats").textContent = "Загрузка графа...";
       try {
-        const resp = await fetch("/neo4j/cypher", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ statements: [{ statement: "MATCH (n)-[r]->(m) RETURN n, r, m LIMIT 500", resultDataContents: ["graph"] }] })
-        });
+        const resp = await fetch("/graph/data");
         if (!resp.ok) throw new Error("HTTP " + resp.status);
         const data = await resp.json();
-        if (data.errors?.length) throw new Error(data.errors[0].message);
-        const rows = data.results?.[0]?.data || [];
-        if (!rows.length) {
+        const nodes = data.nodes || [];
+        const edges = data.edges || [];
+        if (!nodes.length) {
           $("graphVis").innerHTML = '<div style="padding:40px;text-align:center;color:#9aa0a6">Граф пуст — загрузите данные</div>';
           $("graphStats").textContent = "0 узлов, 0 связей";
           return;
         }
         const nodesMap = {};
-        const edges = [];
-        rows.forEach(row => {
-          const n = row.graph?.nodes?.[0];
-          const m = row.graph?.nodes?.[1];
-          const r = row.graph?.relationships?.[0];
-          if (n && !nodesMap[n.id]) nodesMap[n.id] = n;
-          if (m && !nodesMap[m.id]) nodesMap[m.id] = m;
-          if (r) edges.push(r);
-        });
-        const visNodes = Object.values(nodesMap).map(n => ({
+        nodes.forEach(n => { nodesMap[n.id] = n; });
+        const visNodes = nodes.map(n => ({
           id: n.id,
-          label: (n.properties?.canonical_name || n.properties?.name || n.id).substring(0, 25),
-          title: JSON.stringify(n.properties, null, 2),
-          color: { background: "#fff", border: KIND_COLORS[n.labels?.[0]?.toLowerCase()] || "#5f6368", highlight: { border: "#1a73e8" } },
+          label: (n.name || n.id).substring(0, 25),
+          title: n.name + " (" + n.kind + ")",
+          color: { background: "#fff", border: UI_CONFIG.graph.colors[n.kind] || "#5f6368", highlight: { border: "#1a73e8" } },
           borderWidth: 2,
           font: { size: 11, color: "#202124" },
           shape: "dot",
@@ -953,8 +1244,8 @@ def _notebook_dashboard_html() -> str:
         }));
         const visEdges = edges.map(e => ({
           id: e.id,
-          from: e.startNode,
-          to: e.endNode,
+          from: e.source,
+          to: e.target,
           label: e.type,
           title: e.type,
           arrows: "to",
@@ -990,21 +1281,8 @@ def _notebook_dashboard_html() -> str:
         if (!r.ok) return;
         const data = await r.json();
         if (data.source_files?.length) {
-          state.files = data.source_files;
-          state.total = state.files.length;
-          if ($("sourceNote")) $("sourceNote").textContent = state.total + " источников";
-          if ($("notebookMeta")) $("notebookMeta").textContent = state.total + " источников";
-          $("sourceEmpty")?.remove();
-          $("sources").innerHTML = state.files.map(f => {
-            const t = f.type || "unknown";
-            return '<div class="source-row"><input type="checkbox" class="source-check" checked data-name="' + escapeHtml(f.name) + '">' +
-              '<div class="source-icon ' + t + '">' + t.toUpperCase() + "</div>" +
-              '<div class="source-info"><b>' + escapeHtml(f.name) + "</b><span>" + formatSize(f.size) + "</span></div>" +
-              '<button class="source-delete" data-name="' + escapeHtml(f.name) + '" title="Удалить">&times;</button></div>';
-          }).join("");
-          document.querySelectorAll(".source-delete").forEach(btn => {
-            btn.addEventListener("click", () => deleteSource(btn.dataset.name));
-          });
+          mergeFiles(data.source_files);
+          renderSourceList();
           if (data.overview?.summary) {
             addMsg("assistant", '<div class="overview-card">' + escapeHtml(data.overview.summary) + "</div>");
           }
@@ -1023,6 +1301,7 @@ def _create_llm_provider():
     """Create LLM provider if API key is configured, else None."""
     try:
         from kg_engine.llm_core.provider import create_provider_from_env
+
         return create_provider_from_env()
     except Exception:
         return None
@@ -1033,6 +1312,7 @@ def _create_session_store():
     try:
         from kg_engine.services.session import SessionStore
         from kg_engine.config.settings import settings
+
         return SessionStore(
             ttl_seconds=settings.session_ttl_seconds,
             max_messages=settings.session_max_messages,
@@ -1134,22 +1414,46 @@ def create_materials_app(
             content = await upload.read()
             parsed = _parse_uploaded_file(name, content)
             suffix = Path(name).suffix.lower()
-            uploaded.append({"name": name, "size": len(content), "type": suffix.lstrip(".") or "unknown"})
+            uploaded.append(
+                {
+                    "name": name,
+                    "size": len(content),
+                    "type": suffix.lstrip(".") or "unknown",
+                }
+            )
             if parsed is None:
-                doc_payload.append({"document_id": name, "title": Path(name).stem, "text": content.decode("utf-8", errors="replace"), "metadata": {"source_file": name}})
+                doc_payload.append(
+                    {
+                        "document_id": name,
+                        "title": Path(name).stem,
+                        "text": content.decode("utf-8", errors="replace"),
+                        "metadata": {"source_file": name},
+                    }
+                )
                 continue
             if suffix in _TEXT_SUFFIXES:
                 items = parsed if isinstance(parsed, list) else [parsed]
                 for item in items:
                     if isinstance(item, dict):
                         item["_uploaded_from"] = name
+                        item.setdefault("metadata", {})["source_file"] = name
                 if isinstance(parsed, list):
                     doc_payload.extend(items)
                 else:
                     doc_payload.append(parsed)
                 continue
             if isinstance(parsed, dict):
-                for key in ("entities", "materials", "equipment", "properties", "modes", "teams", "documents", "tags", "coverage_rules"):
+                for key in (
+                    "entities",
+                    "materials",
+                    "equipment",
+                    "properties",
+                    "modes",
+                    "teams",
+                    "documents",
+                    "tags",
+                    "coverage_rules",
+                ):
                     if key in parsed and isinstance(parsed[key], list):
                         for item in parsed[key]:
                             item["_uploaded_from"] = name
@@ -1162,41 +1466,66 @@ def create_materials_app(
                     for item in parsed["documents"]:
                         item["_uploaded_from"] = name
                     doc_payload.extend(parsed["documents"])
-                if not any(k in parsed for k in ("entities", "materials", "experiments", "documents")):
-                    if parsed.get("kind") or parsed.get("entity_kind") or parsed.get("type"):
+                if not any(
+                    k in parsed
+                    for k in ("entities", "materials", "experiments", "documents")
+                ):
+                    if (
+                        parsed.get("kind")
+                        or parsed.get("entity_kind")
+                        or parsed.get("type")
+                    ):
                         parsed["_uploaded_from"] = name
                         ref_payload.setdefault("entities", []).append(parsed)
                     else:
-                        doc_payload.append({"document_id": name, "title": Path(name).stem, "text": json.dumps(parsed, ensure_ascii=False), "metadata": {"source_file": name}})
+                        doc_payload.append(
+                            {
+                                "document_id": name,
+                                "title": Path(name).stem,
+                                "text": json.dumps(parsed, ensure_ascii=False),
+                                "metadata": {"source_file": name},
+                            }
+                        )
             elif isinstance(parsed, list):
-                for item in parsed:
+                for item_index, item in enumerate(parsed):
                     if not isinstance(item, dict):
                         continue
                     if item.get("kind") or item.get("entity_kind") or item.get("type"):
                         item["_uploaded_from"] = name
                         ref_payload.setdefault("entities", []).append(item)
-                    elif (item.get("experiment_id") or item.get("id")) and (item.get("material_name") or item.get("material")):
+                    elif (item.get("experiment_id") or item.get("id")) and (
+                        item.get("material_name") or item.get("material")
+                    ):
                         item["_uploaded_from"] = name
                         exp_payload.append(item)
-                    elif item.get("document_id") or item.get("text") or item.get("content"):
+                    elif (
+                        item.get("document_id")
+                        or item.get("text")
+                        or item.get("content")
+                    ):
                         doc_payload.append(item)
                     else:
-                        doc_payload.append({"document_id": f"{name}#{parsed.index(item)}", "title": f"{Path(name).stem} #{parsed.index(item)}", "text": json.dumps(item, ensure_ascii=False), "metadata": {"source_file": name}})
+                        doc_payload.append(
+                            {
+                                "document_id": f"{name}#row-{item_index}",
+                                "title": f"{Path(name).stem} #row-{item_index}",
+                                "text": json.dumps(item, ensure_ascii=False),
+                                "metadata": {"source_file": name},
+                            }
+                        )
         results = {}
         if ref_payload:
-            results["reference"] = runtime_service.ingest_reference_data(ReferenceDataAdapter().from_payload(ref_payload))
+            results["reference"] = runtime_service.ingest_reference_data(
+                ReferenceDataAdapter().from_payload(ref_payload)
+            )
         if exp_payload:
-            results["experiments"] = runtime_service.ingest_experiments(ExperimentCatalogAdapter().from_payload(exp_payload))
+            results["experiments"] = runtime_service.ingest_experiments(
+                ExperimentCatalogAdapter().from_payload(exp_payload)
+            )
         if doc_payload:
-            results["documents"] = runtime_service.ingest_documents(DocumentCorpusAdapter().from_payload(doc_payload))
-        repo = runtime_service._repository  # noqa: SLF001
-        for u in uploaded:
-            fname = u["name"]
-            entities = repo.find_entities()
-            for ent in entities:
-                if fname not in ent.source_refs:
-                    ent.source_refs.append(fname)
-                    repo.upsert_entity(ent)
+            results["documents"] = runtime_service.ingest_documents(
+                DocumentCorpusAdapter().from_payload(doc_payload)
+            )
         results["uploaded"] = uploaded
         results["overview"] = runtime_service.get_source_overview()
         results["suggested_questions"] = runtime_service.get_suggested_questions()
@@ -1215,14 +1544,32 @@ def create_materials_app(
         with documents_path.open("r", encoding="utf-8") as file:
             documents_payload = json.load(file)
 
-        for section_key in ("entities", "materials", "equipment", "properties", "modes", "teams", "documents", "tags", "coverage_rules"):
+        for section_key in (
+            "entities",
+            "materials",
+            "equipment",
+            "properties",
+            "modes",
+            "teams",
+            "documents",
+            "tags",
+            "coverage_rules",
+        ):
             for item in reference_payload.get(section_key, []):
                 item.setdefault("source_ref", reference_path.name)
-        exp_items = experiments_payload.get("experiments", []) if isinstance(experiments_payload, dict) else experiments_payload
+        exp_items = (
+            experiments_payload.get("experiments", [])
+            if isinstance(experiments_payload, dict)
+            else experiments_payload
+        )
         for item in exp_items:
             if isinstance(item, dict):
                 item.setdefault("source_ref", experiments_path.name)
-        doc_items = documents_payload.get("documents", []) if isinstance(documents_payload, dict) else documents_payload
+        doc_items = (
+            documents_payload.get("documents", [])
+            if isinstance(documents_payload, dict)
+            else documents_payload
+        )
         for item in doc_items:
             if isinstance(item, dict):
                 item.setdefault("source_ref", documents_path.name)
@@ -1238,9 +1585,21 @@ def create_materials_app(
                 DocumentCorpusAdapter().from_payload(documents_payload)
             ),
             "uploaded": [
-                {"name": reference_path.name, "size": reference_path.stat().st_size, "type": "json"},
-                {"name": experiments_path.name, "size": experiments_path.stat().st_size, "type": "json"},
-                {"name": documents_path.name, "size": documents_path.stat().st_size, "type": "json"},
+                {
+                    "name": reference_path.name,
+                    "size": reference_path.stat().st_size,
+                    "type": "json",
+                },
+                {
+                    "name": experiments_path.name,
+                    "size": experiments_path.stat().st_size,
+                    "type": "json",
+                },
+                {
+                    "name": documents_path.name,
+                    "size": documents_path.stat().st_size,
+                    "type": "json",
+                },
             ],
         }
         results["overview"] = runtime_service.get_source_overview()
@@ -1350,6 +1709,12 @@ def create_materials_app(
 
     @app.delete("/sources/{source_name}")
     def delete_source(source_name: str) -> dict:
+        if not getattr(runtime_settings, "materials_enable_destructive_api", False):
+            return Response(
+                content='{"error": "Destructive API disabled. Set MATERIALS_ENABLE_DESTRUCTIVE_API=true."}',
+                status_code=403,
+                media_type="application/json",
+            )
         removed = runtime_service._repository.delete_source(source_name)  # noqa: SLF001
         _source_files[:] = [s for s in _source_files if s.get("name") != source_name]
         return {
@@ -1360,6 +1725,12 @@ def create_materials_app(
 
     @app.delete("/sources")
     def clear_all_sources() -> dict:
+        if not getattr(runtime_settings, "materials_enable_destructive_api", False):
+            return Response(
+                content='{"error": "Destructive API disabled. Set MATERIALS_ENABLE_DESTRUCTIVE_API=true."}',
+                status_code=403,
+                media_type="application/json",
+            )
         runtime_service._repository.clear_all()  # noqa: SLF001
         _source_files.clear()
         return {
@@ -1368,16 +1739,4 @@ def create_materials_app(
             "suggested_questions": runtime_service.get_suggested_questions(),
         }
 
-    @app.post("/neo4j/cypher")
-    async def neo4j_cypher(request: dict) -> dict:
-        import httpx
-
-        from kg_engine.config.settings import Settings
-        s = Settings()
-        url = "http://localhost:7474/db/neo4j/tx/commit"
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(url, json=request, auth=(s.materials_neo4j_user, s.materials_neo4j_password), timeout=10)
-            return resp.json()
-
     return app
-

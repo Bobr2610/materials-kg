@@ -61,7 +61,9 @@ class SessionStore:
             if len(session.messages) > self._max_messages:
                 excess = len(session.messages) - self._max_messages
                 session.messages = session.messages[excess:]
-                logger.debug("Trimmed %d old messages from session %s", excess, session_id)
+                logger.debug(
+                    "Trimmed %d old messages from session %s", excess, session_id
+                )
 
     def get_history(
         self,

@@ -118,7 +118,9 @@ def _document_from_text_file(path: Path) -> dict[str, Any]:
     }
 
 
-def _fallback_document(path: Path, payload: Any, *, row_index: int | None = None) -> dict[str, Any]:
+def _fallback_document(
+    path: Path, payload: Any, *, row_index: int | None = None
+) -> dict[str, Any]:
     if isinstance(payload, str):
         text = payload
     else:
@@ -143,7 +145,9 @@ def _has_explicit_entity_kind(record: dict[str, Any]) -> bool:
 def _looks_like_experiment(record: dict[str, Any]) -> bool:
     return bool(
         (record.get("experiment_id") or record.get("id") or record.get("code"))
-        and (record.get("material_name") or record.get("material") or record.get("alloy"))
+        and (
+            record.get("material_name") or record.get("material") or record.get("alloy")
+        )
         and (
             isinstance(record.get("observations"), list)
             or record.get("property_name")
@@ -155,7 +159,12 @@ def _looks_like_experiment(record: dict[str, Any]) -> bool:
 
 def _looks_like_document(record: dict[str, Any]) -> bool:
     return bool(
-        (record.get("document_id") or record.get("path") or record.get("file") or record.get("id"))
+        (
+            record.get("document_id")
+            or record.get("path")
+            or record.get("file")
+            or record.get("id")
+        )
         and (record.get("text") or record.get("content") or record.get("body"))
     )
 
@@ -172,7 +181,9 @@ def _iter_records(payload: Any) -> list[dict[str, Any]]:
     return []
 
 
-def _merge_reference_payload(target: dict[str, Any], payload: Any, _source: Path) -> None:
+def _merge_reference_payload(
+    target: dict[str, Any], payload: Any, _source: Path
+) -> None:
     if isinstance(payload, dict):
         matched = False
         for key, value in payload.items():
@@ -202,7 +213,13 @@ def _merge_bundle_payload(bundle: dict[str, Any], payload: Any, source: Path) ->
                 matched = True
             elif key == "experiments" and isinstance(value, list):
                 bundle["experiments"].extend(
-                    {**item, "metadata": {**item.get("metadata", {}), **_source_metadata(source)}}
+                    {
+                        **item,
+                        "metadata": {
+                            **item.get("metadata", {}),
+                            **_source_metadata(source),
+                        },
+                    }
                     if isinstance(item, dict)
                     else item
                     for item in value
@@ -210,7 +227,13 @@ def _merge_bundle_payload(bundle: dict[str, Any], payload: Any, source: Path) ->
                 matched = True
             elif key == "documents" and isinstance(value, list):
                 bundle["documents"].extend(
-                    {**item, "metadata": {**item.get("metadata", {}), **_source_metadata(source)}}
+                    {
+                        **item,
+                        "metadata": {
+                            **item.get("metadata", {}),
+                            **_source_metadata(source),
+                        },
+                    }
                     if isinstance(item, dict)
                     else item
                     for item in value
@@ -237,7 +260,9 @@ def _merge_bundle_payload(bundle: dict[str, Any], payload: Any, source: Path) ->
                 {**record, "metadata": {**record.get("metadata", {}), **metadata}}
             )
         else:
-            bundle["documents"].append(_fallback_document(source, record, row_index=index))
+            bundle["documents"].append(
+                _fallback_document(source, record, row_index=index)
+            )
 
     if not _iter_records(payload) and payload not in (None, {}, []):
         bundle["documents"].append(_fallback_document(source, payload))
@@ -258,7 +283,9 @@ def _load_bundle(path: str) -> dict[str, Any]:
             bundle["documents"].append(_document_from_text_file(file_path))
             continue
         if suffix in _STRUCTURED_FILE_SUFFIXES:
-            _merge_bundle_payload(bundle, _load_one(file_path, family="bundle"), file_path)
+            _merge_bundle_payload(
+                bundle, _load_one(file_path, family="bundle"), file_path
+            )
     return bundle
 
 
@@ -272,7 +299,9 @@ def _load_payload(path: str | None, *, family: str) -> object | None:
     if family == "reference":
         merged: dict[str, Any] = {}
         for file_path in files:
-            _merge_reference_payload(merged, _load_one(file_path, family=family), file_path)
+            _merge_reference_payload(
+                merged, _load_one(file_path, family=family), file_path
+            )
         return merged
     merged_rows: list[Any] = []
     for file_path in files:
@@ -291,7 +320,9 @@ def _load_payload(path: str | None, *, family: str) -> object | None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Ingest data into the materials KG core")
+    parser = argparse.ArgumentParser(
+        description="Ingest data into the materials KG core"
+    )
     parser.add_argument(
         "--input",
         type=str,
@@ -335,7 +366,7 @@ def main() -> None:
         "--ensure-schema",
         action="store_true",
         default=False,
-        help="Create Postgres schema automatically when using MATERIALS_PG_DSN",
+        help="Ensure Neo4j schema constraints before ingestion",
     )
     args = parser.parse_args()
 

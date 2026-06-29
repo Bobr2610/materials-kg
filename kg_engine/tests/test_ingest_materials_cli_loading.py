@@ -13,8 +13,7 @@ from kg_engine.services.materials_kg import MaterialsKGService
 
 def test_load_payload_accepts_directory_with_mixed_reference_files(tmp_path) -> None:
     (tmp_path / "anything.csv").write_text(
-        "kind,name,aliases,поставщик\n"
-        "material,Сплав 42,alloy-42;sample-42,internal\n",
+        "kind,name,aliases,поставщик\nmaterial,Сплав 42,alloy-42;sample-42,internal\n",
         encoding="utf-8",
     )
     (tmp_path / "more.jsonl").write_text(
@@ -42,10 +41,11 @@ def test_load_payload_accepts_plain_markdown_documents(tmp_path) -> None:
     assert "Текст внутреннего документа" in payload[0]["text"]
 
 
-def test_reference_loader_does_not_classify_rows_without_explicit_kind(tmp_path) -> None:
+def test_reference_loader_does_not_classify_rows_without_explicit_kind(
+    tmp_path,
+) -> None:
     (tmp_path / "unknown.csv").write_text(
-        "название,значение\n"
-        "Что-то,42\n",
+        "название,значение\nЧто-то,42\n",
         encoding="utf-8",
     )
 
@@ -57,8 +57,7 @@ def test_reference_loader_does_not_classify_rows_without_explicit_kind(tmp_path)
 
 def test_load_bundle_ingests_mixed_files_and_preserves_unknown_rows(tmp_path) -> None:
     (tmp_path / "001.csv").write_text(
-        "kind,name,aliases,поставщик\n"
-        "material,Сплав 42,alloy-42;sample-42,internal\n",
+        "kind,name,aliases,поставщик\nmaterial,Сплав 42,alloy-42;sample-42,internal\n",
         encoding="utf-8",
     )
     (tmp_path / "abc.jsonl").write_text(
@@ -79,8 +78,7 @@ def test_load_bundle_ingests_mixed_files_and_preserves_unknown_rows(tmp_path) ->
         encoding="utf-8",
     )
     (tmp_path / "q.csv").write_text(
-        "непонятная_колонка,значение\n"
-        "непонятная строка,42\n",
+        "непонятная_колонка,значение\nнепонятная строка,42\n",
         encoding="utf-8",
     )
     (tmp_path / "whatever.md").write_text(

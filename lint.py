@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Linting script for cmw-platform-agent
+Linting script for materials-kg
 =====================================
 
 Simple script to run Ruff linting and formatting with proper configuration.
@@ -29,7 +29,9 @@ def run_command(cmd: list[str], description: str) -> bool:
 
 def _git_list_files(args: list[str]) -> list[str]:
     try:
-        result = subprocess.run(["git", *args], check=True, capture_output=True, text=True)
+        result = subprocess.run(
+            ["git", *args], check=True, capture_output=True, text=True
+        )
         return [p.strip() for p in result.stdout.splitlines() if p.strip()]
     except Exception:
         return []
@@ -92,7 +94,7 @@ def resolve_target_files(argv: list[str]) -> list[str]:
 
 def main():
     """Main linting workflow."""
-    print("🚀 Starting cmw-platform-agent linting workflow...")
+    print("🚀 Starting materials-kg linting workflow...")
 
     # Check if we're in the right directory
     if not Path("pyproject.toml").exists():
@@ -119,9 +121,7 @@ def main():
 
     # Run Ruff formatting
     format_cmd = ["ruff", "format", *targets]
-    format_success = run_command(
-        format_cmd, f"Ruff formatting for {target_label}"
-    )
+    format_success = run_command(format_cmd, f"Ruff formatting for {target_label}")
 
     # Summary
     if check_success and format_success:

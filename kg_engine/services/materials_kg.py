@@ -53,6 +53,77 @@ def _stable_id(prefix: str, *parts: Any) -> str:
     return f"{prefix}_{digest}"
 
 
+def _entity_matches_sources(entity: Entity, source_set: set[str]) -> bool:
+    """Check if an entity originated from any of the given sources."""
+    if any(ref in source_set for ref in entity.source_refs):
+        return True
+    props = entity.properties
+    for key in ("source_file", "source_ref", "_uploaded_from"):
+        val = props.get(key)
+        if val and val in source_set:
+            return True
+    return False
+
+
+def _evidence_matches_sources(evidence: Evidence, source_set: set[str]) -> bool:
+    """Check if evidence originated from any of the given sources."""
+    if evidence.source_id in source_set:
+        return True
+    meta = evidence.metadata
+    for key in ("source_file", "source_ref"):
+        val = meta.get(key)
+        if val and val in source_set:
+            return True
+    return False
+
+
+def _observation_matches_sources(
+    observation: Observation,
+    evidence_by_id: dict[str, Evidence],
+    source_set: set[str],
+) -> bool:
+    """Check if an observation's evidence came from the given sources."""
+    ev = evidence_by_id.get(observation.evidence_id)
+    if ev is not None and _evidence_matches_sources(ev, source_set):
+        return True
+    for key in ("source_file", "source_ref"):
+        val = observation.metadata.get(key)
+        if val and val in source_set:
+            return True
+    return False
+
+
+def _relation_matches_sources(
+    relation: Relation,
+    evidence_by_id: dict[str, Evidence],
+    source_set: set[str],
+) -> bool:
+    """Check if a relation's evidence came from the given sources."""
+    for eid in relation.evidence_ids:
+        ev = evidence_by_id.get(eid)
+        if ev is not None and _evidence_matches_sources(ev, source_set):
+            return True
+    return False
+
+
+def _trace_matches_sources(
+    trace: DecisionTrace,
+    evidence_by_id: dict[str, Evidence],
+    source_set: set[str],
+) -> bool:
+    """Check if a decision trace's evidence came from the given sources."""
+    for eid in trace.evidence_ids:
+        ev = evidence_by_id.get(eid)
+        if ev is not None and _evidence_matches_sources(ev, source_set):
+            return True
+    meta = trace.metadata
+    for key in ("source_file", "source_ref"):
+        val = meta.get(key)
+        if val and val in source_set:
+            return True
+    return False
+
+
 class MaterialsKGService:
     """Public ingestion and query API for the compact domain core."""
 
@@ -82,32 +153,33 @@ class MaterialsKGService:
         observation_count = 0
         trace_count = 0
         for experiment in batch:
+            provenance_ref = experiment.source_ref or experiment.experiment_id
             experiment_entity = self._ensure_entity(
                 EntityKind.EXPERIMENT,
                 experiment.title,
                 entity_id=experiment.experiment_id,
                 aliases=[experiment.experiment_id],
-                source_ref=experiment.experiment_id,
+                source_ref=provenance_ref,
                 properties=experiment.metadata,
             )
             material = self._ensure_entity(
                 EntityKind.MATERIAL,
                 experiment.material_name,
-                source_ref=experiment.experiment_id,
+                source_ref=provenance_ref,
             )
             self._link_entities(
                 experiment_entity.id,
                 material.id,
                 RelationType.EVALUATES_MATERIAL,
                 evidence_ids=[],
-                properties={"source": experiment.experiment_id},
+                properties={"source": provenance_ref},
             )
             mode_entity = None
             if experiment.mode_name:
                 mode_entity = self._ensure_entity(
                     EntityKind.MODE,
                     experiment.mode_name,
-                    source_ref=experiment.experiment_id,
+                    source_ref=provenance_ref,
                 )
                 self._link_entities(
                     experiment_entity.id,
@@ -119,7 +191,7 @@ class MaterialsKGService:
                 team = self._ensure_entity(
                     EntityKind.TEAM,
                     experiment.team_name,
-                    source_ref=experiment.experiment_id,
+                    source_ref=provenance_ref,
                 )
                 self._link_entities(
                     experiment_entity.id,
@@ -131,7 +203,7 @@ class MaterialsKGService:
                 equipment = self._ensure_entity(
                     EntityKind.EQUIPMENT,
                     equipment_name,
-                    source_ref=experiment.experiment_id,
+                    source_ref=provenance_ref,
                 )
                 self._link_entities(
                     experiment_entity.id,
@@ -145,7 +217,7 @@ class MaterialsKGService:
                     experiment.document_id,
                     entity_id=experiment.document_id,
                     aliases=[experiment.document_id],
-                    source_ref=experiment.experiment_id,
+                    source_ref=provenance_ref,
                 )
                 self._link_entities(
                     experiment_entity.id,
@@ -162,6 +234,7 @@ class MaterialsKGService:
                     material=material,
                     mode_entity=mode_entity,
                     observation_input=observation_input,
+                    provenance_ref=provenance_ref,
                 )
                 observation_ids.append(observation.id)
                 observation_count += 1
@@ -170,7 +243,7 @@ class MaterialsKGService:
                 self._create_trace(
                     finding=finding,
                     source_kind=SourceKind.EXPERIMENT,
-                    source_id=experiment.experiment_id,
+                    source_id=provenance_ref,
                     entity_ids=[
                         material.id,
                         experiment_entity.id,
@@ -193,6 +266,11 @@ class MaterialsKGService:
                 trace_count += 1
 
             for index, text_unit in enumerate(experiment.text_units):
+                unit_metadata = {
+                    **text_unit.metadata,
+                    "source_id": provenance_ref,
+                    "source_file": provenance_ref,
+                }
                 self._repository.upsert_text_unit(
                     SearchTextUnit(
                         id=_stable_id(
@@ -204,7 +282,7 @@ class MaterialsKGService:
                         source_entity_id=experiment_entity.id,
                         source_kind=SourceKind.EXPERIMENT,
                         content=text_unit.content,
-                        metadata=text_unit.metadata,
+                        metadata=unit_metadata,
                     )
                 )
         return {
@@ -217,25 +295,34 @@ class MaterialsKGService:
         trace_count = 0
         llm_extracted_count = 0
         for document in batch:
+            doc_src = document.source_ref or document.document_id
             document_entity = self._ensure_entity(
                 EntityKind.DOCUMENT,
                 document.title,
                 entity_id=document.document_id,
                 aliases=[document.document_id],
-                source_ref=document.document_id,
+                source_ref=doc_src,
                 properties=document.metadata,
             )
             linked_entity_ids: list[str] = [document_entity.id]
 
-            has_explicit_entities = any([
-                document.material_names, document.mode_names,
-                document.property_names, document.equipment_names,
-                document.team_names, document.experiment_ids,
-            ])
+            has_explicit_entities = any(
+                [
+                    document.material_names,
+                    document.mode_names,
+                    document.property_names,
+                    document.equipment_names,
+                    document.team_names,
+                    document.experiment_ids,
+                ]
+            )
 
             if self._llm and not has_explicit_entities and document.text:
                 try:
-                    from kg_engine.llm_core.extraction import extract_entities_from_document
+                    from kg_engine.llm_core.extraction import (
+                        extract_entities_from_document,
+                    )
+
                     extracted = extract_entities_from_document(
                         self._llm, document.title, document.text
                     )
@@ -246,21 +333,23 @@ class MaterialsKGService:
                         except ValueError:
                             kind = EntityKind.DOCUMENT
                         entity = self._ensure_entity(
-                            kind, ent.get("name", ""),
-                            source_ref=document.document_id,
+                            kind,
+                            ent.get("name", ""),
+                            source_ref=doc_src,
                             aliases=ent.get("aliases", []),
                             properties=ent.get("properties", {}),
                         )
                         linked_entity_ids.append(entity.id)
                         evidence = self._create_evidence(
                             source_kind=SourceKind.DOCUMENT,
-                            source_id=document.document_id,
+                            source_id=doc_src,
                             fragment=ent.get("name", ""),
                             extraction_method="llm_extraction",
                             confidence=0.85,
                         )
                         self._link_entities(
-                            document_entity.id, entity.id,
+                            document_entity.id,
+                            entity.id,
                             RelationType.REFERENCES,
                             evidence_ids=[evidence.id],
                         )
@@ -269,34 +358,48 @@ class MaterialsKGService:
                         mode_name = exp.get("mode_name", "")
                         observations = []
                         for obs in exp.get("observations", []):
-                            observations.append(ObservationInput(
-                                property_name=obs.get("property_name", ""),
-                                value=obs.get("value"),
-                                unit=obs.get("unit", ""),
-                                confidence=obs.get("confidence", 0.85),
-                                extraction_method="llm_extraction",
-                            ))
+                            observations.append(
+                                ObservationInput(
+                                    property_name=obs.get("property_name", ""),
+                                    value=obs.get("value"),
+                                    unit=obs.get("unit", ""),
+                                    confidence=obs.get("confidence", 0.85),
+                                    extraction_method="llm_extraction",
+                                )
+                            )
                         findings = []
                         for f in exp.get("findings", []):
                             from kg_engine.domain.models import FindingInput
-                            findings.append(FindingInput(
-                                summary=f.get("summary", ""),
-                                confidence=f.get("confidence", 0.85),
-                                extraction_method="llm_extraction",
-                            ))
+
+                            findings.append(
+                                FindingInput(
+                                    summary=f.get("summary", ""),
+                                    confidence=f.get("confidence", 0.85),
+                                    extraction_method="llm_extraction",
+                                )
+                            )
                         exp_input = ExperimentInput(
-                            experiment_id=exp.get("experiment_id", f"{document.document_id}_exp_{llm_extracted_count}"),
+                            experiment_id=exp.get(
+                                "experiment_id",
+                                f"{document.document_id}_exp_{llm_extracted_count}",
+                            ),
                             title=exp.get("title", f"Extracted from {document.title}"),
                             material_name=material_name,
                             mode_name=mode_name,
                             observations=observations,
                             findings=findings,
-                            metadata={"source_document": document.document_id, "extraction_method": "llm"},
+                            source_ref=doc_src,
+                            metadata={
+                                "source_document": document.document_id,
+                                "extraction_method": "llm",
+                            },
                         )
                         self.ingest_experiments([exp_input])
                         llm_extracted_count += 1
                 except Exception:
-                    logger.exception("LLM extraction failed for document %s", document.document_id)
+                    logger.exception(
+                        "LLM extraction failed for document %s", document.document_id
+                    )
 
             for kind, values in (
                 (EntityKind.MATERIAL, document.material_names),
@@ -306,13 +409,14 @@ class MaterialsKGService:
                 (EntityKind.TEAM, document.team_names),
             ):
                 for value in values:
-                    entity = self._ensure_entity(kind, value, source_ref=document.document_id)
+                    entity = self._ensure_entity(kind, value, source_ref=doc_src)
                     linked_entity_ids.append(entity.id)
                     evidence = self._create_evidence(
                         source_kind=SourceKind.DOCUMENT,
-                        source_id=document.document_id,
+                        source_id=doc_src,
                         fragment=value,
                         extraction_method="document_reference",
+                        metadata={"source_file": doc_src},
                     )
                     self._link_entities(
                         document_entity.id,
@@ -321,7 +425,7 @@ class MaterialsKGService:
                         evidence_ids=[evidence.id],
                     )
             for tag_name in document.tag_names:
-                tag = self._ensure_entity(EntityKind.TAG, tag_name, source_ref=document.document_id)
+                tag = self._ensure_entity(EntityKind.TAG, tag_name, source_ref=doc_src)
                 linked_entity_ids.append(tag.id)
                 self._link_entities(
                     document_entity.id,
@@ -335,7 +439,7 @@ class MaterialsKGService:
                     experiment_id,
                     entity_id=experiment_id,
                     aliases=[experiment_id],
-                    source_ref=document.document_id,
+                    source_ref=doc_src,
                 )
                 linked_entity_ids.append(experiment_entity.id)
                 self._link_entities(
@@ -344,26 +448,36 @@ class MaterialsKGService:
                     RelationType.DOCUMENTED_IN,
                     evidence_ids=[],
                 )
+            doc_metadata = {
+                **document.metadata,
+                "source_id": doc_src,
+                "source_file": doc_src,
+            }
             self._upsert_text_unit_with_embedding(
                 unit_id=_stable_id("doc_text", document.document_id, document.text),
                 source_entity_id=document_entity.id,
                 source_kind=SourceKind.DOCUMENT,
                 content=document.text,
-                metadata=document.metadata,
+                metadata=doc_metadata,
             )
             for index, text_unit in enumerate(document.text_units):
+                unit_metadata = {
+                    **text_unit.metadata,
+                    "source_id": doc_src,
+                    "source_file": doc_src,
+                }
                 self._upsert_text_unit_with_embedding(
                     unit_id=_stable_id("doc_chunk", document.document_id, index),
                     source_entity_id=document_entity.id,
                     source_kind=SourceKind.DOCUMENT,
                     content=text_unit.content,
-                    metadata=text_unit.metadata,
+                    metadata=unit_metadata,
                 )
             for index, finding in enumerate(document.findings):
                 self._create_trace(
                     finding=finding,
                     source_kind=SourceKind.DOCUMENT,
-                    source_id=document.document_id,
+                    source_id=doc_src,
                     entity_ids=linked_entity_ids,
                     experiment_id=None,
                     observation_ids=[],
@@ -410,11 +524,15 @@ class MaterialsKGService:
         property_name: str | None = None,
     ) -> MaterialModeQueryResult:
         material_entity = self._require_entity(EntityKind.MATERIAL, material)
-        mode_entity = None if mode is None else self._require_entity(EntityKind.MODE, mode)
+        mode_entity = (
+            None if mode is None else self._require_entity(EntityKind.MODE, mode)
+        )
         property_entity = None
         if property_name is not None:
             property_entity = self._require_entity(EntityKind.PROPERTY, property_name)
-        observations = self._repository.list_observations(material_id=material_entity.id)
+        observations = self._repository.list_observations(
+            material_id=material_entity.id
+        )
         if mode_entity is not None:
             observations = [
                 observation
@@ -432,7 +550,9 @@ class MaterialsKGService:
             for observation in observations
             if observation.experiment_id is not None
         ]
-        experiments = self._repository.find_entities(ids=list(dict.fromkeys(experiment_ids)))
+        experiments = self._repository.find_entities(
+            ids=list(dict.fromkeys(experiment_ids))
+        )
         findings: list[DecisionTrace] = []
         for experiment in experiments:
             findings.extend(
@@ -467,7 +587,9 @@ class MaterialsKGService:
     ) -> PropertyQueryResult:
         filters = filters or PropertyFilters()
         property_entity = self._require_entity(EntityKind.PROPERTY, property_name)
-        observations = self._repository.list_observations(property_id=property_entity.id)
+        observations = self._repository.list_observations(
+            property_id=property_entity.id
+        )
         if filters.material_name:
             material_entity = self._require_entity(
                 EntityKind.MATERIAL,
@@ -497,7 +619,9 @@ class MaterialsKGService:
                 continue
             filtered_observations.append(observation)
         material_ids = list(
-            dict.fromkeys(observation.material_id for observation in filtered_observations)
+            dict.fromkeys(
+                observation.material_id for observation in filtered_observations
+            )
         )
         experiment_ids = list(
             dict.fromkeys(
@@ -507,7 +631,9 @@ class MaterialsKGService:
             )
         )
         evidence_ids = list(
-            dict.fromkeys(observation.evidence_id for observation in filtered_observations)
+            dict.fromkeys(
+                observation.evidence_id for observation in filtered_observations
+            )
         )
         return PropertyQueryResult(
             property_entity=property_entity,
@@ -579,7 +705,9 @@ class MaterialsKGService:
             evidence=self._repository.list_evidence(list(dict.fromkeys(evidence_ids))),
         )
 
-    def query_decision_history(self, entity_or_experiment: str) -> DecisionHistoryQueryResult:
+    def query_decision_history(
+        self, entity_or_experiment: str
+    ) -> DecisionHistoryQueryResult:
         root = self._resolve_any_entity(entity_or_experiment)
         traces = self._repository.list_decision_traces(entity_id=root.id)
         if root.kind == EntityKind.EXPERIMENT:
@@ -602,14 +730,15 @@ class MaterialsKGService:
         filters = filters or QueryFilters()
         observations = self._repository.list_observations()
         observed_keys = {
-            (item.material_id, item.mode_id, item.property_id)
-            for item in observations
+            (item.material_id, item.mode_id, item.property_id) for item in observations
         }
         gaps: list[DataGap] = []
         for rule in self._repository.list_coverage_rules():
             if scope is not None and rule.scope != scope:
                 continue
-            materials = self._resolve_rule_entities(EntityKind.MATERIAL, rule.material_names)
+            materials = self._resolve_rule_entities(
+                EntityKind.MATERIAL, rule.material_names
+            )
             modes = self._resolve_rule_entities(EntityKind.MODE, rule.mode_names)
             properties = self._resolve_rule_entities(
                 EntityKind.PROPERTY,
@@ -701,7 +830,9 @@ class MaterialsKGService:
         findings: list[DecisionTrace] = []
         related_entities: list[Entity] = []
         relations: list[Relation] = []
-        search_hits = self._repository.search_text_units(question, limit=8) if question else []
+        search_hits = (
+            self._repository.search_text_units(question, limit=8) if question else []
+        )
 
         if material_entity is not None:
             material_result = self.query_material_mode(
@@ -729,7 +860,9 @@ class MaterialsKGService:
             findings.extend(history.traces)
             evidence.extend(history.evidence)
         elif not search_hits:
-            warnings.append("Не удалось сопоставить вопрос с загруженными сущностями графа.")
+            warnings.append(
+                "Не удалось сопоставить вопрос с загруженными сущностями графа."
+            )
 
         filters = QueryFilters(
             material_name=material_entity.canonical_name if material_entity else None,
@@ -742,10 +875,72 @@ class MaterialsKGService:
 
         evidence_deduped = self._dedupe_by_id(evidence)
         search_deduped = self._dedupe_by_id(search_hits)
-        if source_ids:
+        if source_ids is not None:
             source_set = set(source_ids)
-            evidence_deduped = [e for e in evidence_deduped if e.source_id in source_set]
-            search_deduped = [h for h in search_deduped if h.source_entity_id in source_set]
+            evidence_by_id = {e.id: e for e in evidence_deduped}
+            matched_entities = [
+                e for e in matched_entities if _entity_matches_sources(e, source_set)
+            ]
+            if material_entity is not None and not _entity_matches_sources(
+                material_entity, source_set
+            ):
+                material_entity = None
+            if mode_entity is not None and not _entity_matches_sources(
+                mode_entity, source_set
+            ):
+                mode_entity = None
+            if property_entity is not None and not _entity_matches_sources(
+                property_entity, source_set
+            ):
+                property_entity = None
+            experiments = [
+                e
+                for e in self._dedupe_entities(experiments)
+                if _entity_matches_sources(e, source_set)
+            ]
+            observations = [
+                o
+                for o in self._dedupe_by_id(observations)
+                if _observation_matches_sources(o, evidence_by_id, source_set)
+            ]
+            evidence_deduped = [
+                e for e in evidence_deduped if _evidence_matches_sources(e, source_set)
+            ]
+            search_deduped = [
+                h
+                for h in search_deduped
+                if h.source_entity_id in source_set
+                or h.metadata.get("source_id") in source_set
+                or h.metadata.get("source_file") in source_set
+            ]
+            findings = [
+                t
+                for t in self._dedupe_by_id(findings)
+                if _trace_matches_sources(t, evidence_by_id, source_set)
+            ]
+            relations = [
+                r
+                for r in self._dedupe_by_id(relations)
+                if _relation_matches_sources(r, evidence_by_id, source_set)
+            ]
+            related_entities = [
+                e
+                for e in self._dedupe_entities(related_entities)
+                if _entity_matches_sources(e, source_set)
+            ]
+            data_gaps = [
+                g
+                for g in data_gaps
+                if (g.material_id and g.material_id in source_set)
+                or (g.mode_id and g.mode_id in source_set)
+                or (g.property_id and g.property_id in source_set)
+                or any(
+                    _entity_matches_sources(e, source_set)
+                    for e in self._repository.find_entities(
+                        ids=[x for x in (g.material_id, g.mode_id, g.property_id) if x]
+                    )
+                )
+            ]
 
         citations = self._build_citations(evidence_deduped, search_deduped)
         answer = self._build_answer_text(
@@ -762,26 +957,43 @@ class MaterialsKGService:
         if self._llm:
             try:
                 from kg_engine.llm_core.extraction import llm_generate_answer
+
                 graph_context = {
-                    "matched_entities": [e.model_dump(mode="json") for e in matched_entities],
-                    "experiments": [e.model_dump(mode="json") for e in self._dedupe_entities(experiments)],
-                    "observations": [o.model_dump(mode="json") for o in self._dedupe_by_id(observations)],
-                    "decision_history": [t.model_dump(mode="json") for t in self._dedupe_by_id(findings)],
+                    "matched_entities": [
+                        e.model_dump(mode="json") for e in matched_entities
+                    ],
+                    "experiments": [
+                        e.model_dump(mode="json")
+                        for e in self._dedupe_entities(experiments)
+                    ],
+                    "observations": [
+                        o.model_dump(mode="json")
+                        for o in self._dedupe_by_id(observations)
+                    ],
+                    "decision_history": [
+                        t.model_dump(mode="json") for t in self._dedupe_by_id(findings)
+                    ],
                     "data_gaps": [g.model_dump(mode="json") for g in data_gaps],
                     "search_hits": [h.model_dump(mode="json") for h in search_deduped],
                     "evidence": [e.model_dump(mode="json") for e in evidence_deduped],
-                    "relations": [r.model_dump(mode="json") for r in self._dedupe_by_id(relations)],
+                    "relations": [
+                        r.model_dump(mode="json") for r in self._dedupe_by_id(relations)
+                    ],
                 }
 
                 conversation_history: list[dict[str, str]] = []
                 if self._session_store and session_id:
                     from kg_engine.config.settings import settings
+
                     conversation_history = self._session_store.get_context_messages(
-                        session_id, last_n=settings.session_history_turns,
+                        session_id,
+                        last_n=settings.session_history_turns,
                     )
 
                 llm_answer = llm_generate_answer(
-                    self._llm, question, graph_context,
+                    self._llm,
+                    question,
+                    graph_context,
                     conversation_history=conversation_history,
                 )
                 if llm_answer:
@@ -807,15 +1019,14 @@ class MaterialsKGService:
                 entity.model_dump(mode="json") for entity in matched_entities
             ],
             "experiments": [
-                entity.model_dump(mode="json") for entity in self._dedupe_entities(experiments)
+                entity.model_dump(mode="json")
+                for entity in self._dedupe_entities(experiments)
             ],
             "observations": [
                 observation.model_dump(mode="json")
                 for observation in self._dedupe_by_id(observations)
             ],
-            "evidence": [
-                item.model_dump(mode="json") for item in evidence_deduped
-            ],
+            "evidence": [item.model_dump(mode="json") for item in evidence_deduped],
             "citations": citations,
             "related_entities": [
                 entity.model_dump(mode="json")
@@ -829,9 +1040,7 @@ class MaterialsKGService:
                 trace.model_dump(mode="json") for trace in self._dedupe_by_id(findings)
             ],
             "data_gaps": [gap.model_dump(mode="json") for gap in data_gaps],
-            "search_hits": [
-                hit.model_dump(mode="json") for hit in search_deduped
-            ],
+            "search_hits": [hit.model_dump(mode="json") for hit in search_deduped],
             "warnings": warnings,
         }
 
@@ -852,8 +1061,11 @@ class MaterialsKGService:
         """
         if not self._llm:
             result = self.answer_question(
-                question=question, material=material, mode=mode,
-                property_name=property_name, source_ids=source_ids,
+                question=question,
+                material=material,
+                mode=mode,
+                property_name=property_name,
+                source_ids=source_ids,
                 session_id=session_id,
             )
             yield result["answer"]
@@ -862,40 +1074,92 @@ class MaterialsKGService:
         warnings: list[str] = []
         matched_entities = self._match_entities_from_question(question)
         material_entity = self._resolve_filter_entity(
-            EntityKind.MATERIAL, material, matched_entities, warnings,
+            EntityKind.MATERIAL,
+            material,
+            matched_entities,
+            warnings,
         )
         mode_entity = self._resolve_filter_entity(
-            EntityKind.MODE, mode, matched_entities, warnings,
+            EntityKind.MODE,
+            mode,
+            matched_entities,
+            warnings,
         )
         property_entity = self._resolve_filter_entity(
-            EntityKind.PROPERTY, property_name, matched_entities, warnings,
+            EntityKind.PROPERTY,
+            property_name,
+            matched_entities,
+            warnings,
         )
 
         graph_context: dict[str, Any] = {}
+        if source_ids is not None:
+            source_set = set(source_ids)
+            matched_entities = [
+                e for e in matched_entities if _entity_matches_sources(e, source_set)
+            ]
+            if material_entity is not None and not _entity_matches_sources(
+                material_entity, source_set
+            ):
+                material_entity = None
+            if mode_entity is not None and not _entity_matches_sources(
+                mode_entity, source_set
+            ):
+                mode_entity = None
+            if property_entity is not None and not _entity_matches_sources(
+                property_entity, source_set
+            ):
+                property_entity = None
         if material_entity is not None:
             material_result = self.query_material_mode(
                 material_entity.canonical_name,
                 mode_entity.canonical_name if mode_entity else None,
                 property_entity.canonical_name if property_entity else None,
             )
+            experiments = self._dedupe_entities(material_result.experiments)
+            observations = self._dedupe_by_id(material_result.observations)
+            evidence = self._dedupe_by_id(material_result.evidence)
+            if source_ids is not None:
+                source_set = set(source_ids)
+                evidence_by_id = {e.id: e for e in evidence}
+                experiments = [
+                    e for e in experiments if _entity_matches_sources(e, source_set)
+                ]
+                observations = [
+                    o
+                    for o in observations
+                    if _observation_matches_sources(o, evidence_by_id, source_set)
+                ]
+                evidence = [
+                    e for e in evidence if _evidence_matches_sources(e, source_set)
+                ]
             graph_context = {
-                "matched_entities": [e.model_dump(mode="json") for e in matched_entities],
-                "experiments": [e.model_dump(mode="json") for e in self._dedupe_entities(material_result.experiments)],
-                "observations": [o.model_dump(mode="json") for o in self._dedupe_by_id(material_result.observations)],
-                "evidence": [e.model_dump(mode="json") for e in material_result.evidence],
+                "matched_entities": [
+                    e.model_dump(mode="json") for e in matched_entities
+                ],
+                "experiments": [e.model_dump(mode="json") for e in experiments],
+                "observations": [o.model_dump(mode="json") for o in observations],
+                "evidence": [e.model_dump(mode="json") for e in evidence],
             }
 
         conversation_history: list[dict[str, str]] = []
         if self._session_store and session_id:
             from kg_engine.config.settings import settings
+
             conversation_history = self._session_store.get_context_messages(
-                session_id, last_n=settings.session_history_turns,
+                session_id,
+                last_n=settings.session_history_turns,
             )
 
         full_answer_parts: list[str] = []
         try:
             from kg_engine.llm_core.extraction import _build_graph_context_str
-            context_str = _build_graph_context_str(graph_context) if graph_context else "No data found."
+
+            context_str = (
+                _build_graph_context_str(graph_context)
+                if graph_context
+                else "No data found."
+            )
 
             system_prompt = (
                 "You are a materials science research assistant.\n\n"
@@ -913,24 +1177,33 @@ class MaterialsKGService:
                 "6. If you identify data gaps (missing experiments, unmeasured properties), mention them."
             )
 
-            user_content = f"Knowledge graph data:\n{context_str}\n\nQuestion: {question}"
+            user_content = (
+                f"Knowledge graph data:\n{context_str}\n\nQuestion: {question}"
+            )
 
             messages: list[dict[str, str]] = []
             if conversation_history:
                 for hist_msg in conversation_history[-10:]:
-                    messages.append({"role": hist_msg["role"], "content": hist_msg["content"]})
+                    messages.append(
+                        {"role": hist_msg["role"], "content": hist_msg["content"]}
+                    )
             messages.append({"role": "system", "content": system_prompt})
             messages.append({"role": "user", "content": user_content})
 
-            async for chunk in self._llm.chat_stream(messages, temperature=0.3, max_tokens=1024):
+            async for chunk in self._llm.chat_stream(
+                messages, temperature=0.3, max_tokens=1024
+            ):
                 full_answer_parts.append(chunk)
                 yield chunk
 
         except Exception:
             logger.exception("LLM streaming failed, falling back to sync answer")
             result = self.answer_question(
-                question=question, material=material, mode=mode,
-                property_name=property_name, source_ids=source_ids,
+                question=question,
+                material=material,
+                mode=mode,
+                property_name=property_name,
+                source_ids=source_ids,
                 session_id=session_id,
             )
             yield result["answer"]
@@ -997,38 +1270,83 @@ class MaterialsKGService:
             )
         )
         data_gaps = self.query_data_gaps(filters=filters)
+
+        if request.source_ids is not None:
+            source_set = set(request.source_ids)
+            evidence_by_id = {e.id: e for e in evidence}
+            observations = [
+                o
+                for o in observations
+                if _observation_matches_sources(o, evidence_by_id, source_set)
+            ]
+            evidence = [e for e in evidence if _evidence_matches_sources(e, source_set)]
+            data_gaps = [
+                g
+                for g in data_gaps
+                if all(
+                    _entity_matches_sources(e, source_set)
+                    for e in self._repository.find_entities(
+                        ids=[x for x in (g.material_id, g.mode_id, g.property_id) if x]
+                    )
+                )
+            ]
+
+        total_observations = len(observations)
+        total_evidence = len(evidence)
+        avg_evidence_confidence = (
+            fmean([ev.confidence for ev in evidence]) if evidence else 0.0
+        )
+        avg_observation_confidence = (
+            fmean([obs.confidence for obs in observations]) if observations else 0.0
+        )
+
         hypotheses: list[ResearchHypothesis] = []
 
         for gap in data_gaps:
-            material_name = self._entity_name(gap.material_id, "material")
+            mat_name = self._entity_name(gap.material_id, "material")
             mode_name = self._entity_name(gap.mode_id, "mode")
-            property_name = self._entity_name(
+            prop_name = self._entity_name(
                 gap.property_id,
-                property_entity.canonical_name if property_entity else request.target_kpi,
+                property_entity.canonical_name
+                if property_entity
+                else request.target_kpi,
             )
+
+            novelty = min(1.0, 0.7 + 0.3 * (1.0 - min(total_observations / 20.0, 1.0)))
+            risk = 0.45 + 0.2 * (1.0 - avg_evidence_confidence)
+            value = 0.7 + 0.15 * (1.0 - min(total_evidence / 30.0, 1.0))
+            evidence_strength = avg_observation_confidence * 0.3
+
+            conflicting_for_prop = sum(
+                1
+                for obs in observations
+                if obs.property_id == gap.property_id and obs.mode_id == gap.mode_id
+            )
+
             score = self._hypothesis_score(
-                novelty=0.9,
-                risk=0.55,
-                value=0.82,
-                evidence_strength=0.25,
+                novelty=novelty,
+                risk=risk,
+                value=value,
+                evidence_strength=evidence_strength,
             )
             hypotheses.append(
                 ResearchHypothesis(
                     id=_stable_id("hyp", request.target_kpi, gap.id),
                     target_kpi=request.target_kpi,
                     statement=(
-                        f"Проверить, улучшает ли режим {mode_name} для {material_name} "
-                        f"целевой KPI '{property_name}'."
+                        f"Проверить, улучшает ли режим {mode_name} для {mat_name} "
+                        f"целевой KPI '{prop_name}'."
                     ),
                     rationale=(
-                        f"В графе есть правило покрытия '{gap.metadata.get('rule_name', gap.rule_id)}', "
-                        f"но отсутствует измерение: {gap.reason}. Это интерпретируемый "
-                        "пробел, из которого получается проверяемая гипотеза."
+                        f"Правило покрытия '{gap.metadata.get('rule_name', gap.rule_id)}' "
+                        f"требует измерения {prop_name} для {mat_name}/{mode_name}, "
+                        f"но данные отсутствуют ({gap.reason}). "
+                        "Пробел является проверяемой гипотезой."
                     ),
                     test_plan=(
-                        f"Провести эксперимент {material_name} / {mode_name}; измерить "
-                        f"{property_name}; сохранить row-level evidence и сравнить с "
-                        "существующими режимами."
+                        f"Провести эксперимент {mat_name} / {mode_name}; измерить "
+                        f"{prop_name}; сохранить row-level evidence; сравнить с "
+                        "существующими режимами и другими материалами."
                     ),
                     score=score,
                     supporting_entity_ids=[
@@ -1038,52 +1356,114 @@ class MaterialsKGService:
                     ],
                     data_gap_ids=[gap.id],
                     assumptions=[
-                        "Coverage rule отражает ожидаемую матрицу исследований.",
-                        "Отсутствие observation означает непроверенную область, а не отрицательный результат.",
+                        "Coverage rule отражает реальную матрицу исследований.",
+                        "Отсутствие observation = непроверенная область, не отрицательный результат.",
+                    ],
+                    novelty_rationale=(
+                        f"Нет измерений {prop_name} для {mat_name}/{mode_name} — "
+                        f"область полностью неизучена ({total_observations} observations в графе)."
+                    ),
+                    risk_items=[
+                        "Эксперимент может потребовать оборудования, отсутствующего в базе.",
+                        f"Есть {conflicting_for_prop} связанных observations — возможны конфликты.",
+                        "Отсутствие baseline для сравнения без дополнительных замеров.",
+                    ],
+                    value_rationale=(
+                        f"Заполнение пробела в coverage matrix для {prop_name} "
+                        f"повысит полноту данных на {100 // max(total_observations + 1, 1)}%."
+                    ),
+                    logic_trace=[
+                        f"1. Загружено {total_observations} observations, {total_evidence} evidence.",
+                        f"2. Coverage rule '{gap.metadata.get('rule_name', gap.rule_id)}' требует {prop_name} для {mat_name}/{mode_name}.",
+                        "3. Observation для этой связки отсутствует → data gap.",
+                        f"4. novelty={novelty:.2f} (нет данных), risk={risk:.2f}, value={value:.2f}.",
+                    ],
+                    validation_checks=[
+                        f"Проверить наличие оборудования для {mode_name}.",
+                        "Убедиться, что KPI измеряется в той же единице.",
+                    ],
+                    falsification_criteria=[
+                        f"Гипотеза falsified, если эксперимент покажет, что {prop_name} не зависит от {mode_name}.",
+                        "Гипотеза falsified, если существующие данные уже покрывают эту связку.",
+                    ],
+                    required_evidence=[
+                        f"Измерение {prop_name} для {mat_name}/{mode_name}.",
+                        "Контрольный замер для baseline-сравнения.",
                     ],
                     metadata={"source": "coverage_gap"},
                 )
             )
 
         for observation in observations:
-            material_name = self._entity_name(observation.material_id, "material")
+            mat_name = self._entity_name(observation.material_id, "material")
             mode_name = self._entity_name(observation.mode_id, "mode")
-            property_name = self._entity_name(observation.property_id, request.target_kpi)
+            prop_name = self._entity_name(observation.property_id, request.target_kpi)
             evidence_item = self._repository.get_evidence(observation.evidence_id)
             evidence_strength = observation.confidence
             if evidence_item is not None:
-                evidence_strength = fmean([observation.confidence, evidence_item.confidence])
+                evidence_strength = fmean(
+                    [observation.confidence, evidence_item.confidence]
+                )
+
+            conflicting_count = sum(
+                1
+                for obs in observations
+                if obs.property_id == observation.property_id
+                and obs.mode_id == observation.mode_id
+                and obs.value is not None
+                and observation.value is not None
+                and abs(obs.value - observation.value)
+                / max(abs(observation.value), 1e-10)
+                > 0.15
+            )
+            same_obs_count = sum(
+                1
+                for obs in observations
+                if obs.property_id == observation.property_id
+                and obs.mode_id == observation.mode_id
+            )
+            novelty = max(
+                0.2,
+                0.6
+                - 0.1 * conflicting_count
+                - 0.05 * min(total_observations / 10.0, 0.3),
+            )
+            risk = max(0.15, 0.3 - 0.1 * evidence_strength + 0.05 * conflicting_count)
+            value = min(
+                1.0,
+                0.65
+                + 0.15 * evidence_strength
+                + 0.05 * min(total_evidence / 15.0, 0.2),
+            )
+
             value_text = (
                 f"{observation.value:g} {observation.unit or ''}".strip()
                 if observation.value is not None
                 else "наблюдаемый эффект"
             )
             score = self._hypothesis_score(
-                novelty=0.45,
-                risk=0.35,
-                value=0.78,
+                novelty=novelty,
+                risk=risk,
+                value=value,
                 evidence_strength=evidence_strength,
             )
             hypotheses.append(
                 ResearchHypothesis(
-                    id=_stable_id(
-                        "hyp",
-                        request.target_kpi,
-                        observation.id,
-                    ),
+                    id=_stable_id("hyp", request.target_kpi, observation.id),
                     target_kpi=request.target_kpi,
                     statement=(
-                        f"Использовать связку {material_name} / {mode_name} как основу "
-                        f"для повышения KPI '{property_name}'."
+                        f"Использовать связку {mat_name} / {mode_name} как основу "
+                        f"для повышения KPI '{prop_name}'."
                     ),
                     rationale=(
-                        f"В графе уже есть измерение {property_name}: {value_text}. "
-                        "Гипотеза не является случайной: она опирается на existing "
-                        "observation и может быть проверена повтором или вариацией режима."
+                        f"В графе есть измерение {prop_name}: {value_text} "
+                        f"(confidence={evidence_strength:.2f}). "
+                        "Гипотеза опирается на существующее observation и может быть "
+                        "проверена вариацией режима."
                     ),
                     test_plan=(
-                        f"Повторить эксперимент для {material_name} / {mode_name}, затем "
-                        "изменить один технологический параметр и сравнить KPI с базовым "
+                        f"Повторить эксперимент для {mat_name} / {mode_name}, затем "
+                        f"изменить один параметр и сравнить {prop_name} с базовым "
                         f"значением {value_text}."
                     ),
                     score=score,
@@ -1100,19 +1480,100 @@ class MaterialsKGService:
                     supporting_evidence_ids=[observation.evidence_id],
                     supporting_observation_ids=[observation.id],
                     assumptions=[
-                        "Историческое измерение можно воспроизвести в текущей лабораторной базе.",
-                        "Изменение режима будет сравниваться с тем же KPI и единицами измерения.",
+                        "Историческое измерение воспроизводимо в текущей лабораторной базе.",
+                        "Изменение режима сравнивается с тем же KPI и единицами измерения.",
+                    ],
+                    novelty_rationale=(
+                        f"Есть {same_obs_count} observations для {prop_name}/{mode_name}, "
+                        f"{conflicting_count} конфликтующих — {'низкая' if conflicting_count > 2 else 'умеренная'} новизна."
+                    ),
+                    risk_items=[
+                        f"Конфликтующие данные ({conflicting_count} observations) могут указывать на нестабильность.",
+                        "Воспроизводимость зависит от точного воспроизведения условий.",
+                    ],
+                    value_rationale=(
+                        f"Подтвержденное значение {value_text} (confidence={evidence_strength:.2f}) "
+                        "даёт reproducible baseline для оптимизации."
+                    ),
+                    logic_trace=[
+                        f"1. Observation {observation.id}: {value_text} (confidence={evidence_strength:.2f}).",
+                        f"2. {same_obs_count} observations для этой связки, {conflicting_count} конфликтующих.",
+                        f"3. novelty={novelty:.2f}, risk={risk:.2f}, value={value:.2f}.",
+                    ],
+                    validation_checks=[
+                        "Проверить, что измерение проводилось в одинаковых условиях.",
+                        "Убедиться в воспроизводимости equipment/mode.",
+                    ],
+                    falsification_criteria=[
+                        f"Гипотеза falsified, если повторный замер отклоняется >20% от {value_text}.",
+                        "Гипотеза falsified, если оптимизация режима не приводит к росту KPI.",
+                    ],
+                    required_evidence=[
+                        f"Повторный замер {prop_name} для {mat_name}/{mode_name}.",
+                        "Baseline comparison с контрольной группой.",
                     ],
                     metadata={"source": "observed_effect"},
                 )
             )
 
         if request.expert_adjustments:
-            note = "Учтены экспертные корректировки: " + ", ".join(
-                sorted(request.expert_adjustments)
-            )
             for hypothesis in hypotheses:
-                hypothesis.expert_notes.append(note)
+                adj = request.expert_adjustments.get(hypothesis.id)
+                if adj is None:
+                    note = "Учтены общие экспертные корректировки: " + ", ".join(
+                        sorted(request.expert_adjustments)
+                    )
+                    hypothesis.expert_notes.append(note)
+                elif isinstance(adj, dict):
+                    if adj.get("reject"):
+                        hypothesis.score = HypothesisScore(
+                            novelty=0,
+                            risk=1.0,
+                            value=0,
+                            evidence_strength=0,
+                            final_score=0,
+                        )
+                    else:
+                        new_novelty = hypothesis.score.novelty
+                        new_risk = hypothesis.score.risk
+                        new_value = hypothesis.score.value
+                        new_ev = hypothesis.score.evidence_strength
+                        if "risk_adjustment" in adj:
+                            new_risk = max(
+                                0.0, min(1.0, new_risk + adj["risk_adjustment"])
+                            )
+                        if "value_adjustment" in adj:
+                            new_value = max(
+                                0.0, min(1.0, new_value + adj["value_adjustment"])
+                            )
+                        if "novelty_adjustment" in adj:
+                            new_novelty = max(
+                                0.0, min(1.0, new_novelty + adj["novelty_adjustment"])
+                            )
+                        if "evidence_strength_adjustment" in adj:
+                            new_ev = max(
+                                0.0,
+                                min(1.0, new_ev + adj["evidence_strength_adjustment"]),
+                            )
+                        if "score_override" in adj:
+                            final = max(0.0, min(1.0, adj["score_override"]))
+                        else:
+                            final = (
+                                0.35 * new_value
+                                + 0.25 * new_ev
+                                + 0.20 * new_novelty
+                                + 0.20 * (1.0 - new_risk)
+                            )
+                            final = max(0.0, min(1.0, final))
+                        hypothesis.score = HypothesisScore(
+                            novelty=new_novelty,
+                            risk=new_risk,
+                            value=new_value,
+                            evidence_strength=new_ev,
+                            final_score=final,
+                        )
+                    if "note" in adj:
+                        hypothesis.expert_notes.append(adj["note"])
 
         hypotheses.sort(key=lambda item: item.score.final_score, reverse=True)
         hypotheses = hypotheses[: request.max_hypotheses]
@@ -1195,29 +1656,33 @@ class MaterialsKGService:
             if key in seen:
                 continue
             seen.add(key)
-            citations.append({
-                "id": item.id,
-                "source_id": item.source_id,
-                "source_kind": item.source_kind.value,
-                "fragment": item.span.fragment or item.extraction_method,
-                "section": item.span.section,
-                "row_reference": item.span.row_reference,
-                "confidence": item.confidence,
-            })
+            citations.append(
+                {
+                    "id": item.id,
+                    "source_id": item.source_id,
+                    "source_kind": item.source_kind.value,
+                    "fragment": item.span.fragment or item.extraction_method,
+                    "section": item.span.section,
+                    "row_reference": item.span.row_reference,
+                    "confidence": item.confidence,
+                }
+            )
         for hit in search_hits[:5]:
             key = f"search:{hit.id}"
             if key in seen:
                 continue
             seen.add(key)
-            citations.append({
-                "id": hit.id,
-                "source_id": hit.source_entity_id,
-                "source_kind": hit.source_kind.value,
-                "fragment": hit.content[:200],
-                "section": None,
-                "row_reference": None,
-                "confidence": 1.0,
-            })
+            citations.append(
+                {
+                    "id": hit.id,
+                    "source_id": hit.source_entity_id,
+                    "source_kind": hit.source_kind.value,
+                    "fragment": hit.content[:200],
+                    "section": None,
+                    "row_reference": None,
+                    "confidence": 1.0,
+                }
+            )
         return citations
 
     def get_source_overview(self) -> dict[str, Any]:
@@ -1226,7 +1691,9 @@ class MaterialsKGService:
         observations = self._repository.list_observations()
         relations = self._repository.list_relations()
         evidence_ids = [obs.evidence_id for obs in observations if obs.evidence_id]
-        evidence_all = self._repository.list_evidence(evidence_ids) if evidence_ids else []
+        evidence_all = (
+            self._repository.list_evidence(evidence_ids) if evidence_ids else []
+        )
         by_kind: dict[str, int] = {}
         for e in entities:
             by_kind[e.kind.value] = by_kind.get(e.kind.value, 0) + 1
@@ -1234,8 +1701,19 @@ class MaterialsKGService:
         for e in entities:
             for ref in e.source_refs:
                 source_files.add(ref)
+            props = e.properties
+            for key in ("source_file", "source_ref", "_uploaded_from"):
+                val = props.get(key)
+                if val:
+                    source_files.add(val)
         for ev in evidence_all:
-            source_files.add(ev.source_id)
+            meta = ev.metadata
+            if meta.get("source_file"):
+                source_files.add(meta["source_file"])
+            elif meta.get("source_ref"):
+                source_files.add(meta["source_ref"])
+            else:
+                source_files.add(ev.source_id)
         return {
             "total_entities": len(entities),
             "by_kind": by_kind,
@@ -1266,7 +1744,9 @@ class MaterialsKGService:
         if materials and modes:
             m = materials[0]
             mo = modes[0]
-            suggestions.append(f"Что уже делали по {m.canonical_name} при режиме {mo.canonical_name}?")
+            suggestions.append(
+                f"Что уже делали по {m.canonical_name} при режиме {mo.canonical_name}?"
+            )
         if materials and properties:
             m = materials[0]
             p = properties[0]
@@ -1376,7 +1856,9 @@ class MaterialsKGService:
             summaries = [trace.summary for trace in self._dedupe_by_id(findings)[:3]]
             parts.append("Выводы: " + " ".join(summaries))
         if data_gaps:
-            parts.append(f"Пробелы данных: {len(data_gaps)} ожидаемых связок без измерений.")
+            parts.append(
+                f"Пробелы данных: {len(data_gaps)} ожидаемых связок без измерений."
+            )
         if context:
             parts.insert(0, f"Контекст запроса: {context}.")
         return " ".join(parts)
@@ -1395,21 +1877,23 @@ class MaterialsKGService:
         material: Entity,
         mode_entity: Entity | None,
         observation_input: ObservationInput,
+        provenance_ref: str | None = None,
     ) -> Observation:
+        src = provenance_ref or experiment.source_ref or experiment.experiment_id
         property_entity = self._ensure_entity(
             EntityKind.PROPERTY,
             observation_input.property_name,
-            source_ref=experiment.experiment_id,
+            source_ref=src,
         )
         evidence = self._create_evidence(
             source_kind=SourceKind.EXPERIMENT,
-            source_id=experiment.experiment_id,
+            source_id=src,
             fragment=observation_input.fragment,
             row_reference=observation_input.row_reference,
             extraction_method=observation_input.extraction_method,
             confidence=observation_input.confidence,
             version=experiment.source_version,
-            metadata=observation_input.metadata,
+            metadata={**observation_input.metadata, "source_file": src},
         )
         observation = Observation(
             id=_stable_id(

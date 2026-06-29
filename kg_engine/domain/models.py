@@ -240,6 +240,9 @@ class ExperimentInput(BaseModel):
     team_name: str | None = Field(default=None)
     document_id: str | None = Field(default=None)
     source_version: str | None = Field(default=None)
+    source_ref: str | None = Field(
+        default=None, description="Source file/origin identifier for provenance"
+    )
     observations: list[ObservationInput] = Field(default_factory=list)
     findings: list[FindingInput] = Field(default_factory=list)
     text_units: list[TextUnitInput] = Field(default_factory=list)
@@ -259,6 +262,9 @@ class DocumentInput(BaseModel):
     team_names: list[str] = Field(default_factory=list)
     tag_names: list[str] = Field(default_factory=list)
     experiment_ids: list[str] = Field(default_factory=list)
+    source_ref: str | None = Field(
+        default=None, description="Source file/origin identifier for provenance"
+    )
     findings: list[FindingInput] = Field(default_factory=list)
     text_units: list[TextUnitInput] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -338,6 +344,10 @@ class HypothesisInput(BaseModel):
     material: str | None = Field(default=None)
     mode: str | None = Field(default=None)
     property_name: str | None = Field(default=None)
+    source_ids: list[str] | None = Field(
+        default=None,
+        description="Filter hypotheses to only include data from these source files",
+    )
     max_hypotheses: int = Field(default=5, ge=1, le=20)
     expert_adjustments: dict[str, Any] = Field(default_factory=dict)
 
@@ -367,6 +377,28 @@ class ResearchHypothesis(BaseModel):
     data_gap_ids: list[str] = Field(default_factory=list)
     assumptions: list[str] = Field(default_factory=list)
     expert_notes: list[str] = Field(default_factory=list)
+    novelty_rationale: str = Field(
+        default="", description="Why this hypothesis is novel or underexplored"
+    )
+    risk_items: list[str] = Field(
+        default_factory=list, description="Specific risk factors for this hypothesis"
+    )
+    value_rationale: str = Field(
+        default="", description="Why pursuing this hypothesis has potential value"
+    )
+    logic_trace: list[str] = Field(
+        default_factory=list, description="Step-by-step reasoning chain"
+    )
+    validation_checks: list[str] = Field(
+        default_factory=list, description="Checks to validate before testing"
+    )
+    falsification_criteria: list[str] = Field(
+        default_factory=list,
+        description="Conditions that would falsify this hypothesis",
+    )
+    required_evidence: list[str] = Field(
+        default_factory=list, description="Evidence needed to test this hypothesis"
+    )
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 

@@ -105,7 +105,11 @@ class InMemoryMaterialsKGRepository:
         return self._evidence.get(evidence_id)
 
     def list_evidence(self, evidence_ids: list[str]) -> list[Evidence]:
-        return [self._evidence[evidence_id] for evidence_id in evidence_ids if evidence_id in self._evidence]
+        return [
+            self._evidence[evidence_id]
+            for evidence_id in evidence_ids
+            if evidence_id in self._evidence
+        ]
 
     def upsert_relation(self, relation: Relation) -> Relation:
         current = self._relations.get(relation.id)
@@ -140,7 +144,9 @@ class InMemoryMaterialsKGRepository:
             ]
         if relation_types is not None:
             allowed = set(relation_types)
-            relations = [relation for relation in relations if relation.relation_type in allowed]
+            relations = [
+                relation for relation in relations if relation.relation_type in allowed
+            ]
         return relations
 
     def upsert_observation(self, observation: Observation) -> Observation:
@@ -157,11 +163,17 @@ class InMemoryMaterialsKGRepository:
     ) -> list[Observation]:
         observations = list(self._observations.values())
         if material_id is not None:
-            observations = [item for item in observations if item.material_id == material_id]
+            observations = [
+                item for item in observations if item.material_id == material_id
+            ]
         if property_id is not None:
-            observations = [item for item in observations if item.property_id == property_id]
+            observations = [
+                item for item in observations if item.property_id == property_id
+            ]
         if experiment_id is not None:
-            observations = [item for item in observations if item.experiment_id == experiment_id]
+            observations = [
+                item for item in observations if item.experiment_id == experiment_id
+            ]
         if mode_id is not None:
             observations = [item for item in observations if item.mode_id == mode_id]
         return observations
@@ -204,7 +216,8 @@ class InMemoryMaterialsKGRepository:
             score = 0
             for term in normalized_terms:
                 if term and (
-                    term in lowered_content or normalize_name(term) in normalized_content
+                    term in lowered_content
+                    or normalize_name(term) in normalized_content
                 ):
                     score += len(term)
             if score == 0:
@@ -229,30 +242,29 @@ class InMemoryMaterialsKGRepository:
     def delete_source(self, source_id: str) -> int:
         removed = 0
         entity_ids_to_remove = [
-            eid for eid, e in self._entities.items()
-            if source_id in e.source_refs
+            eid for eid, e in self._entities.items() if source_id in e.source_refs
         ]
         for eid in entity_ids_to_remove:
             del self._entities[eid]
             removed += 1
         self._alias_index = {
-            k: v for k, v in self._alias_index.items()
-            if v not in entity_ids_to_remove
+            k: v for k, v in self._alias_index.items() if v not in entity_ids_to_remove
         }
         evidence_to_remove = [
-            eid for eid, ev in self._evidence.items()
-            if ev.source_id == source_id
+            eid for eid, ev in self._evidence.items() if ev.source_id == source_id
         ]
         for eid in evidence_to_remove:
             del self._evidence[eid]
             removed += 1
         self._relations = {
-            rid: r for rid, r in self._relations.items()
+            rid: r
+            for rid, r in self._relations.items()
             if r.source_entity_id not in entity_ids_to_remove
             and r.target_entity_id not in entity_ids_to_remove
         }
         obs_to_remove = [
-            oid for oid, o in self._observations.items()
+            oid
+            for oid, o in self._observations.items()
             if o.experiment_id in entity_ids_to_remove
             or o.material_id in entity_ids_to_remove
         ]
@@ -260,7 +272,8 @@ class InMemoryMaterialsKGRepository:
             del self._observations[oid]
             removed += 1
         traces_to_remove = [
-            tid for tid, t in self._traces.items()
+            tid
+            for tid, t in self._traces.items()
             if t.experiment_id in entity_ids_to_remove
             or any(eid in entity_ids_to_remove for eid in t.entity_ids)
         ]
@@ -268,7 +281,8 @@ class InMemoryMaterialsKGRepository:
             del self._traces[tid]
             removed += 1
         text_to_remove = [
-            tid for tid, tu in self._text_units.items()
+            tid
+            for tid, tu in self._text_units.items()
             if tu.source_entity_id in entity_ids_to_remove
         ]
         for tid in text_to_remove:
