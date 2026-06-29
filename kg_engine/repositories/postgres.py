@@ -597,18 +597,55 @@ class PostgresMaterialsKGRepository:
         return text_unit
 
     def search_text_units(self, query: str, *, limit: int = 5) -> list[SearchTextUnit]:
-        with self._connection.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT * FROM kg_text_units
-                WHERE content ILIKE %s
-                ORDER BY created_at DESC
-                LIMIT %s
-                """,
-                (f"%{query}%", limit),
-            )
-            rows = cursor.fetchall()
+        """Search text units using graph-native traversal + text matching."""
+        query_embedding = self._generate_query_embedding(query)
+        rows: list[Any] = []
+
+        if query_embedding:
+            try:
+                with self._connection.cursor() as cursor:
+                    embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
+                    cursor.execute(
+                        """
+                        SELECT id, source_entity_id, source_kind, content, metadata, created_at
+                        FROM kg_text_units
+                        WHERE embedding IS NOT NULL
+                        ORDER BY embedding <=> %s::vector
+                        LIMIT %s
+                        """,
+                        (embedding_str, limit),
+                    )
+                    rows = cursor.fetchall()
+            except Exception:
+                logger.debug("Vector search not available, falling back to text search")
+
+        if not rows:
+            with self._connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT id, source_entity_id, source_kind, content, metadata, created_at
+                    FROM kg_text_units
+                    WHERE content ILIKE %s
+                    ORDER BY created_at DESC
+                    LIMIT %s
+                    """,
+                    (f"%{query}%", limit),
+                )
+                rows = cursor.fetchall()
+
         return [self._row_to_text_unit(row) for row in rows]
+
+    def _generate_query_embedding(self, text: str) -> list[float] | None:
+        """Generate embedding for search query. Returns None if no provider available."""
+        try:
+            from kg_engine.llm_core.provider import create_provider_from_env
+            provider = create_provider_from_env()
+            if provider is None:
+                return None
+            result = provider.embed([text[:2000]])
+            return result[0] if result and result[0] else None
+        except Exception:
+            return None
 
     def _row_to_entity(self, row: Any) -> Entity:
         return Entity(

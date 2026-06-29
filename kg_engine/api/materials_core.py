@@ -94,6 +94,7 @@ class AnswerQueryRequest(BaseModel):
     mode: str | None = Field(default=None)
     property_name: str | None = Field(default=None)
     source_ids: list[str] | None = Field(default=None)
+    session_id: str | None = Field(default=None)
 
 
 def _notebook_dashboard_html() -> str:
@@ -1027,6 +1028,19 @@ def _create_llm_provider():
         return None
 
 
+def _create_session_store():
+    """Create session store with TTL from settings."""
+    try:
+        from kg_engine.services.session import SessionStore
+        from kg_engine.config.settings import settings
+        return SessionStore(
+            ttl_seconds=settings.session_ttl_seconds,
+            max_messages=settings.session_max_messages,
+        )
+    except Exception:
+        return None
+
+
 def create_materials_app(
     *,
     settings: Settings | None = None,
@@ -1054,6 +1068,7 @@ def create_materials_app(
     runtime_service = service or MaterialsKGService(
         create_materials_repository(runtime_settings, ensure_schema=ensure_schema),
         llm_provider=_create_llm_provider(),
+        session_store=_create_session_store(),
     )
     app = FastAPI(title=api_title)
     _source_files: list[dict] = []
@@ -1253,7 +1268,26 @@ def create_materials_app(
             mode=request.mode,
             property_name=request.property_name,
             source_ids=request.source_ids,
+            session_id=request.session_id,
         )
+
+    @app.post("/query/answer/stream")
+    async def query_answer_stream(request: AnswerQueryRequest):
+        from fastapi.responses import StreamingResponse
+
+        async def generate():
+            async for chunk in runtime_service.answer_question_stream(
+                question=request.question,
+                material=request.material,
+                mode=request.mode,
+                property_name=request.property_name,
+                source_ids=request.source_ids,
+                session_id=request.session_id,
+            ):
+                yield f"data: {json.dumps({'content': chunk}, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+
+        return StreamingResponse(generate(), media_type="text/event-stream")
 
     @app.post("/hypotheses/generate")
     def generate_hypotheses(request: HypothesisInput) -> dict:

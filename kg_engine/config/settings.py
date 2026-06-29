@@ -49,6 +49,7 @@ class Settings(BaseSettings):
     vllm_api_key: str = ""
     default_llm_provider: str = ""
     default_model: str = ""
+    default_embedding_model: str = ""
     llm_temperature: float = 0.7
 
     # HuggingFace
@@ -66,6 +67,18 @@ class Settings(BaseSettings):
     materials_api_port: int = 8090
     materials_api_title: str = "Materials KG Core API"
     materials_api_ensure_schema: bool = False
+
+    # LLM context management
+    llm_context_window: int = 128000
+    llm_safety_margin_tokens: int = 500
+    llm_embedding_truncation_chars: int = 2000
+    llm_max_retries: int = 3
+    llm_retry_base_delay: float = 1.0
+
+    # Session management
+    session_ttl_seconds: int = 3600
+    session_max_messages: int = 50
+    session_history_turns: int = 10
 
     # Timezone
     default_timezone: str = "UTC"

@@ -6,7 +6,10 @@ import hashlib
 import logging
 from collections import deque
 from statistics import fmean
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
 
 from kg_engine.domain.models import CanonicalEntityInput
 from kg_engine.domain.models import CoverageRuleInput
@@ -57,9 +60,11 @@ class MaterialsKGService:
         self,
         repository: MaterialsKGRepository,
         llm_provider: Any | None = None,
+        session_store: Any | None = None,
     ) -> None:
         self._repository = repository
         self._llm = llm_provider
+        self._session_store = session_store
 
     def ingest_reference_data(self, batch: ReferenceDataBatch) -> dict[str, int]:
         entity_count = 0
@@ -659,6 +664,7 @@ class MaterialsKGService:
         mode: str | None = None,
         property_name: str | None = None,
         source_ids: list[str] | None = None,
+        session_id: str | None = None,
     ) -> dict[str, Any]:
         """Resolve a free-form research question into graph-backed answer parts."""
         warnings: list[str] = []
@@ -763,10 +769,28 @@ class MaterialsKGService:
                     "decision_history": [t.model_dump(mode="json") for t in self._dedupe_by_id(findings)],
                     "data_gaps": [g.model_dump(mode="json") for g in data_gaps],
                     "search_hits": [h.model_dump(mode="json") for h in search_deduped],
+                    "evidence": [e.model_dump(mode="json") for e in evidence_deduped],
+                    "relations": [r.model_dump(mode="json") for r in self._dedupe_by_id(relations)],
                 }
-                llm_answer = llm_generate_answer(self._llm, question, graph_context)
+
+                conversation_history: list[dict[str, str]] = []
+                if self._session_store and session_id:
+                    from kg_engine.config.settings import settings
+                    conversation_history = self._session_store.get_context_messages(
+                        session_id, last_n=settings.session_history_turns,
+                    )
+
+                llm_answer = llm_generate_answer(
+                    self._llm, question, graph_context,
+                    conversation_history=conversation_history,
+                )
                 if llm_answer:
                     answer = llm_answer
+
+                if self._session_store and session_id:
+                    self._session_store.add_message(session_id, "user", question)
+                    self._session_store.add_message(session_id, "assistant", answer)
+
             except Exception:
                 logger.exception("LLM answer generation failed, using template answer")
         return {
@@ -810,6 +834,112 @@ class MaterialsKGService:
             ],
             "warnings": warnings,
         }
+
+    async def answer_question_stream(
+        self,
+        *,
+        question: str,
+        material: str | None = None,
+        mode: str | None = None,
+        property_name: str | None = None,
+        source_ids: list[str] | None = None,
+        session_id: str | None = None,
+    ) -> AsyncGenerator[str, None]:
+        """Stream answer tokens for a research question.
+
+        Yields string chunks as the LLM generates them.
+        Falls back to sync answer if streaming is unavailable.
+        """
+        if not self._llm:
+            result = self.answer_question(
+                question=question, material=material, mode=mode,
+                property_name=property_name, source_ids=source_ids,
+                session_id=session_id,
+            )
+            yield result["answer"]
+            return
+
+        warnings: list[str] = []
+        matched_entities = self._match_entities_from_question(question)
+        material_entity = self._resolve_filter_entity(
+            EntityKind.MATERIAL, material, matched_entities, warnings,
+        )
+        mode_entity = self._resolve_filter_entity(
+            EntityKind.MODE, mode, matched_entities, warnings,
+        )
+        property_entity = self._resolve_filter_entity(
+            EntityKind.PROPERTY, property_name, matched_entities, warnings,
+        )
+
+        graph_context: dict[str, Any] = {}
+        if material_entity is not None:
+            material_result = self.query_material_mode(
+                material_entity.canonical_name,
+                mode_entity.canonical_name if mode_entity else None,
+                property_entity.canonical_name if property_entity else None,
+            )
+            graph_context = {
+                "matched_entities": [e.model_dump(mode="json") for e in matched_entities],
+                "experiments": [e.model_dump(mode="json") for e in self._dedupe_entities(material_result.experiments)],
+                "observations": [o.model_dump(mode="json") for o in self._dedupe_by_id(material_result.observations)],
+                "evidence": [e.model_dump(mode="json") for e in material_result.evidence],
+            }
+
+        conversation_history: list[dict[str, str]] = []
+        if self._session_store and session_id:
+            from kg_engine.config.settings import settings
+            conversation_history = self._session_store.get_context_messages(
+                session_id, last_n=settings.session_history_turns,
+            )
+
+        full_answer_parts: list[str] = []
+        try:
+            from kg_engine.llm_core.extraction import _build_graph_context_str
+            context_str = _build_graph_context_str(graph_context) if graph_context else "No data found."
+
+            system_prompt = (
+                "You are a materials science research assistant.\n\n"
+                "RULES (mandatory):\n"
+                "1. Answer questions based ONLY on the knowledge graph data provided below. "
+                "Do NOT invent, assume, or fabricate any facts, measurements, or entity relationships "
+                "that are not explicitly present in the provided data.\n"
+                "2. For each claim in your answer, reference the source: mention the source_id "
+                "and the specific fragment or measurement value you are citing.\n"
+                "3. If the provided data does not contain enough information to answer the question, "
+                "state explicitly: 'Недостаточно данных в загруженных источниках для полного ответа.' "
+                "Do NOT guess or fill gaps with general knowledge.\n"
+                "4. Be specific: cite measurements with values and units.\n"
+                "5. Answer in the same language as the question.\n"
+                "6. If you identify data gaps (missing experiments, unmeasured properties), mention them."
+            )
+
+            user_content = f"Knowledge graph data:\n{context_str}\n\nQuestion: {question}"
+
+            messages: list[dict[str, str]] = []
+            if conversation_history:
+                for hist_msg in conversation_history[-10:]:
+                    messages.append({"role": hist_msg["role"], "content": hist_msg["content"]})
+            messages.append({"role": "system", "content": system_prompt})
+            messages.append({"role": "user", "content": user_content})
+
+            async for chunk in self._llm.chat_stream(messages, temperature=0.3, max_tokens=1024):
+                full_answer_parts.append(chunk)
+                yield chunk
+
+        except Exception:
+            logger.exception("LLM streaming failed, falling back to sync answer")
+            result = self.answer_question(
+                question=question, material=material, mode=mode,
+                property_name=property_name, source_ids=source_ids,
+                session_id=session_id,
+            )
+            yield result["answer"]
+            return
+
+        if self._session_store and session_id:
+            full_answer = "".join(full_answer_parts)
+            self._session_store.add_message(session_id, "user", question)
+            self._session_store.add_message(session_id, "assistant", full_answer)
 
     def generate_hypotheses(
         self,

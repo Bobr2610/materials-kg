@@ -11,6 +11,7 @@ from kg_engine.domain.models import ObservationInput
 from kg_engine.domain.models import PropertyFilters
 from kg_engine.domain.models import QueryFilters
 from kg_engine.domain.models import ReferenceDataBatch
+from kg_engine.domain.models import TextUnitInput
 from kg_engine.repositories.memory import InMemoryMaterialsKGRepository
 from kg_engine.services.materials_kg import MaterialsKGService
 
@@ -308,3 +309,110 @@ def test_hypothesis_factory_generates_ranked_graph_grounded_candidates() -> None
     assert any(item.supporting_observation_ids for item in result.hypotheses)
     assert result.evidence
     assert result.data_gaps
+
+
+class TestSourceGrounding:
+    """Verify that answer_question returns source-backed data, not fabricated content."""
+
+    def _build_service_with_data(self) -> MaterialsKGService:
+        service = build_service()
+        service.ingest_reference_data(
+            ReferenceDataBatch(
+                entities=[
+                    CanonicalEntityInput(kind=EntityKind.MATERIAL, name="Ti-6Al-4V"),
+                    CanonicalEntityInput(kind=EntityKind.MODE, name="Annealing"),
+                    CanonicalEntityInput(
+                        kind=EntityKind.PROPERTY,
+                        name="Hardness",
+                        aliases=["hardness", "твердость"],
+                    ),
+                ]
+            )
+        )
+        service.ingest_experiments(
+            [
+                ExperimentInput(
+                    experiment_id="exp-ground-001",
+                    title="Ti6Al4V hardness after anneal",
+                    material_name="Ti-6Al-4V",
+                    mode_name="Annealing",
+                    observations=[
+                        ObservationInput(
+                            property_name="Hardness",
+                            value=36.0,
+                            unit="HRC",
+                            fragment="Ti-6Al-4V hardness 36 HRC after annealing",
+                            row_reference="sheet1!A1",
+                        )
+                    ],
+                    findings=[
+                        FindingInput(
+                            summary="Annealing reduces hardness to 36 HRC",
+                            confidence=0.9,
+                        )
+                    ],
+                    text_units=[
+                        TextUnitInput(
+                            content="Ti-6Al-4V alloy annealed at 700C shows hardness 36 HRC",
+                            metadata={"section": "results"},
+                        )
+                    ],
+                )
+            ]
+        )
+        return service
+
+    def test_answer_contains_citations_from_loaded_sources(self) -> None:
+        service = self._build_service_with_data()
+        result = service.answer_question(
+            question="What is the hardness of Ti-6Al-4V after Annealing?"
+        )
+
+        assert result["answer"], "Answer should not be empty"
+        assert result["citations"], "Answer must include citations from loaded sources"
+        assert result["experiments"], "Answer must reference matched experiments"
+        assert result["observations"], "Answer must include observation data"
+
+        citation = result["citations"][0]
+        assert "source_id" in citation, "Citation must have source_id"
+        assert "source_kind" in citation, "Citation must have source_kind"
+
+    def test_answer_does_not_fabricate_unloaded_entities(self) -> None:
+        service = self._build_service_with_data()
+        result = service.answer_question(
+            question="What is the tensile strength of Inconel 718?"
+        )
+
+        assert result["warnings"], "Should warn when no entities match"
+        assert any(
+            "не найден" in w or "не удалось" in w.lower() or "не сопоставить" in w.lower()
+            for w in result["warnings"]
+        ), f"Warning should indicate entity not found, got: {result['warnings']}"
+
+    def test_answer_includes_source_fragments(self) -> None:
+        service = self._build_service_with_data()
+        result = service.answer_question(
+            question="Hardness Ti-6Al-4V Annealing"
+        )
+
+        evidence = result.get("evidence", [])
+        assert evidence, "Evidence list should not be empty for matched query"
+
+        ev = evidence[0]
+        assert "source_id" in ev, "Evidence must track source_id"
+        assert "span" in ev, "Evidence must have span with fragment"
+        span = ev["span"]
+        assert span.get("fragment"), "Evidence span must contain a text fragment"
+
+    def test_search_hits_are_included_for_text_match(self) -> None:
+        service = self._build_service_with_data()
+        result = service.answer_question(
+            question="hardness annealing Ti-6Al-4V"
+        )
+
+        search_hits = result.get("search_hits", [])
+        assert search_hits, "Text search should find relevant units"
+
+        hit = search_hits[0]
+        assert "source_entity_id" in hit, "Search hit must reference source entity"
+        assert "content" in hit, "Search hit must include content fragment"

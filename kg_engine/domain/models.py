@@ -381,3 +381,22 @@ class HypothesisGenerationResult(BaseModel):
     data_gaps: list[DataGap] = Field(default_factory=list)
     matched_entities: list[Entity] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+
+
+class ChatMessage(BaseModel):
+    """A single message in a conversation session."""
+
+    role: str = Field(description="'user' or 'assistant'")
+    content: str
+    timestamp: datetime = Field(default_factory=utc_now)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ConversationSession(BaseModel):
+    """A conversation session with message history and TTL."""
+
+    session_id: str
+    messages: list[ChatMessage] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=utc_now)
+    last_active: datetime = Field(default_factory=utc_now)
+    metadata: dict[str, Any] = Field(default_factory=dict)

@@ -129,7 +129,9 @@ class EntityExtractor:
         text: str,
         source: str | None = None,
     ) -> tuple[list[GraphEntity], list[GraphRelation]]:
-        prompt = _EXTRACTION_PROMPT_TEMPLATE.format(text=text[:8000])
+        from kg_engine.config.settings import settings
+
+        prompt = _EXTRACTION_PROMPT_TEMPLATE.format(text=text[:settings.llm_embedding_truncation_chars])
 
         if self._llm_manager is None:
             logger.warning("No LLM manager provided, using regex-only extraction")
