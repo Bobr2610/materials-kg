@@ -36,6 +36,25 @@ if TYPE_CHECKING:
 _TEXT_SUFFIXES = {".txt", ".md"}
 _STRUCTURED_SUFFIXES = {".json", ".jsonl", ".csv", ".tsv"}
 _SAMPLE_DATA_DIR = Path(__file__).resolve().parents[2] / "data"
+_SOURCES_QUERY = Query(default=None)
+_REFERENCE_KEYS = {
+    "entities",
+    "materials",
+    "equipment",
+    "properties",
+    "modes",
+    "teams",
+    "documents",
+    "tags",
+    "coverage_rules",
+}
+_EXPERIMENT_KEYS = {
+    "experiment_id",
+    "material_name",
+    "mode_name",
+    "observations",
+}
+_DOCUMENT_KEYS = {"document_id", "text", "content", "body"}
 
 
 def _parse_uploaded_file(name: str, content: bytes) -> object | None:
@@ -68,6 +87,109 @@ def _parse_uploaded_file(name: str, content: bytes) -> object | None:
             }
         ]
     return None
+
+
+def _mark_uploaded_from(payload: object, name: str) -> None:
+    if isinstance(payload, dict):
+        payload["_uploaded_from"] = name
+        metadata = payload.setdefault("metadata", {})
+        if isinstance(metadata, dict):
+            metadata.setdefault("source_file", name)
+    elif isinstance(payload, list):
+        for item in payload:
+            _mark_uploaded_from(item, name)
+
+
+def _looks_like_reference_record(item: dict) -> bool:
+    return bool(item.get("kind") or item.get("entity_kind"))
+
+
+def _looks_like_experiment_record(item: dict) -> bool:
+    return bool(
+        (item.get("experiment_id") or item.get("id"))
+        and item.get("material_name")
+        and item.get("observations")
+    )
+
+
+def _looks_like_document_record(item: dict) -> bool:
+    return bool(any(item.get(key) for key in _DOCUMENT_KEYS))
+
+
+def _looks_canonical(parsed: object) -> bool:
+    if isinstance(parsed, dict):
+        if any(key in parsed for key in _REFERENCE_KEYS | {"experiments"}):
+            return True
+        return (
+            _looks_like_reference_record(parsed)
+            or _looks_like_experiment_record(parsed)
+            or _looks_like_document_record(parsed)
+        )
+    if isinstance(parsed, list):
+        dict_items = [item for item in parsed if isinstance(item, dict)]
+        if not dict_items:
+            return False
+        return all(
+            _looks_like_reference_record(item)
+            or _looks_like_experiment_record(item)
+            or _looks_like_document_record(item)
+            for item in dict_items
+        )
+    return False
+
+
+def _append_llm_structured_payload(
+    *,
+    structured: dict,
+    name: str,
+    ref_payload: dict,
+    exp_payload: list,
+    doc_payload: list,
+) -> bool:
+    added = False
+    reference = structured.get("reference")
+    if isinstance(reference, dict):
+        for key in _REFERENCE_KEYS:
+            values = reference.get(key)
+            if isinstance(values, list) and values:
+                for item in values:
+                    _mark_uploaded_from(item, name)
+                ref_payload.setdefault(key, []).extend(values)
+                added = True
+    experiments = structured.get("experiments")
+    if isinstance(experiments, list) and experiments:
+        for item in experiments:
+            _mark_uploaded_from(item, name)
+        exp_payload.extend(experiments)
+        added = True
+    documents = structured.get("documents")
+    if isinstance(documents, list) and documents:
+        for item in documents:
+            _mark_uploaded_from(item, name)
+        doc_payload.extend(documents)
+        added = True
+    return added
+
+
+def _append_as_searchable_documents(
+    *,
+    parsed: object,
+    name: str,
+    doc_payload: list,
+) -> None:
+    items = parsed if isinstance(parsed, list) else [parsed]
+    for item_index, item in enumerate(items):
+        if not isinstance(item, dict):
+            continue
+        doc_payload.append(
+            {
+                "document_id": f"{name}#row-{item_index}",
+                "title": f"{Path(name).stem} #row-{item_index}",
+                "text": json.dumps(item, ensure_ascii=False, default=str),
+                "source_ref": name,
+                "metadata": {"source_file": name},
+            }
+        )
 
 
 class MaterialModeRequest(BaseModel):
@@ -112,11 +234,14 @@ def _notebook_dashboard_html() -> str:
     return _UI_PAGE.read_text(encoding="utf-8")
 
 
-def _create_llm_provider():
+def _create_llm_provider(settings: Settings | None = None):
     """Create LLM provider if API key is configured, else None."""
     try:
         from kg_engine.llm_core.provider import create_provider_from_env
+        from kg_engine.llm_core.provider import create_provider_from_settings
 
+        if settings is not None:
+            return create_provider_from_settings(settings)
         return create_provider_from_env()
     except Exception:
         return None
@@ -162,7 +287,7 @@ def create_materials_app(
             api_title = runtime_settings.materials_api_title
     runtime_service = service or MaterialsKGService(
         create_materials_repository(runtime_settings, ensure_schema=ensure_schema),
-        llm_provider=_create_llm_provider(),
+        llm_provider=_create_llm_provider(runtime_settings),
         session_store=_create_session_store(),
     )
     app = FastAPI(title=api_title)
@@ -195,7 +320,7 @@ def create_materials_app(
         }
 
     @app.get("/graph/data")
-    def graph_data(sources: list[str] | None = Query(default=None)) -> dict:
+    def graph_data(sources: list[str] | None = _SOURCES_QUERY) -> dict:
         if sources is not None:
             active_sources = sources
         elif _source_files:
@@ -212,6 +337,13 @@ def create_materials_app(
         exp_payload: list = []
         doc_payload: list = []
         uploaded: list[dict] = []
+        ingestion_status = {
+            "llm_provider_enabled": runtime_service.llm_provider is not None,
+            "llm_structured_files": [],
+            "searchable_fallback_files": [],
+            "fallback_reasons": {},
+            "text_document_files": [],
+        }
         for upload in files:
             name = upload.filename or "unnamed"
             content = await upload.read()
@@ -225,6 +357,8 @@ def create_materials_app(
                 }
             )
             if parsed is None:
+                ingestion_status["searchable_fallback_files"].append(name)
+                ingestion_status["fallback_reasons"][name] = "unsupported_or_binary_file"
                 doc_payload.append(
                     {
                         "document_id": name,
@@ -235,15 +369,53 @@ def create_materials_app(
                 )
                 continue
             if suffix in _TEXT_SUFFIXES:
+                ingestion_status["text_document_files"].append(name)
                 items = parsed if isinstance(parsed, list) else [parsed]
                 for item in items:
                     if isinstance(item, dict):
-                        item["_uploaded_from"] = name
-                        item.setdefault("metadata", {})["source_file"] = name
+                        _mark_uploaded_from(item, name)
                 if isinstance(parsed, list):
                     doc_payload.extend(items)
                 else:
                     doc_payload.append(parsed)
+                continue
+            if suffix in _STRUCTURED_SUFFIXES:
+                structured_added = False
+                if runtime_service.llm_provider:
+                    try:
+                        from kg_engine.llm_core.extraction import (
+                            structure_upload_with_llm,
+                        )
+
+                        structured = structure_upload_with_llm(
+                            runtime_service.llm_provider,
+                            name,
+                            suffix.lstrip(".") or "structured",
+                            parsed,
+                        )
+                        structured_added = _append_llm_structured_payload(
+                            structured=structured,
+                            name=name,
+                            ref_payload=ref_payload,
+                            exp_payload=exp_payload,
+                            doc_payload=doc_payload,
+                        )
+                    except Exception:
+                        structured_added = False
+                if structured_added:
+                    ingestion_status["llm_structured_files"].append(name)
+                else:
+                    ingestion_status["searchable_fallback_files"].append(name)
+                    ingestion_status["fallback_reasons"][name] = (
+                        "llm_unavailable_or_empty_payload"
+                        if runtime_service.llm_provider
+                        else "llm_provider_disabled"
+                    )
+                    _append_as_searchable_documents(
+                        parsed=parsed,
+                        name=name,
+                        doc_payload=doc_payload,
+                    )
                 continue
             if isinstance(parsed, dict):
                 for key in (
@@ -259,15 +431,15 @@ def create_materials_app(
                 ):
                     if key in parsed and isinstance(parsed[key], list):
                         for item in parsed[key]:
-                            item["_uploaded_from"] = name
+                            _mark_uploaded_from(item, name)
                         ref_payload.setdefault(key, []).extend(parsed[key])
                 if "experiments" in parsed and isinstance(parsed["experiments"], list):
                     for item in parsed["experiments"]:
-                        item["_uploaded_from"] = name
+                        _mark_uploaded_from(item, name)
                     exp_payload.extend(parsed["experiments"])
                 if "documents" in parsed and isinstance(parsed["documents"], list):
                     for item in parsed["documents"]:
-                        item["_uploaded_from"] = name
+                        _mark_uploaded_from(item, name)
                     doc_payload.extend(parsed["documents"])
                 if not any(
                     k in parsed
@@ -278,7 +450,7 @@ def create_materials_app(
                         or parsed.get("entity_kind")
                         or parsed.get("type")
                     ):
-                        parsed["_uploaded_from"] = name
+                        _mark_uploaded_from(parsed, name)
                         ref_payload.setdefault("entities", []).append(parsed)
                     else:
                         doc_payload.append(
@@ -294,12 +466,12 @@ def create_materials_app(
                     if not isinstance(item, dict):
                         continue
                     if item.get("kind") or item.get("entity_kind") or item.get("type"):
-                        item["_uploaded_from"] = name
+                        _mark_uploaded_from(item, name)
                         ref_payload.setdefault("entities", []).append(item)
                     elif (item.get("experiment_id") or item.get("id")) and (
                         item.get("material_name") or item.get("material")
                     ):
-                        item["_uploaded_from"] = name
+                        _mark_uploaded_from(item, name)
                         exp_payload.append(item)
                     elif (
                         item.get("document_id")
@@ -329,6 +501,7 @@ def create_materials_app(
             results["documents"] = runtime_service.ingest_documents(
                 DocumentCorpusAdapter().from_payload(doc_payload)
             )
+        results["ingestion"] = ingestion_status
         results["uploaded"] = uploaded
         results["overview"] = runtime_service.get_source_overview()
         results["suggested_questions"] = runtime_service.get_suggested_questions()

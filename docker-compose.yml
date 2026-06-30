@@ -16,6 +16,40 @@ services:
       timeout: 5s
       retries: 20
 
+  materials-api:
+    build:
+      context: .
+    container_name: materials-kg-api
+    depends_on:
+      materials-neo4j:
+        condition: service_healthy
+    environment:
+      MATERIALS_NEO4J_URI: bolt://materials-neo4j:7687
+      MATERIALS_NEO4J_USER: ${NEO4J_USER:-neo4j}
+      MATERIALS_NEO4J_PASSWORD: ${NEO4J_PASSWORD:-changeme}
+      MATERIALS_REQUIRE_GRAPH_DB: "true"
+      MATERIALS_API_ENSURE_SCHEMA: "true"
+      MATERIALS_API_HOST: 0.0.0.0
+      MATERIALS_API_PORT: "8090"
+      DEFAULT_LLM_PROVIDER: ${DEFAULT_LLM_PROVIDER:-}
+      DEFAULT_MODEL: ${DEFAULT_MODEL:-}
+      DEFAULT_EMBEDDING_MODEL: ${DEFAULT_EMBEDDING_MODEL:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENROUTER_BASE_URL: ${OPENROUTER_BASE_URL:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      POLZA_API_KEY: ${POLZA_API_KEY:-}
+      POLZA_BASE_URL: ${POLZA_BASE_URL:-}
+      VLLM_BASE_URL: ${VLLM_BASE_URL:-}
+      VLLM_API_KEY: ${VLLM_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GROQ_BASE_URL: ${GROQ_BASE_URL:-}
+      MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
+      MISTRAL_BASE_URL: ${MISTRAL_BASE_URL:-}
+    ports:
+      - "8090:8090"
+    restart: unless-stopped
+
 volumes:
   materials_kg_neo4j_data:
   materials_kg_neo4j_logs:

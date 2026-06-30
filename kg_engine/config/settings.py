@@ -45,6 +45,13 @@ class Settings(BaseSettings):
     openrouter_api_key: str = ""
     openrouter_base_url: str = ""
     openai_api_key: str | None = None
+    openai_base_url: str = ""
+    polza_api_key: str = ""
+    polza_base_url: str = ""
+    groq_api_key: str = ""
+    groq_base_url: str = ""
+    mistral_api_key: str = ""
+    mistral_base_url: str = ""
     vllm_base_url: str = ""
     vllm_api_key: str = ""
     default_llm_provider: str = ""

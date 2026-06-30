@@ -137,6 +137,10 @@ class MaterialsKGService:
         self._llm = llm_provider
         self._session_store = session_store
 
+    @property
+    def llm_provider(self) -> Any | None:
+        return self._llm
+
     def ingest_reference_data(self, batch: ReferenceDataBatch) -> dict[str, int]:
         entity_count = 0
         for record in batch.entities:
@@ -499,7 +503,11 @@ class MaterialsKGService:
                     ),
                 )
                 trace_count += 1
-        return {"documents": len(batch), "decision_traces": trace_count}
+        return {
+            "documents": len(batch),
+            "decision_traces": trace_count,
+            "llm_extracted_experiments": llm_extracted_count,
+        }
 
     def _upsert_text_unit_with_embedding(
         self,
@@ -795,7 +803,7 @@ class MaterialsKGService:
                         )
         return gaps
 
-    def answer_question(
+    def _build_answer_context(
         self,
         *,
         question: str,
@@ -803,9 +811,8 @@ class MaterialsKGService:
         mode: str | None = None,
         property_name: str | None = None,
         source_ids: list[str] | None = None,
-        session_id: str | None = None,
     ) -> dict[str, Any]:
-        """Resolve a free-form research question into graph-backed answer parts."""
+        """Build one authoritative graph retrieval packet for sync and stream answers."""
         warnings: list[str] = []
         matched_entities = self._match_entities_from_question(question)
 
@@ -952,44 +959,134 @@ class MaterialsKGService:
                 )
             ]
 
-        citations = self._build_citations(evidence_deduped, search_deduped)
+        experiments_deduped = self._dedupe_entities(experiments)
+        observations_deduped = self._dedupe_by_id(observations)
+        findings_deduped = self._dedupe_by_id(findings)
+        relations_deduped = self._dedupe_by_id(relations)
+        related_entities_deduped = self._dedupe_entities(related_entities)
+
+        entity_ids: set[str] = set()
+        for entity in [
+            material_entity,
+            mode_entity,
+            property_entity,
+            root_entity,
+            *matched_entities,
+            *experiments_deduped,
+            *related_entities_deduped,
+        ]:
+            if entity is not None:
+                entity_ids.add(entity.id)
+        for observation in observations_deduped:
+            entity_ids.update(
+                item
+                for item in (
+                    observation.material_id,
+                    observation.mode_id,
+                    observation.property_id,
+                    observation.experiment_id,
+                )
+                if item
+            )
+        for relation in relations_deduped:
+            entity_ids.add(relation.source_entity_id)
+            entity_ids.add(relation.target_entity_id)
+        for gap in data_gaps:
+            entity_ids.update(
+                item for item in (gap.material_id, gap.mode_id, gap.property_id) if item
+            )
+
+        entity_lookup = {
+            entity.id: {
+                "kind": entity.kind.value,
+                "canonical_name": entity.canonical_name,
+                "aliases": entity.aliases,
+            }
+            for entity in self._repository.find_entities(ids=sorted(entity_ids))
+        }
+        graph_context = {
+            "resolved_query": {
+                "material": (
+                    material_entity.canonical_name if material_entity else None
+                ),
+                "mode": mode_entity.canonical_name if mode_entity else None,
+                "property_name": (
+                    property_entity.canonical_name if property_entity else None
+                ),
+            },
+            "matched_entities": [
+                e.model_dump(mode="json") for e in matched_entities
+            ],
+            "entity_lookup": entity_lookup,
+            "experiments": [
+                e.model_dump(mode="json") for e in experiments_deduped
+            ],
+            "observations": [
+                o.model_dump(mode="json") for o in observations_deduped
+            ],
+            "decision_history": [
+                t.model_dump(mode="json") for t in findings_deduped
+            ],
+            "data_gaps": [g.model_dump(mode="json") for g in data_gaps],
+            "search_hits": [h.model_dump(mode="json") for h in search_deduped],
+            "evidence": [e.model_dump(mode="json") for e in evidence_deduped],
+            "relations": [
+                r.model_dump(mode="json") for r in relations_deduped
+            ],
+            "warnings": warnings,
+        }
         answer = self._build_answer_text(
             material_entity=material_entity,
             mode_entity=mode_entity,
             property_entity=property_entity,
-            experiments=experiments,
-            observations=observations,
-            findings=findings,
+            experiments=experiments_deduped,
+            observations=observations_deduped,
+            findings=findings_deduped,
             data_gaps=data_gaps,
             search_hits=search_deduped,
         )
+        return {
+            "warnings": warnings,
+            "material_entity": material_entity,
+            "mode_entity": mode_entity,
+            "property_entity": property_entity,
+            "matched_entities": matched_entities,
+            "experiments": experiments_deduped,
+            "observations": observations_deduped,
+            "evidence": evidence_deduped,
+            "search_hits": search_deduped,
+            "findings": findings_deduped,
+            "related_entities": related_entities_deduped,
+            "relations": relations_deduped,
+            "data_gaps": data_gaps,
+            "citations": self._build_citations(evidence_deduped, search_deduped),
+            "graph_context": graph_context,
+            "answer": answer,
+        }
+
+    def answer_question(
+        self,
+        *,
+        question: str,
+        material: str | None = None,
+        mode: str | None = None,
+        property_name: str | None = None,
+        source_ids: list[str] | None = None,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Resolve a free-form research question into graph-backed answer parts."""
+        context = self._build_answer_context(
+            question=question,
+            material=material,
+            mode=mode,
+            property_name=property_name,
+            source_ids=source_ids,
+        )
+        answer = context["answer"]
 
         if self._llm:
             try:
                 from kg_engine.llm_core.extraction import llm_generate_answer
-
-                graph_context = {
-                    "matched_entities": [
-                        e.model_dump(mode="json") for e in matched_entities
-                    ],
-                    "experiments": [
-                        e.model_dump(mode="json")
-                        for e in self._dedupe_entities(experiments)
-                    ],
-                    "observations": [
-                        o.model_dump(mode="json")
-                        for o in self._dedupe_by_id(observations)
-                    ],
-                    "decision_history": [
-                        t.model_dump(mode="json") for t in self._dedupe_by_id(findings)
-                    ],
-                    "data_gaps": [g.model_dump(mode="json") for g in data_gaps],
-                    "search_hits": [h.model_dump(mode="json") for h in search_deduped],
-                    "evidence": [e.model_dump(mode="json") for e in evidence_deduped],
-                    "relations": [
-                        r.model_dump(mode="json") for r in self._dedupe_by_id(relations)
-                    ],
-                }
 
                 conversation_history: list[dict[str, str]] = []
                 if self._session_store and session_id:
@@ -1003,7 +1100,7 @@ class MaterialsKGService:
                 llm_answer = llm_generate_answer(
                     self._llm,
                     question,
-                    graph_context,
+                    context["graph_context"],
                     conversation_history=conversation_history,
                 )
                 if llm_answer:
@@ -1018,40 +1115,34 @@ class MaterialsKGService:
         return {
             "question": question,
             "answer": answer,
-            "resolved_query": {
-                "material": material_entity.canonical_name if material_entity else None,
-                "mode": mode_entity.canonical_name if mode_entity else None,
-                "property_name": (
-                    property_entity.canonical_name if property_entity else None
-                ),
-            },
+            "resolved_query": context["graph_context"]["resolved_query"],
             "matched_entities": [
-                entity.model_dump(mode="json") for entity in matched_entities
+                entity.model_dump(mode="json") for entity in context["matched_entities"]
             ],
             "experiments": [
-                entity.model_dump(mode="json")
-                for entity in self._dedupe_entities(experiments)
+                entity.model_dump(mode="json") for entity in context["experiments"]
             ],
             "observations": [
                 observation.model_dump(mode="json")
-                for observation in self._dedupe_by_id(observations)
+                for observation in context["observations"]
             ],
-            "evidence": [item.model_dump(mode="json") for item in evidence_deduped],
-            "citations": citations,
+            "evidence": [item.model_dump(mode="json") for item in context["evidence"]],
+            "citations": context["citations"],
             "related_entities": [
                 entity.model_dump(mode="json")
-                for entity in self._dedupe_entities(related_entities)
+                for entity in context["related_entities"]
             ],
             "relations": [
-                relation.model_dump(mode="json")
-                for relation in self._dedupe_by_id(relations)
+                relation.model_dump(mode="json") for relation in context["relations"]
             ],
             "decision_history": [
-                trace.model_dump(mode="json") for trace in self._dedupe_by_id(findings)
+                trace.model_dump(mode="json") for trace in context["findings"]
             ],
-            "data_gaps": [gap.model_dump(mode="json") for gap in data_gaps],
-            "search_hits": [hit.model_dump(mode="json") for hit in search_deduped],
-            "warnings": warnings,
+            "data_gaps": [gap.model_dump(mode="json") for gap in context["data_gaps"]],
+            "search_hits": [
+                hit.model_dump(mode="json") for hit in context["search_hits"]
+            ],
+            "warnings": context["warnings"],
         }
 
     async def answer_question_stream(
@@ -1081,77 +1172,13 @@ class MaterialsKGService:
             yield result["answer"]
             return
 
-        warnings: list[str] = []
-        matched_entities = self._match_entities_from_question(question)
-        material_entity = self._resolve_filter_entity(
-            EntityKind.MATERIAL,
-            material,
-            matched_entities,
-            warnings,
+        context = self._build_answer_context(
+            question=question,
+            material=material,
+            mode=mode,
+            property_name=property_name,
+            source_ids=source_ids,
         )
-        mode_entity = self._resolve_filter_entity(
-            EntityKind.MODE,
-            mode,
-            matched_entities,
-            warnings,
-        )
-        property_entity = self._resolve_filter_entity(
-            EntityKind.PROPERTY,
-            property_name,
-            matched_entities,
-            warnings,
-        )
-
-        graph_context: dict[str, Any] = {}
-        if source_ids is not None:
-            source_set = set(source_ids)
-            matched_entities = [
-                e for e in matched_entities if _entity_matches_sources(e, source_set)
-            ]
-            if material_entity is not None and not _entity_matches_sources(
-                material_entity, source_set
-            ):
-                material_entity = None
-            if mode_entity is not None and not _entity_matches_sources(
-                mode_entity, source_set
-            ):
-                mode_entity = None
-            if property_entity is not None and not _entity_matches_sources(
-                property_entity, source_set
-            ):
-                property_entity = None
-        if material_entity is not None:
-            material_result = self.query_material_mode(
-                material_entity.canonical_name,
-                mode_entity.canonical_name if mode_entity else None,
-                property_entity.canonical_name if property_entity else None,
-            )
-            experiments = self._dedupe_entities(material_result.experiments)
-            observations = self._dedupe_by_id(material_result.observations)
-            evidence = self._dedupe_by_id(material_result.evidence)
-            if source_ids is not None:
-                source_set = set(source_ids)
-                evidence_by_id = {e.id: e for e in evidence}
-                experiments = [
-                    e for e in experiments if _entity_matches_sources(e, source_set)
-                ]
-                observations = [
-                    o
-                    for o in observations
-                    if _observation_matches_sources(o, evidence_by_id, source_set)
-                ]
-                evidence = [
-                    e for e in evidence if _evidence_matches_sources(e, source_set)
-                ]
-            graph_context = {
-                "matched_entities": [
-                    e.model_dump(mode="json") for e in matched_entities
-                ],
-                "experiments": [e.model_dump(mode="json") for e in experiments],
-                "observations": [o.model_dump(mode="json") for o in observations],
-                "evidence": [e.model_dump(mode="json") for e in evidence],
-            }
-
         conversation_history: list[dict[str, str]] = []
         if self._session_store and session_id:
             from kg_engine.config.settings import settings
@@ -1163,42 +1190,13 @@ class MaterialsKGService:
 
         full_answer_parts: list[str] = []
         try:
-            from kg_engine.llm_core.extraction import _build_graph_context_str
+            from kg_engine.llm_core.extraction import build_answer_messages
 
-            context_str = (
-                _build_graph_context_str(graph_context)
-                if graph_context
-                else "No data found."
+            messages = build_answer_messages(
+                question,
+                context["graph_context"],
+                conversation_history=conversation_history,
             )
-
-            system_prompt = (
-                "You are a materials science research assistant.\n\n"
-                "RULES (mandatory):\n"
-                "1. Answer questions based ONLY on the knowledge graph data provided below. "
-                "Do NOT invent, assume, or fabricate any facts, measurements, or entity relationships "
-                "that are not explicitly present in the provided data.\n"
-                "2. For each claim in your answer, reference the source: mention the source_id "
-                "and the specific fragment or measurement value you are citing.\n"
-                "3. If the provided data does not contain enough information to answer the question, "
-                "state explicitly: 'Недостаточно данных в загруженных источниках для полного ответа.' "
-                "Do NOT guess or fill gaps with general knowledge.\n"
-                "4. Be specific: cite measurements with values and units.\n"
-                "5. Answer in the same language as the question.\n"
-                "6. If you identify data gaps (missing experiments, unmeasured properties), mention them."
-            )
-
-            user_content = (
-                f"Knowledge graph data:\n{context_str}\n\nQuestion: {question}"
-            )
-
-            messages: list[dict[str, str]] = []
-            if conversation_history:
-                for hist_msg in conversation_history[-10:]:
-                    messages.append(
-                        {"role": hist_msg["role"], "content": hist_msg["content"]}
-                    )
-            messages.append({"role": "system", "content": system_prompt})
-            messages.append({"role": "user", "content": user_content})
 
             async for chunk in self._llm.chat_stream(
                 messages, temperature=0.3, max_tokens=1024
@@ -1280,6 +1278,24 @@ class MaterialsKGService:
             )
         )
         data_gaps = self.query_data_gaps(filters=filters)
+        search_query = " ".join(
+            item
+            for item in (
+                request.target_kpi,
+                request.question,
+                material_entity.canonical_name if material_entity else request.material,
+                mode_entity.canonical_name if mode_entity else request.mode,
+                property_entity.canonical_name
+                if property_entity
+                else request.property_name,
+            )
+            if item
+        )
+        search_hits = (
+            self._repository.search_text_units(search_query, limit=12)
+            if search_query
+            else []
+        )
 
         if request.source_ids is not None:
             source_set = set(request.source_ids)
@@ -1290,6 +1306,13 @@ class MaterialsKGService:
                 if _observation_matches_sources(o, evidence_by_id, source_set)
             ]
             evidence = [e for e in evidence if _evidence_matches_sources(e, source_set)]
+            search_hits = [
+                h
+                for h in search_hits
+                if h.source_entity_id in source_set
+                or h.metadata.get("source_id") in source_set
+                or h.metadata.get("source_file") in source_set
+            ]
             data_gaps = [
                 g
                 for g in data_gaps
@@ -1303,6 +1326,7 @@ class MaterialsKGService:
 
         total_observations = len(observations)
         total_evidence = len(evidence)
+        total_search_hits = len(search_hits)
         avg_evidence_confidence = (
             fmean([ev.confidence for ev in evidence]) if evidence else 0.0
         )
@@ -1343,6 +1367,7 @@ class MaterialsKGService:
                 ResearchHypothesis(
                     id=_stable_id("hyp", request.target_kpi, gap.id),
                     target_kpi=request.target_kpi,
+                    hypothesis_type="coverage_gap",
                     statement=(
                         f"Проверить, улучшает ли режим {mode_name} для {mat_name} "
                         f"целевой KPI '{prop_name}'."
@@ -1461,6 +1486,7 @@ class MaterialsKGService:
                 ResearchHypothesis(
                     id=_stable_id("hyp", request.target_kpi, observation.id),
                     target_kpi=request.target_kpi,
+                    hypothesis_type="observed_effect",
                     statement=(
                         f"Использовать связку {mat_name} / {mode_name} как основу "
                         f"для повышения KPI '{prop_name}'."
@@ -1526,6 +1552,90 @@ class MaterialsKGService:
                 )
             )
 
+        for index, hit in enumerate(search_hits):
+            source_label = hit.metadata.get("source_file") or hit.metadata.get(
+                "source_id", hit.source_entity_id
+            )
+            fragment = hit.content.strip().replace("\n", " ")
+            if not fragment:
+                continue
+            fragment_preview = fragment[:220]
+            novelty = 0.65 if not observations else 0.45
+            risk = 0.55 if not observations else 0.40
+            value = 0.60 + min(0.20, total_search_hits * 0.02)
+            evidence_strength = 0.35 if not evidence else min(
+                0.70,
+                avg_evidence_confidence * 0.5 + 0.25,
+            )
+            score = self._hypothesis_score(
+                novelty=novelty,
+                risk=risk,
+                value=value,
+                evidence_strength=evidence_strength,
+            )
+            hypotheses.append(
+                ResearchHypothesis(
+                    id=_stable_id("hyp", request.target_kpi, hit.id, index),
+                    target_kpi=request.target_kpi,
+                    hypothesis_type="literature_signal",
+                    statement=(
+                        f"Проверить исследовательскую идею из источника {source_label} "
+                        f"на влияние на KPI '{request.target_kpi}'."
+                    ),
+                    rationale=(
+                        "В базе знаний найден релевантный фрагмент, который может "
+                        f"указывать на фактор для проверки: {fragment_preview}"
+                    ),
+                    test_plan=(
+                        f"Сформулировать фактор из источника {source_label}, задать "
+                        f"контрольный эксперимент по KPI '{request.target_kpi}', "
+                        "зафиксировать материал, режим, единицы измерения и сравнить "
+                        "с baseline из графа или новой контрольной серией."
+                    ),
+                    score=score,
+                    supporting_entity_ids=[hit.source_entity_id],
+                    supporting_text_unit_ids=[hit.id],
+                    assumptions=[
+                        "Текстовый фрагмент является исследовательским сигналом, а не доказанным эффектом.",
+                        "Перед запуском эксперимента эксперт должен уточнить фактор и условия проверки.",
+                    ],
+                    novelty_rationale=(
+                        "Идея извлечена из литературы/отчёта и не обязана иметь "
+                        "готовое observation в графе."
+                    ),
+                    risk_items=[
+                        "Сигнал из текста может быть неполным или относиться к другим условиям.",
+                        "Без численного observation выше риск неверной интерпретации.",
+                    ],
+                    value_rationale=(
+                        "Позволяет использовать неструктурированную базу знаний для "
+                        "быстрого старта НИОКР даже до очистки всех таблиц."
+                    ),
+                    logic_trace=[
+                        f"1. Найден text unit {hit.id} из источника {source_label}.",
+                        f"2. Фрагмент релевантен KPI '{request.target_kpi}'.",
+                        f"3. observations={total_observations}, text_hits={total_search_hits}.",
+                        f"4. novelty={novelty:.2f}, risk={risk:.2f}, value={value:.2f}.",
+                    ],
+                    validation_checks=[
+                        "Экспертно подтвердить, какой фактор из фрагмента проверяется.",
+                        "Проверить, есть ли в графе сопоставимые материалы, режимы и единицы KPI.",
+                    ],
+                    falsification_criteria=[
+                        f"Гипотеза falsified, если эксперимент не меняет KPI '{request.target_kpi}' относительно baseline.",
+                        "Гипотеза falsified, если источник относится к несопоставимому материалу или режиму.",
+                    ],
+                    required_evidence=[
+                        f"Экспериментальное измерение KPI '{request.target_kpi}'.",
+                        "Источник с условиями, материалом, режимом и единицами измерения.",
+                    ],
+                    metadata={
+                        "source": "literature_signal",
+                        "source_file": source_label,
+                    },
+                )
+            )
+
         if request.expert_adjustments:
             for hypothesis in hypotheses:
                 adj = request.expert_adjustments.get(hypothesis.id)
@@ -1587,10 +1697,55 @@ class MaterialsKGService:
 
         hypotheses.sort(key=lambda item: item.score.final_score, reverse=True)
         hypotheses = hypotheses[: request.max_hypotheses]
+        for rank, hypothesis in enumerate(hypotheses, start=1):
+            hypothesis.rank = rank
         if not hypotheses:
             warnings.append(
                 "Не удалось построить гипотезы: загрузите источники или уточните KPI/material/mode/property."
             )
+        knowledge_base_summary = {
+            "target_kpi": request.target_kpi,
+            "matched_entities": len(matched_entities),
+            "observations": total_observations,
+            "evidence": total_evidence,
+            "data_gaps": len(data_gaps),
+            "text_hits": total_search_hits,
+            "hypothesis_types": {
+                "coverage_gap": sum(
+                    1 for item in hypotheses if item.hypothesis_type == "coverage_gap"
+                ),
+                "observed_effect": sum(
+                    1
+                    for item in hypotheses
+                    if item.hypothesis_type == "observed_effect"
+                ),
+                "literature_signal": sum(
+                    1
+                    for item in hypotheses
+                    if item.hypothesis_type == "literature_signal"
+                ),
+            },
+            "source_ids_filter": request.source_ids,
+        }
+        ranking_rubric = {
+            "final_score_formula": (
+                "0.35*value + 0.25*evidence_strength + "
+                "0.20*novelty + 0.20*(1-risk)"
+            ),
+            "weights": {
+                "value": 0.35,
+                "evidence_strength": 0.25,
+                "novelty": 0.20,
+                "inverse_risk": 0.20,
+            },
+            "score_range": "0..1",
+            "interpretation": {
+                "novelty": "насколько идея непокрыта или недоисследована в базе знаний",
+                "risk": "неопределённость, конфликты и нехватка проверочных данных",
+                "value": "потенциальная польза для целевого KPI",
+                "evidence_strength": "сила observation/evidence/text-grounding",
+            },
+        }
         return HypothesisGenerationResult(
             target_kpi=request.target_kpi,
             resolved_query={
@@ -1600,10 +1755,13 @@ class MaterialsKGService:
                     property_entity.canonical_name if property_entity else None
                 ),
             },
+            knowledge_base_summary=knowledge_base_summary,
+            ranking_rubric=ranking_rubric,
             hypotheses=hypotheses,
             evidence=evidence,
             observations=self._dedupe_by_id(observations),
             data_gaps=data_gaps,
+            search_hits=self._dedupe_by_id(search_hits),
             matched_entities=matched_entities,
             warnings=warnings,
         )

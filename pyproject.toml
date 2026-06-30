@@ -11,10 +11,12 @@ requires-python = ">=3.11"
 license = "MIT"
 dependencies = [
     "fastapi>=0.100,<1",
+    "httpx>=0.24",
     "neo4j>=5.20,<6",
     "python-multipart>=0.0.6",
     "pydantic>=2.0,<3",
     "pydantic-settings>=2.0,<3",
+    "python-dotenv>=1.0,<2",
     "uvicorn>=0.20",
 ]
 
@@ -150,6 +152,7 @@ testpaths = ["kg_engine/tests"]
 python_files = [
     "test_ingestion_adapters.py",
     "test_ingest_materials_cli_loading.py",
+    "test_llm_provider_selection.py",
     "test_materials_api_smoke.py",
     "test_materials_graph_database_behavior.py",
     "test_materials_kg_core.py",

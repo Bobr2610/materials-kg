@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import random
 from typing import TYPE_CHECKING, Any
 
@@ -18,6 +19,31 @@ logger = logging.getLogger(__name__)
 _DEFAULT_TIMEOUT = 60.0
 _MAX_RETRIES = 3
 _RETRY_BASE_DELAY = 1.0
+_OPENAI_BASE_URL = "https://api.openai.com"
+_OPENROUTER_BASE_URL = "https://openrouter.ai/api"
+_POLZA_BASE_URL = "https://polza.ai/api"
+_GROQ_BASE_URL = "https://api.groq.com/openai"
+_MISTRAL_BASE_URL = "https://api.mistral.ai"
+
+
+def _clean(value: str | None) -> str:
+    return (value or "").strip()
+
+
+def _openrouter_model_name(model: str) -> str:
+    """Return an OpenRouter model slug without forcing OpenAI-only models."""
+    model = _clean(model)
+    if not model or "/" in model:
+        return model
+    return f"openai/{model}"
+
+
+def _openai_compatible_root(base_url: str) -> str:
+    """Normalize OpenAI-compatible base URLs before appending /v1 paths."""
+    base_url = _clean(base_url).rstrip("/")
+    if base_url.lower().endswith("/v1"):
+        return base_url[:-3].rstrip("/")
+    return base_url
 
 
 class LLMProvider:
@@ -39,7 +65,7 @@ class LLMProvider:
         max_retries: int = _MAX_RETRIES,
         retry_base_delay: float = _RETRY_BASE_DELAY,
     ) -> None:
-        self.base_url = base_url.rstrip("/")
+        self.base_url = _openai_compatible_root(base_url)
         self.api_key = api_key
         self.chat_model = chat_model
         self.embedding_model = embedding_model
@@ -308,38 +334,133 @@ class LLMProvider:
             await self._async_client.aclose()
 
 
-def create_provider_from_env() -> LLMProvider | None:
-    """Create provider from settings if API key is available."""
-    from kg_engine.config.settings import settings
+def create_provider_from_settings(settings: Any) -> LLMProvider | None:
+    """Create the configured LLM provider from application settings.
 
-    chat = settings.default_model
-    embedding = settings.default_embedding_model
+    ``default_llm_provider`` is the single source of truth. When it is empty,
+    provider selection keeps the historical auto-detect order for compatibility.
+    ``AGENT_PROVIDER`` and ``AGENT_DEFAULT_MODEL`` are accepted as agent-style
+    aliases for local workflows that already use those names.
+    """
+
+    selected_provider = _clean(
+        getattr(settings, "default_llm_provider", "")
+    ) or _clean(os.getenv("AGENT_PROVIDER"))
+    chat = _clean(getattr(settings, "default_model", "")) or _clean(
+        os.getenv("AGENT_DEFAULT_MODEL")
+    )
+    embedding = _clean(getattr(settings, "default_embedding_model", ""))
 
     kwargs: dict[str, Any] = {
         "chat_model": chat,
         "embedding_model": embedding,
-        "max_retries": settings.llm_max_retries,
-        "retry_base_delay": settings.llm_retry_base_delay,
+        "max_retries": getattr(settings, "llm_max_retries", _MAX_RETRIES),
+        "retry_base_delay": getattr(
+            settings, "llm_retry_base_delay", _RETRY_BASE_DELAY
+        ),
     }
 
-    if settings.openai_api_key:
+    def create_openai() -> LLMProvider | None:
+        api_key = _clean(getattr(settings, "openai_api_key", None))
+        if not api_key:
+            return None
+        base_url = _clean(getattr(settings, "openai_base_url", ""))
         return LLMProvider(
-            base_url="https://api.openai.com",
-            api_key=settings.openai_api_key,
+            base_url=base_url or _OPENAI_BASE_URL,
+            api_key=api_key,
             **kwargs,
         )
-    if settings.vllm_base_url and settings.vllm_api_key:
+
+    def create_vllm() -> LLMProvider | None:
+        base_url = _clean(getattr(settings, "vllm_base_url", ""))
+        api_key = _clean(getattr(settings, "vllm_api_key", ""))
+        if not base_url or not api_key:
+            return None
         return LLMProvider(
-            base_url=settings.vllm_base_url,
-            api_key=settings.vllm_api_key,
+            base_url=base_url,
+            api_key=api_key,
             **kwargs,
         )
-    if settings.openrouter_api_key and settings.openrouter_base_url:
+
+    def create_openrouter() -> LLMProvider | None:
+        api_key = _clean(getattr(settings, "openrouter_api_key", ""))
+        if not api_key:
+            return None
+        base_url = _clean(getattr(settings, "openrouter_base_url", ""))
+        openrouter_kwargs = dict(kwargs)
+        openrouter_kwargs["chat_model"] = _openrouter_model_name(chat)
+        openrouter_kwargs["embedding_model"] = _openrouter_model_name(embedding)
         return LLMProvider(
-            base_url=settings.openrouter_base_url,
-            api_key=settings.openrouter_api_key,
-            chat_model=f"openai/{chat}",
-            embedding_model=f"openai/{embedding}",
+            base_url=base_url or _OPENROUTER_BASE_URL,
+            api_key=api_key,
+            **openrouter_kwargs,
+        )
+
+    def create_polza() -> LLMProvider | None:
+        api_key = _clean(getattr(settings, "polza_api_key", ""))
+        if not api_key:
+            return None
+        base_url = _clean(getattr(settings, "polza_base_url", ""))
+        return LLMProvider(
+            base_url=base_url or _POLZA_BASE_URL,
+            api_key=api_key,
             **kwargs,
         )
+
+    def create_groq() -> LLMProvider | None:
+        api_key = _clean(getattr(settings, "groq_api_key", ""))
+        if not api_key:
+            return None
+        base_url = _clean(getattr(settings, "groq_base_url", ""))
+        return LLMProvider(
+            base_url=base_url or _GROQ_BASE_URL,
+            api_key=api_key,
+            **kwargs,
+        )
+
+    def create_mistral() -> LLMProvider | None:
+        api_key = _clean(getattr(settings, "mistral_api_key", ""))
+        if not api_key:
+            return None
+        base_url = _clean(getattr(settings, "mistral_base_url", ""))
+        return LLMProvider(
+            base_url=base_url or _MISTRAL_BASE_URL,
+            api_key=api_key,
+            **kwargs,
+        )
+
+    factories = {
+        "openai": create_openai,
+        "vllm": create_vllm,
+        "openrouter": create_openrouter,
+        "polza": create_polza,
+        "groq": create_groq,
+        "mistral": create_mistral,
+    }
+
+    if selected_provider:
+        factory = factories.get(selected_provider.lower())
+        if factory is None:
+            logger.warning("Unsupported LLM provider configured: %s", selected_provider)
+            return None
+        return factory()
+
+    for factory in (
+        create_openai,
+        create_vllm,
+        create_openrouter,
+        create_polza,
+        create_groq,
+        create_mistral,
+    ):
+        provider = factory()
+        if provider is not None:
+            return provider
     return None
+
+
+def create_provider_from_env() -> LLMProvider | None:
+    """Create provider from global settings if API key is available."""
+    from kg_engine.config.settings import settings
+
+    return create_provider_from_settings(settings)

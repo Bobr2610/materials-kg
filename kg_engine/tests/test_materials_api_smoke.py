@@ -58,8 +58,52 @@ def test_materials_api_health_and_ingest_query_flow() -> None:
 
 
 def test_dashboard_and_sample_data_flow() -> None:
+    from unittest.mock import MagicMock
+
+    mock_llm = MagicMock()
+    mock_llm.chat.return_value = "Найдены данные по Ti-6Al-4V: Tensile Strength 950 MPa."
+    mock_llm.chat_json.side_effect = [
+        {
+            "reference": {
+                "entities": [
+                    {
+                        "kind": "material",
+                        "name": "Ti-6Al-4V",
+                        "aliases": ["Ti6Al4V"],
+                    },
+                    {"kind": "mode", "name": "Annealed"},
+                    {"kind": "property", "name": "Tensile Strength"},
+                ]
+            },
+            "experiments": [],
+            "documents": [],
+        },
+        {
+            "reference": {},
+            "experiments": [
+                {
+                    "experiment_id": "exp-ui",
+                    "title": "UI test",
+                    "material_name": "Ti6Al4V",
+                    "mode_name": "Annealed",
+                    "observations": [
+                        {
+                            "property_name": "Tensile Strength",
+                            "value": 950.0,
+                            "unit": "MPa",
+                        }
+                    ],
+                }
+            ],
+            "documents": [],
+        },
+    ]
+
     app = create_materials_app(
-        service=MaterialsKGService(InMemoryMaterialsKGRepository())
+        service=MaterialsKGService(
+            InMemoryMaterialsKGRepository(),
+            llm_provider=mock_llm,
+        )
     )
     client = TestClient(app)
 
@@ -69,18 +113,25 @@ def test_dashboard_and_sample_data_flow() -> None:
     assert "Чат" in dashboard.text
     assert "Добавить источники" in dashboard.text
     assert "/ingest/upload" in dashboard.text
-    assert "/demo/load-sample" in dashboard.text
     assert "Введите текст" in dashboard.text
     assert 'id="collapseSources"' in dashboard.text
     assert 'id="restoreSources"' in dashboard.text
     assert 'id="menuButton"' in dashboard.text
-    assert 'id="loadSample"' in dashboard.text
+    assert 'id="graphToggle"' in dashboard.text
+    assert 'id="clearAllSources"' in dashboard.text
+    assert 'id="clearChat"' in dashboard.text
     assert 'id="sourceSearch"' in dashboard.text
-    assert 'id="selectAllSources"' in dashboard.text
-    assert 'id="selectNoSources"' in dashboard.text
+    assert 'id="sourceSummary"' in dashboard.text
+    assert 'id="sourceNote"' in dashboard.text
+    assert 'id="hypothesisPanel"' in dashboard.text
+    assert 'id="targetKpi"' in dashboard.text
+    assert 'id="generateHypotheses"' in dashboard.text
+    assert "/hypotheses/generate" in dashboard.text
+    assert "renderHypotheses" in dashboard.text
     assert "uploadBatchSize" in dashboard.text
+    assert "graphDataUrl" in dashboard.text
     assert "renderSourceList" in dashboard.text
-    assert 'addEventListener("click", loadSampleData)' in dashboard.text
+    assert "async function clearAllSources" in dashboard.text
 
     ref_json = json.dumps(
         {
@@ -113,6 +164,10 @@ def test_dashboard_and_sample_data_flow() -> None:
     )
     assert upload.status_code == 200
     assert upload.json()["uploaded"]
+    assert upload.json()["ingestion"]["llm_structured_files"] == [
+        "ref.json",
+        "exp.json",
+    ]
 
     query = client.post(
         "/query/answer",
@@ -177,19 +232,20 @@ def test_free_question_material_and_property_fallbacks() -> None:
     )
     client = TestClient(app)
 
-    import io
-
-    reference_json = json.dumps(
-        {
+    reference = client.post(
+        "/ingest/reference",
+        json={
             "entities": [
                 {"kind": "material", "name": "IN718", "aliases": ["Inconel 718"]},
                 {"kind": "property", "name": "Hardness"},
                 {"kind": "mode", "name": "Aged"},
             ]
-        }
-    ).encode()
-    experiments_json = json.dumps(
-        [
+        },
+    )
+    assert reference.status_code == 200
+    experiments = client.post(
+        "/ingest/experiments",
+        json=[
             {
                 "experiment_id": "exp-in718",
                 "title": "IN718 test",
@@ -199,17 +255,9 @@ def test_free_question_material_and_property_fallbacks() -> None:
                     {"property_name": "Hardness", "value": 42.0, "unit": "HRC"}
                 ],
             }
-        ]
-    ).encode()
-
-    upload = client.post(
-        "/ingest/upload",
-        files=[
-            ("files", ("reference.json", reference_json, "application/json")),
-            ("files", ("experiments.json", experiments_json, "application/json")),
         ],
     )
-    assert upload.status_code == 200
+    assert experiments.status_code == 200
 
     material_only = client.post(
         "/query/answer",
@@ -313,6 +361,81 @@ def test_llm_extraction_and_answer_generation() -> None:
     body = answer_resp.json()
     assert body["answer"]
     assert "950" in body["answer"] or "Tensile" in body["answer"]
+
+
+def test_upload_uses_llm_to_structure_ambiguous_csv_columns() -> None:
+    from unittest.mock import MagicMock
+
+    mock_llm = MagicMock()
+    mock_llm.chat_json.return_value = {
+        "reference": {
+            "entities": [
+                {"kind": "material", "name": "Alloy-X", "aliases": ["AX"]},
+                {"kind": "mode", "name": "Route 7"},
+                {"kind": "property", "name": "Yield Strength"},
+            ]
+        },
+        "experiments": [
+            {
+                "experiment_id": "messy.csv#row-0",
+                "title": "Alloy-X Route 7 Yield Strength",
+                "material_name": "Alloy-X",
+                "mode_name": "Route 7",
+                "source_ref": "messy.csv",
+                "observations": [
+                    {
+                        "property_name": "Yield Strength",
+                        "value": 810.0,
+                        "unit": "MPa",
+                        "fragment": "specimen=AX; route=Route 7; KPI=Yield Strength; result=810 MPa",
+                        "row_reference": "row 0",
+                        "confidence": 0.86,
+                    }
+                ],
+                "metadata": {
+                    "llm_column_mapping": {
+                        "slot_a": "material_name",
+                        "slot_b": "mode_name",
+                        "slot_c": "property_name",
+                        "slot_d": "value",
+                        "slot_e": "unit",
+                    }
+                },
+            }
+        ],
+        "documents": [],
+    }
+
+    repo = InMemoryMaterialsKGRepository()
+    service = MaterialsKGService(repo, llm_provider=mock_llm)
+    app = create_materials_app(service=service)
+    client = TestClient(app)
+
+    csv_body = b"slot_a,slot_b,slot_c,slot_d,slot_e\nAX,Route 7,YS,810,MPa\n"
+    upload = client.post(
+        "/ingest/upload",
+        files=[("files", ("messy.csv", csv_body, "text/csv"))],
+    )
+
+    assert upload.status_code == 200
+    assert mock_llm.chat_json.called
+    assert upload.json()["experiments"]["observations"] == 1
+    prompt = mock_llm.chat_json.call_args.args[0][-1]["content"]
+    assert "slot_a" in prompt
+    assert "llm_column_mapping" in prompt
+
+    query = client.post(
+        "/query/material-mode",
+        json={
+            "material": "Alloy-X",
+            "mode": "Route 7",
+            "property_name": "Yield Strength",
+        },
+    )
+    assert query.status_code == 200
+    body = query.json()
+    assert body["observations"][0]["value"] == 810.0
+    assert body["evidence"][0]["source_id"] == "messy.csv"
 
 
 class TestDestructiveEndpoints:

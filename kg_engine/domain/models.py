@@ -367,6 +367,8 @@ class ResearchHypothesis(BaseModel):
 
     id: str
     target_kpi: str
+    rank: int | None = Field(default=None)
+    hypothesis_type: str = Field(default="observed_effect")
     statement: str
     rationale: str
     test_plan: str
@@ -374,6 +376,7 @@ class ResearchHypothesis(BaseModel):
     supporting_entity_ids: list[str] = Field(default_factory=list)
     supporting_evidence_ids: list[str] = Field(default_factory=list)
     supporting_observation_ids: list[str] = Field(default_factory=list)
+    supporting_text_unit_ids: list[str] = Field(default_factory=list)
     data_gap_ids: list[str] = Field(default_factory=list)
     assumptions: list[str] = Field(default_factory=list)
     expert_notes: list[str] = Field(default_factory=list)
@@ -407,10 +410,13 @@ class HypothesisGenerationResult(BaseModel):
 
     target_kpi: str
     resolved_query: dict[str, str | None] = Field(default_factory=dict)
+    knowledge_base_summary: dict[str, Any] = Field(default_factory=dict)
+    ranking_rubric: dict[str, Any] = Field(default_factory=dict)
     hypotheses: list[ResearchHypothesis] = Field(default_factory=list)
     evidence: list[Evidence] = Field(default_factory=list)
     observations: list[Observation] = Field(default_factory=list)
     data_gaps: list[DataGap] = Field(default_factory=list)
+    search_hits: list[SearchTextUnit] = Field(default_factory=list)
     matched_entities: list[Entity] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
 

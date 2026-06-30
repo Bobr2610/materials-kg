@@ -316,6 +316,49 @@ def test_hypothesis_factory_generates_ranked_graph_grounded_candidates() -> None
     assert any(item.supporting_observation_ids for item in result.hypotheses)
     assert result.evidence
     assert result.data_gaps
+    assert result.knowledge_base_summary["observations"] == 1
+    assert result.ranking_rubric["weights"]["value"] == 0.35
+    assert [item.rank for item in result.hypotheses] == list(
+        range(1, len(result.hypotheses) + 1)
+    )
+
+
+def test_hypothesis_factory_uses_literature_when_observations_are_missing() -> None:
+    service = build_service()
+    service.ingest_documents(
+        [
+            DocumentInput(
+                document_id="lit-001",
+                title="Additive manufacturing porosity report",
+                text=(
+                    "Laser power modulation and hatch spacing were discussed as "
+                    "possible levers for reducing porosity in nickel alloy builds."
+                ),
+                property_names=["Porosity"],
+                material_names=["Nickel alloy"],
+                text_units=[
+                    TextUnitInput(
+                        content=(
+                            "Lower porosity may be achieved by testing laser power "
+                            "modulation together with hatch spacing changes."
+                        )
+                    )
+                ],
+            )
+        ]
+    )
+
+    result = service.generate_hypotheses(
+        HypothesisInput(target_kpi="Porosity", max_hypotheses=3)
+    )
+
+    assert result.hypotheses
+    assert result.search_hits
+    assert result.knowledge_base_summary["text_hits"] > 0
+    assert result.hypotheses[0].hypothesis_type == "literature_signal"
+    assert result.hypotheses[0].supporting_text_unit_ids
+    assert result.hypotheses[0].test_plan
+    assert result.hypotheses[0].score.final_score > 0
 
 
 class TestSourceGrounding:
@@ -595,6 +638,45 @@ class TestSourceIdsIsolation:
         graph_prompt = "\n".join(msg["content"] for msg in llm.messages)
         assert "Experiment B" not in graph_prompt
         assert "Material-B KPI-B = 200 MPa" not in graph_prompt
+
+    def test_stream_uses_full_answer_context_for_property_questions(self) -> None:
+        class CaptureLLM:
+            def __init__(self) -> None:
+                self.messages: list[dict[str, str]] = []
+
+            async def chat_stream(
+                self,
+                messages: list[dict[str, str]],
+                *,
+                temperature: float,
+                max_tokens: int,
+            ):
+                _ = (temperature, max_tokens)
+                self.messages = messages
+                yield "ok"
+
+        llm = CaptureLLM()
+        service = self._build_two_source_service()
+        service._llm = llm  # noqa: SLF001
+
+        async def collect() -> list[str]:
+            chunks: list[str] = []
+            async for chunk in service.answer_question_stream(
+                question="Какие результаты есть по KPI-A?",
+                property_name="KPI-A",
+                source_ids=["file-a.json"],
+            ):
+                chunks.append(chunk)
+            return chunks
+
+        assert asyncio.run(collect()) == ["ok"]
+        assert llm.messages[0]["role"] == "system"
+        graph_prompt = "\n".join(msg["content"] for msg in llm.messages)
+        assert "Graph retrieval packet" in graph_prompt
+        assert '"observations"' in graph_prompt
+        assert "Material-A KPI-A = 100 MPa" in graph_prompt
+        assert '"entity_lookup"' in graph_prompt
+        assert "Недостаточно данных" in graph_prompt
 
     def test_hypotheses_source_ids_filters(self) -> None:
         service = self._build_two_source_service()

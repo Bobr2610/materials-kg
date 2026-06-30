@@ -249,7 +249,7 @@
     .source-more:hover { background: #f8f9fa; }
     .chat {
       display: grid;
-      grid-template-rows: 48px minmax(0, 1fr) auto auto;
+      grid-template-rows: 48px minmax(0, 1fr) auto auto auto;
       min-width: 0;
       min-height: 0;
     }
@@ -600,12 +600,121 @@
       font-size: 14px; color: #3c4043; line-height: 1.55;
       overflow-wrap: anywhere;
     }
+    .hypothesis-panel {
+      margin: 8px 20px 0;
+      border: 1px solid #dadce0;
+      border-radius: 14px;
+      background: #f8fafd;
+      padding: 12px;
+      display: grid;
+      gap: 10px;
+      min-width: 0;
+    }
+    .hypothesis-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+      min-width: 0;
+    }
+    .hypothesis-title {
+      display: grid;
+      gap: 2px;
+      min-width: 0;
+    }
+    .hypothesis-title b { font-size: 13px; font-weight: 600; color: #202124; }
+    .hypothesis-title span { font-size: 12px; color: #5f6368; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .hypothesis-form {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 116px 148px;
+      gap: 8px;
+      align-items: center;
+      min-width: 0;
+    }
+    .hypothesis-form input {
+      height: 38px;
+      border: 1px solid #dadce0;
+      border-radius: 10px;
+      background: #fff;
+      color: #202124;
+      font: inherit;
+      font-size: 13px;
+      padding: 0 11px;
+      min-width: 0;
+      outline: none;
+    }
+    .hypothesis-form input:focus { border-color: #1a73e8; }
+    .hypothesis-btn {
+      height: 38px;
+      border: none;
+      border-radius: 10px;
+      background: #1a73e8;
+      color: #fff;
+      font: inherit;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      padding: 0 12px;
+      white-space: nowrap;
+    }
+    .hypothesis-btn:hover { background: #1557b0; }
+    .hypothesis-btn:disabled { background: #dadce0; cursor: default; }
+    .score-grid {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(72px, 1fr));
+      gap: 6px;
+    }
+    .score-pill {
+      border: 1px solid #e8eaed;
+      border-radius: 8px;
+      background: #fff;
+      padding: 7px 8px;
+      display: grid;
+      gap: 2px;
+      min-width: 0;
+    }
+    .score-pill span { font-size: 10px; color: #5f6368; text-transform: uppercase; letter-spacing: 0.2px; }
+    .score-pill b { font-size: 13px; color: #202124; font-weight: 600; }
+    .hypothesis-rank {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 28px;
+      height: 24px;
+      border-radius: 12px;
+      background: #e8f0fe;
+      color: #1a73e8;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .hypothesis-type {
+      display: inline-flex;
+      height: 24px;
+      align-items: center;
+      padding: 0 8px;
+      border: 1px solid #dadce0;
+      border-radius: 12px;
+      background: #fff;
+      color: #5f6368;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .hypothesis-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      align-items: center;
+    }
     @media (max-width: 420px) {
       .top-actions { gap: 2px; }
       .chat-top button { width: 30px; height: 30px; }
       .bubble { border-radius: 14px; padding: 10px 12px; }
       .answer-card { padding: 10px; border-radius: 10px; }
       table.data { font-size: 12px; }
+      .hypothesis-panel { margin: 8px 12px 0; }
+      .hypothesis-head { align-items: start; flex-direction: column; }
+      .hypothesis-form { grid-template-columns: minmax(0, 1fr); }
+      .score-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
   </style>
   <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
@@ -669,6 +778,20 @@
           </div>
         </div>
       </main>
+      <div class="hypothesis-panel" id="hypothesisPanel">
+        <div class="hypothesis-head">
+          <div class="hypothesis-title">
+            <b>KPI для фабрики гипотез</b>
+            <span id="hypothesisSourceHint">Загрузите базу знаний и задайте целевой показатель</span>
+          </div>
+          <span class="source-summary" id="hypothesisKbSummary">0 источников</span>
+        </div>
+        <div class="hypothesis-form">
+          <input id="targetKpi" type="text" placeholder="Например: снизить пористость, повысить прочность" aria-label="Целевой KPI">
+          <input id="hypothesisLimit" type="number" min="1" max="20" value="5" aria-label="Количество гипотез">
+          <button class="hypothesis-btn" id="generateHypotheses" type="button">Гипотезы</button>
+        </div>
+      </div>
       <div class="suggestions" id="suggestions"></div>
       <div class="composer-wrap">
         <div class="composer">
@@ -733,7 +856,9 @@
       graphLoadErrorHint: "Убедитесь что Neo4j запущен: docker compose up -d",
       sampleLoaded: "Пример данных загружен.",
       allSourcesRemoved: "Все источники удалены. Граф пуст.",
-      filesAccepted: "источники приняты"
+      filesAccepted: "источники приняты",
+      hypothesisMissingKpi: "Введите целевой KPI для генерации гипотез.",
+      noHypotheses: "Гипотезы не сформированы"
     };
     const state = {
       files: [],
@@ -785,6 +910,8 @@
       const selectedText = selectedCount + " выбрано";
       if ($("sourceNote")) $("sourceNote").textContent = state.total ? selectedText : "0 источников";
       if ($("sourceSummary")) $("sourceSummary").textContent = state.total ? selectedText + " из " + state.total : "0 выбрано";
+      if ($("hypothesisKbSummary")) $("hypothesisKbSummary").textContent = state.total ? selectedText + " из " + state.total : "0 источников";
+      if ($("hypothesisSourceHint")) $("hypothesisSourceHint").textContent = state.total ? "Гипотезы будут строиться по выбранным источникам" : "Загрузите базу знаний и задайте целевой показатель";
     }
     function closeGraphPanel() {
       $("graphPanel")?.classList.remove("open");
@@ -841,6 +968,69 @@
         '<div class="cite-item"><b>[' + escapeHtml(c.source_kind) + '] ' + escapeHtml(c.source_id) + "</b> — " + escapeHtml((c.fragment||"").substring(0,150)) + (c.fragment?.length > 150 ? "..." : "") + "</div>"
       ).join("");
       return '<div class="citations-block"><h3>' + UI_TEXT.citationsTitle + '</h3>' + items + "</div>";
+    }
+    function scoreValue(v) {
+      return Number(v || 0).toFixed(2);
+    }
+    function renderScoreGrid(score) {
+      if (!score) return "";
+      const rows = [
+        ["Итог", score.final_score],
+        ["Новизна", score.novelty],
+        ["Риск", score.risk],
+        ["Ценность", score.value],
+        ["Данные", score.evidence_strength]
+      ];
+      return '<div class="score-grid">' + rows.map(([label, value]) =>
+        '<div class="score-pill"><span>' + escapeHtml(label) + '</span><b>' + scoreValue(value) + '</b></div>'
+      ).join("") + "</div>";
+    }
+    function renderStringList(rows, empty) {
+      if (!rows?.length) return '<span style="color:#9aa0a6;font-size:13px">' + escapeHtml(empty) + "</span>";
+      return '<ul class="mini-list">' + rows.slice(0, UI_CONFIG.maxListRows).map(r => "<li><span>" + escapeHtml(r) + "</span></li>").join("") + "</ul>";
+    }
+    function hypothesisTypeLabel(type) {
+      return ({
+        coverage_gap: "пробел данных",
+        observed_effect: "наблюдаемый эффект",
+        literature_signal: "сигнал из литературы"
+      })[type] || type || "гипотеза";
+    }
+    function renderKnowledgeSummary(data) {
+      const s = data.knowledge_base_summary || {};
+      const rubric = data.ranking_rubric || {};
+      const bits = [
+        "observations: " + (s.observations || 0),
+        "evidence: " + (s.evidence || 0),
+        "text hits: " + (s.text_hits || 0),
+        "data gaps: " + (s.data_gaps || 0)
+      ];
+      return '<div class="answer-card"><h3>База знаний для KPI</h3><div class="chips">' +
+        bits.map(x => '<span class="chip">' + escapeHtml(x) + '</span>').join("") +
+        '</div><span style="font-size:12px;color:#5f6368">Ранжирование: ' + escapeHtml(rubric.final_score_formula || "") + "</span></div>";
+    }
+    function renderHypotheses(data) {
+      const warnings = (data.warnings||[]).map(r => '<span class="chip" style="border-color:#fdd835;background:#fffde7">' + escapeHtml(r) + "</span>").join("");
+      const hypotheses = data.hypotheses || [];
+      const cards = hypotheses.length ? hypotheses.map(h =>
+        '<div class="answer-card">' +
+          '<div class="hypothesis-meta"><span class="hypothesis-rank">#' + escapeHtml(h.rank || "") + '</span><span class="hypothesis-type">' + escapeHtml(hypothesisTypeLabel(h.hypothesis_type)) + '</span></div>' +
+          '<h3>' + escapeHtml(h.statement || UI_TEXT.noHypotheses) + '</h3>' +
+          renderScoreGrid(h.score) +
+          '<div><b style="font-size:13px">Обоснование</b><p style="font-size:13px;line-height:1.5;color:#3c4043;margin-top:4px">' + escapeHtml(h.rationale || "") + '</p></div>' +
+          '<div><b style="font-size:13px">План проверки</b><p style="font-size:13px;line-height:1.5;color:#3c4043;margin-top:4px">' + escapeHtml(h.test_plan || "") + '</p></div>' +
+          '<div><b style="font-size:13px">Новизна</b><p style="font-size:13px;line-height:1.5;color:#3c4043;margin-top:4px">' + escapeHtml(h.novelty_rationale || "") + '</p></div>' +
+          '<div><b style="font-size:13px">Риски</b>' + renderStringList(h.risk_items, "Риски не указаны") + '</div>' +
+          '<div><b style="font-size:13px">Критерии фальсификации</b>' + renderStringList(h.falsification_criteria, "Критерии не указаны") + '</div>' +
+          '<div><b style="font-size:13px">Что нужно собрать</b>' + renderStringList(h.required_evidence, "Нет списка evidence") + '</div>' +
+        '</div>'
+      ).join("") : '<div class="answer-card"><h3>' + UI_TEXT.noHypotheses + '</h3><span style="font-size:13px;color:#5f6368">Уточните KPI или загрузите источники.</span></div>';
+      addMsg("assistant",
+        '<div class="bubble">Сформирован список гипотез для KPI: <b>' + escapeHtml(data.target_kpi || "") + "</b></div>" +
+        (warnings ? '<div class="answer-card"><h3>Предупреждения</h3><div class="chips">' + warnings + "</div></div>" : "") +
+        renderKnowledgeSummary(data) +
+        cards
+      );
     }
     function getSelectedSources() {
       if (!state.files.length) return null;
@@ -933,7 +1123,7 @@
       $("uploadProgress").classList.add("active");
       $("addSources").disabled = true;
       setUploadProgress(0, files.length, "Подготовка " + formatCount(files.length, "файл", "файла", "файлов"));
-      const totals = { entities: 0, experiments: 0, documents: 0 };
+      const totals = { entities: 0, experiments: 0, documents: 0, llmStructured: 0, llmExtracted: 0, fallback: 0 };
       let lastOverview = null;
       let lastQuestions = [];
       let uploadedCount = 0;
@@ -950,6 +1140,9 @@
           totals.entities += data.reference?.entities || 0;
           totals.experiments += data.experiments?.experiments || 0;
           totals.documents += data.documents?.documents || 0;
+          totals.llmStructured += data.ingestion?.llm_structured_files?.length || 0;
+          totals.fallback += data.ingestion?.searchable_fallback_files?.length || 0;
+          totals.llmExtracted += data.documents?.llm_extracted_experiments || 0;
           lastOverview = data.overview || lastOverview;
           lastQuestions = data.suggested_questions || lastQuestions;
           renderSources(data, { notify: false });
@@ -960,6 +1153,9 @@
         if (totals.entities) counts.push(totals.entities + " сущностей");
         if (totals.experiments) counts.push(totals.experiments + " экспериментов");
         if (totals.documents) counts.push(totals.documents + " документов");
+        if (totals.llmStructured) counts.push("ИИ-нормализация: " + totals.llmStructured);
+        if (totals.llmExtracted) counts.push("ИИ-извлечение: " + totals.llmExtracted);
+        if (totals.fallback) counts.push("fallback: " + totals.fallback + " (ИИ не вернула структуру)");
         if (lastQuestions.length) renderSuggestions(lastQuestions);
         addMsg("assistant", '<div class="bubble">Готово: ' + formatCount(files.length, "файл", "файла", "файлов") + ". " + (counts.join(", ") || UI_TEXT.filesAccepted) + ".</div>");
         refreshGraphIfOpen();
@@ -992,6 +1188,32 @@
         addMsg("assistant", '<div class="bubble error">' + escapeHtml(e.message) + "</div>");
       } finally {
         $("sendQuestion").disabled = false;
+      }
+    }
+    async function generateHypothesesFromKpi() {
+      const targetKpi = $("targetKpi").value.trim();
+      if (!targetKpi) {
+        addMsg("assistant", '<div class="bubble error">' + UI_TEXT.hypothesisMissingKpi + "</div>");
+        $("targetKpi").focus();
+        return;
+      }
+      $("generateHypotheses").disabled = true;
+      addMsg("user", '<div class="bubble">KPI: ' + escapeHtml(targetKpi) + "</div>");
+      try {
+        const sourceIds = getSelectedSources();
+        const maxHypotheses = Math.max(1, Math.min(20, Number($("hypothesisLimit").value || 5)));
+        const payload = {
+          target_kpi: targetKpi,
+          question: targetKpi,
+          max_hypotheses: maxHypotheses
+        };
+        if (sourceIds) payload.source_ids = sourceIds;
+        const data = await postJson("/hypotheses/generate", payload);
+        renderHypotheses(data);
+      } catch(e) {
+        addMsg("assistant", '<div class="bubble error">' + escapeHtml(e.message) + "</div>");
+      } finally {
+        $("generateHypotheses").disabled = false;
       }
     }
     function graphDataUrl() {
@@ -1044,13 +1266,15 @@
     $("addSources").addEventListener("click", () => $("fileInput").click());
     $("fileInput").addEventListener("change", e => { uploadFiles(Array.from(e.target.files)); e.target.value = ""; });
     $("sendQuestion").addEventListener("click", ask);
+    $("generateHypotheses").addEventListener("click", generateHypothesesFromKpi);
+    $("targetKpi").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); generateHypothesesFromKpi(); } });
     $("question").addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ask(); } });
     $("question").addEventListener("input", function() { this.style.height = "auto"; this.style.height = Math.min(this.scrollHeight, 120) + "px"; });
     $("collapseSources").addEventListener("click", () => $("appShell").classList.add("sources-collapsed"));
     $("restoreSources").addEventListener("click", () => $("appShell").classList.remove("sources-collapsed"));
     $("graphToggle").addEventListener("click", () => {
       $("graphPanel").classList.toggle("open");
-      if ($("graphPanel").classList.contains("open")) { buildLegend(); loadGraph(); }
+      if ($("graphPanel").classList.contains("open")) { buildLegendForNodes([]); loadGraph(); }
     });
     $("graphClose").addEventListener("click", closeGraphPanel);
     $("menuButton").addEventListener("click", e => { e.stopPropagation(); $("menuPopover").classList.toggle("open"); });
@@ -1088,6 +1312,14 @@
         '<span class="legend-item"><span class="legend-dot" style="background:' + UI_CONFIG.graph.colors[k] + '"></span>' + (UI_CONFIG.graph.labels[k]||k) + '</span>'
       ).join("");
     }
+    function buildLegendForNodes(nodes) {
+      const el = $("graphLegend");
+      if (!el) return;
+      const kinds = Array.from(new Set((nodes || []).map(n => n.kind).filter(Boolean))).sort();
+      el.innerHTML = kinds.map(k =>
+        '<span class="legend-item"><span class="legend-dot" style="background:' + (UI_CONFIG.graph.colors[k] || "#5f6368") + '"></span>' + (UI_CONFIG.graph.labels[k]||k) + '</span>'
+      ).join("");
+    }
     async function loadGraph() {
       const stats = $("graphStats");
       if (!state.total) {
@@ -1108,6 +1340,7 @@
         const edges = data.edges || [];
         const container = $("graphVis");
         if (!container) return;
+        buildLegendForNodes(nodes);
         if (!nodes.length) {
           showGraphEmpty(UI_TEXT.graphEmpty);
           return;
