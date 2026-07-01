@@ -96,9 +96,10 @@ Full 30-line deps: deepagents, langchain, neo4j, networkx, openai, tiktoken, fas
 
 | File | Purpose |
 |------|---------|
-| `__init__.py` | Exports `MaterialsKGService` |
-| `materials_kg.py` | **2326 lines.** Main service. Ingestion, query, gap analysis, hypothesis generation, streaming answers, decision traces, coverage rules |
+| `__init__.py` | Exports `MaterialsKGService` and offline metrics APIs |
+| `materials_kg.py` | **2331 lines.** Main service. Ingestion, query, gap analysis, hypothesis generation, streaming answers, decision traces, coverage rules |
 | `hypothesis_adjustments.py` | Expert override helpers: `apply_expert_adjustments()`, schema for reject/note/score adjustments |
+| `metrics.py` | **681 lines.** Offline quality metrics: Entity/Relation F1, context recall, groundedness, novelty, coverage heatmap, full run comparison, expert feedback persistence/calibration/correlation |
 | `session.py` | Thread-safe in-memory session store with TTL expiry. `SessionStore` manages `ConversationSession` objects |
 
 ---
@@ -119,7 +120,7 @@ Full 30-line deps: deepagents, langchain, neo4j, networkx, openai, tiktoken, fas
 | File | Purpose |
 |------|---------|
 | `__init__.py` | Docstring: "API entry points for the materials core API" |
-| `materials_core.py` | **744 lines.** FastAPI app factory `create_materials_app()`. Endpoints: health, ingest (reference/experiments/documents/canonical), query (material-mode-property/search), entities, hypotheses (deterministic+agent), adjustments, decision traces, coverage rules, destructive wipe, UI |
+| `materials_core.py` | **834 lines.** FastAPI app factory `create_materials_app()`. Endpoints: health, ingest (reference/experiments/documents/canonical), query (material-mode-property/search), entities, hypotheses (deterministic+agent), metrics, expert feedback, adjustments, decision traces, coverage rules, destructive wipe, UI |
 
 ---
 
@@ -160,13 +161,14 @@ Full 30-line deps: deepagents, langchain, neo4j, networkx, openai, tiktoken, fas
 | `conftest.py` | Adds project root to `sys.path` |
 | `test_materials_kg_core.py` | **903 lines.** Comprehensive service tests: ingestion, queries, gaps, hypotheses, streaming |
 | `test_materials_graph_database_behavior.py` | **255 lines.** Behavioral tests: adapter → service → repository path |
-| `test_materials_api_smoke.py` | **474 lines.** FastAPI TestClient smoke tests for every endpoint |
+| `test_materials_api_smoke.py` | **626 lines.** FastAPI TestClient smoke tests for every endpoint, including offline metrics endpoints |
 | `test_deepagents_hypothesis_factory.py` | **430 lines.** Deep Agents hypothesis workflow tests |
 | `test_neo4j_repository.py` | **90 lines.** Neo4j repo with `FakeSession` mock |
 | `test_repository_factory.py` | **79 lines.** Factory: memory vs Neo4j selection |
 | `test_ingestion_adapters.py` | **141 lines.** Unit tests for each adapter |
 | `test_ingest_materials_cli_loading.py` | **113 lines.** CLI `_load_bundle()` and `_load_payload()` tests |
 | `test_llm_provider_selection.py` | **179 lines.** LLM provider detection and creation |
+| `test_metrics_evaluation.py` | **485 lines.** Offline metrics tests: extraction F1, context recall, repository coverage heatmap, full run comparison, calibrated reranking, expert feedback calibration, edge cases |
 | `test_no_donor_brand_in_core.py` | **133 lines.** Isolation guard: scans for forbidden legacy brand references |
 
 ---
@@ -196,6 +198,7 @@ Full 30-line deps: deepagents, langchain, neo4j, networkx, openai, tiktoken, fas
 | File | Purpose |
 |------|---------|
 | `ARCHITECTURE.md` | **This file.** Full architecture, file structure, deployment, development |
+| `mimo-runs/` | MiMo delegation reports and prompts. Runs are stored by date/task and may include failure summaries when MiMo cannot start |
 
 ---
 

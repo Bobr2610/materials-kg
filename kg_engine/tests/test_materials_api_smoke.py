@@ -237,6 +237,158 @@ def test_demo_load_sample_powers_notebook_ui_queries() -> None:
     assert hypotheses_body["evidence"] or hypotheses_body["data_gaps"]
 
 
+def test_metrics_api_offline_quality_flow() -> None:
+    app = create_materials_app(
+        settings=deterministic_settings(),
+        service=MaterialsKGService(InMemoryMaterialsKGRepository())
+    )
+    client = TestClient(app)
+    client.post(
+        "/ingest/reference",
+        json={
+            "entities": [
+                {"kind": "material", "name": "CuCrZr", "canonical_id": "mat-cucrzr"},
+                {"kind": "mode", "name": "Aged", "canonical_id": "mode-aged"},
+                {
+                    "kind": "property",
+                    "name": "Conductivity",
+                    "canonical_id": "prop-conductivity",
+                },
+            ]
+        },
+    )
+    client.post(
+        "/ingest/experiments",
+        json=[
+            {
+                "experiment_id": "exp-metrics",
+                "title": "Metrics trial",
+                "material_name": "CuCrZr",
+                "mode_name": "Aged",
+                "observations": [
+                    {
+                        "property_name": "Conductivity",
+                        "value": 78.0,
+                        "unit": "%IACS",
+                    }
+                ],
+            }
+        ],
+    )
+
+    coverage = client.post("/metrics/coverage", json={})
+    assert coverage.status_code == 200
+    assert coverage.json()["coverage_ratio"] == 1.0
+
+    extraction = client.post(
+        "/metrics/extraction",
+        json={
+            "samples": [
+                {
+                    "sample_id": "doc-1",
+                    "expected_entities": [{"kind": "material", "name": "CuCrZr"}],
+                    "extracted_entities": [{"kind": "material", "name": "CuCrZr"}],
+                }
+            ]
+        },
+    )
+    assert extraction.status_code == 200
+    assert extraction.json()["entity"]["f1"] == 1.0
+
+    context = client.post(
+        "/metrics/context",
+        json={
+            "expected_context_ids": ["ev-1", "ev-2"],
+            "retrieved_context_ids": ["ev-1"],
+            "expected_entity_ids": ["mat-cucrzr"],
+            "retrieved_entity_ids": ["mat-cucrzr"],
+        },
+    )
+    assert context.status_code == 200
+    assert context.json()["context_recall"] == 0.5
+
+    compare = client.post(
+        "/metrics/runs/compare",
+        json={
+            "left": {
+                "name": "deterministic",
+                "result": {
+                    "target_kpi": "Conductivity",
+                    "generation_engine": "deterministic",
+                    "hypotheses": [
+                        {
+                            "id": "det-1",
+                            "target_kpi": "Conductivity",
+                            "statement": "Test deterministic",
+                            "rationale": "ev-1",
+                            "test_plan": "Measure",
+                            "score": {
+                                "novelty": 0.4,
+                                "risk": 0.2,
+                                "value": 0.6,
+                                "evidence_strength": 0.6,
+                                "final_score": 0.6,
+                            },
+                            "supporting_evidence_ids": ["ev-1"],
+                        }
+                    ],
+                },
+                "context": {"evidence_ids": ["ev-1"]},
+            },
+            "right": {
+                "name": "agent",
+                "result": {
+                    "target_kpi": "Conductivity",
+                    "generation_engine": "agent",
+                    "hypotheses": [
+                        {
+                            "id": "agent-1",
+                            "target_kpi": "Conductivity",
+                            "statement": "Test agent",
+                            "rationale": "missing",
+                            "test_plan": "Measure",
+                            "score": {
+                                "novelty": 0.4,
+                                "risk": 0.2,
+                                "value": 0.8,
+                                "evidence_strength": 0.8,
+                                "final_score": 0.8,
+                            },
+                            "supporting_evidence_ids": ["missing"],
+                        }
+                    ],
+                },
+                "context": {"evidence_ids": ["ev-1"]},
+            },
+        },
+    )
+    assert compare.status_code == 200
+    assert compare.json()["deltas"]["average_final_score"] == 0.2
+
+    feedback = client.post(
+        "/metrics/feedback",
+        json={
+            "hypothesis_id": "det-1",
+            "rating": 5,
+            "score": {
+                "novelty": 0.4,
+                "risk": 0.2,
+                "value": 0.6,
+                "evidence_strength": 0.6,
+                "final_score": 0.6,
+            },
+        },
+    )
+    assert feedback.status_code == 200
+    assert feedback.json()["saved"] == 1
+    assert feedback.json()["invalid_feedback_lines"] == 0
+
+    correlation = client.get("/metrics/feedback/correlation")
+    assert correlation.status_code == 200
+    assert correlation.json()["sample_size"] >= 1
+    assert correlation.json()["invalid_feedback_lines"] == 0
+
+
 def test_free_question_material_and_property_fallbacks() -> None:
     app = create_materials_app(
         settings=deterministic_settings(),
