@@ -49,6 +49,9 @@ node_modules/
 # Agent plans (не коммитить — мусорит git)
 .plans/
 
+# Agent review outputs
+docs/mimo-runs/
+
 # OS files
 *.swp
 Thumbs.db
