@@ -159,6 +159,11 @@ class MaterialsKGService:
     def llm_provider(self) -> Any | None:
         return self._llm
 
+    @property
+    def repository(self) -> MaterialsKGRepository:
+        """Repository used by read-only service integrations such as metrics."""
+        return self._repository
+
     def ingest_reference_data(self, batch: ReferenceDataBatch) -> dict[str, int]:
         entity_count = 0
         for record in batch.entities:
