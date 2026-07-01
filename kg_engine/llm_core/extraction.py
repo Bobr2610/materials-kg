@@ -2,18 +2,24 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
-import json
 
-from kg_engine.domain.models import CanonicalEntityInput
-from kg_engine.domain.models import DocumentInput
+from kg_engine.domain.models import DocumentExtractionResult
+from kg_engine.domain.models import ExtractedEntity
+from kg_engine.domain.models import ExtractedExperiment
+from kg_engine.domain.models import ExtractedRelationship
 from kg_engine.domain.models import EntityKind
-from kg_engine.domain.models import ExperimentInput
 from kg_engine.domain.models import ObservationInput
+from kg_engine.domain.models import FindingInput
 from kg_engine.llm_core.provider import LLMProvider
 
 logger = logging.getLogger(__name__)
+
+_MAX_EXTRACTED_ENTITIES = 50
+_MAX_EXTRACTED_EXPERIMENTS = 20
+_MAX_EXTRACTED_RELATIONSHIPS = 30
 
 _ANSWER_CONTEXT_KEYS = [
     "resolved_query",
@@ -63,49 +69,6 @@ You answer strictly from the provided graph retrieval packet.
 - Do not expose hidden reasoning or query-planning text.
 - Never duplicate sections.
 </answer_style>"""
-
-
-def _build_graph_context_str(graph_context: dict[str, Any]) -> str:
-    """Build a text representation of graph context for LLM consumption."""
-    parts: list[str] = []
-
-    if graph_context.get("matched_entities"):
-        names = [
-            e.get("canonical_name", "") for e in graph_context["matched_entities"][:10]
-        ]
-        parts.append(f"Matched entities: {', '.join(names)}")
-
-    if graph_context.get("experiments"):
-        for exp in graph_context["experiments"][:5]:
-            parts.append(f"Experiment: {exp.get('canonical_name', exp.get('id', ''))}")
-
-    if graph_context.get("observations"):
-        obs_text = "; ".join(
-            f"{o.get('property_id', '')}: {o.get('value', 'n/a')} {o.get('unit', '')}"
-            for o in graph_context["observations"][:10]
-        )
-        parts.append(f"Measurements: {obs_text}")
-
-    if graph_context.get("evidence"):
-        for ev in graph_context["evidence"][:8]:
-            source_id = ev.get("source_id", "")
-            source_kind = ev.get("source_kind", "")
-            fragment = (
-                ev.get("span", {}).get("fragment", "")
-                if isinstance(ev.get("span"), dict)
-                else ""
-            )
-            parts.append(
-                f"Evidence [{source_kind}] from '{source_id}': {fragment[:300]}"
-            )
-
-    if graph_context.get("search_hits"):
-        for h in graph_context["search_hits"][:5]:
-            parts.append(
-                f"Source text from '{h.get('source_entity_id', '')}': {h.get('content', '')[:400]}"
-            )
-
-    return "\n".join(parts) if parts else "No data found in knowledge graph."
 
 
 def _compact_graph_context(graph_context: dict[str, Any]) -> dict[str, Any]:
@@ -193,8 +156,11 @@ def build_answer_messages(
     return messages
 
 
+# ── Extraction prompts ──────────────────────────────────────────────
+
+
 _EXTRACT_PROMPT = """You are a materials science knowledge graph extractor.
-Analyze the following document and extract ALL entities and relationships.
+Analyze the following document and extract entities, experiments, and relationships.
 
 Document title: {title}
 Document text:
@@ -203,8 +169,7 @@ Document text:
 Return a JSON object with:
 {{
   "entities": [
-    {{"kind": "material|property|mode|equipment|team|tag|document", "name": "...", "aliases": [...], "properties": {{}}}},
-    ...
+    {{"kind": "material|property|mode|equipment|team|tag", "name": "...", "aliases": [...], "properties": {{}}}}
   ],
   "experiments": [
     {{
@@ -219,14 +184,18 @@ Return a JSON object with:
     }}
   ],
   "relationships": [
-    {{"source": "entity_name", "target": "entity_name", "type": "uses_mode|measures_property|uses_equipment|performed_by|documented_in"}}
+    {{"source": "entity_name", "target": "entity_name", "type": "evaluates_material|uses_mode|measures_property|uses_equipment|performed_by|documented_in|references|related_to"}}
   ]
 }}
 
 Rules:
-- Extract EVERY material mentioned (alloys, steels, titanium, etc.)
-- Extract EVERY property measured (tensile strength, hardness, fatigue, etc.)
-- Extract EVERY processing mode (annealing, aging, welding, etc.)
+- Extract at most {max_entities} entities, {max_experiments} experiments, {max_relationships} relationships.
+- Every entity MUST have a non-empty "name" field.
+- Every experiment MUST have a non-empty "material_name" field.
+- Every relationship MUST reference entity names that appear in the "entities" array.
+- Extract materials (alloys, steels, titanium, composites, etc.)
+- Extract properties (tensile strength, hardness, fatigue, conductivity, etc.)
+- Extract processing modes (annealing, aging, welding, sintering, etc.)
 - Extract equipment and team names if mentioned
 - For experiments, extract actual numerical measurements with units
 - Be precise with values and units
@@ -235,9 +204,8 @@ Rules:
 
 
 _UPLOAD_STRUCTURE_PROMPT = """You are a materials science ingestion agent.
-Your job is to profile an arbitrary uploaded file and invent the mapping from
-its own columns/fields into the canonical payloads used by a graph-backed
-materials knowledge base.
+Your job is to profile an arbitrary uploaded file and map its columns/fields
+into the canonical payloads used by a graph-backed materials knowledge base.
 
 Filename: {filename}
 File type: {file_type}
@@ -279,32 +247,234 @@ Return ONLY a JSON object with this schema:
 }}
 
 Rules:
-- First infer what each column/field means from headers, values, units,
-  neighboring fields, row patterns, and materials-science context.
-- The source may use arbitrary names, abbreviations, another language, internal
-  codes, or no obvious names at all. Do not require exact column names.
-- Create the column/field mapping yourself and store it in metadata under
-  "llm_column_mapping" for emitted records when useful.
-- Convert rows into experiments only when the row contains enough evidence for
-  a material/sample, a measured or target property, and an observed value/result.
-- Use any column that behaves like a processing route, treatment, condition,
-  state, protocol, or environment as mode_name, but only if the data supports it.
+- Infer what each column/field means from headers, values, units, and materials-science context.
+- Do not require exact column names — the source may use arbitrary names, abbreviations, or another language.
+- Store column mapping in metadata under "llm_column_mapping" when useful.
+- Convert rows into experiments only when there is enough evidence for a material, a property, and a value.
+- Use any column that behaves like a processing route, treatment, or condition as mode_name.
 - Preserve row-level provenance in fragment and row_reference.
 - Do not invent values, units, materials, modes, or experiments.
 - If a row is too ambiguous, put it into documents as searchable text.
-- Add source_ref="{filename}" or metadata.source_file="{filename}" to every emitted record.
+- Add source_ref="{filename}" or metadata.source_file="{filename}" to every record.
 """
+
+
+# ── Validation helpers ──────────────────────────────────────────────
+
+
+def _validate_entity(raw: dict[str, Any]) -> ExtractedEntity | None:
+    """Validate a single raw entity dict. Returns None if invalid."""
+    name = (raw.get("name") or "").strip()
+    if not name:
+        return None
+    kind_str = (raw.get("kind") or "document").strip().lower()
+    try:
+        kind = EntityKind(kind_str)
+    except ValueError:
+        kind = EntityKind.DOCUMENT
+    aliases = [
+        str(a).strip()
+        for a in (raw.get("aliases") or [])
+        if isinstance(a, str) and a.strip()
+    ]
+    properties = raw.get("properties") or {}
+    if not isinstance(properties, dict):
+        properties = {}
+    return ExtractedEntity(
+        kind=kind,
+        name=name,
+        aliases=aliases,
+        properties=properties,
+    )
+
+
+def _validate_experiment(raw: dict[str, Any], index: int) -> ExtractedExperiment | None:
+    """Validate a single raw experiment dict. Returns None if invalid."""
+    material_name = (raw.get("material_name") or "").strip()
+    if not material_name:
+        return None
+    experiment_id = (raw.get("experiment_id") or "").strip()
+    if not experiment_id:
+        experiment_id = f"llm_exp_{index}"
+    title = (raw.get("title") or "").strip()
+    mode_name = (raw.get("mode_name") or "").strip()
+
+    observations: list[ObservationInput] = []
+    for obs in raw.get("observations") or []:
+        prop_name = (obs.get("property_name") or "").strip()
+        if not prop_name:
+            continue
+        observations.append(
+            ObservationInput(
+                property_name=prop_name,
+                value=obs.get("value") if isinstance(obs.get("value"), int | float) else None,
+                unit=(obs.get("unit") or "").strip() or None,
+                confidence=_safe_float(obs.get("confidence"), 0.85),
+                extraction_method="llm_extraction",
+            )
+        )
+
+    findings: list[FindingInput] = []
+    for f in raw.get("findings") or []:
+        summary = (f.get("summary") or "").strip()
+        if not summary:
+            continue
+        findings.append(
+            FindingInput(
+                summary=summary,
+                confidence=_safe_float(f.get("confidence"), 0.85),
+                extraction_method="llm_extraction",
+            )
+        )
+
+    return ExtractedExperiment(
+        experiment_id=experiment_id,
+        title=title or f"Extracted experiment #{index}",
+        material_name=material_name,
+        mode_name=mode_name,
+        observations=observations,
+        findings=findings,
+    )
+
+
+def _safe_float(value: Any, default: float = 0.85) -> float:
+    """Convert a value to float safely, returning default on failure."""
+    if isinstance(value, int | float):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip())
+        except ValueError:
+            pass
+    return default
+
+
+def _validate_relationship(
+    raw: dict[str, Any],
+    known_names: set[str],
+    name_index: dict[str, str] | None = None,
+) -> ExtractedRelationship | None:
+    """Validate a single raw relationship dict. Returns None if invalid."""
+    source = (raw.get("source") or "").strip()
+    target = (raw.get("target") or "").strip()
+    rel_type = (raw.get("type") or "").strip()
+    if not source or not target or not rel_type:
+        return None
+    idx = name_index or {n: n for n in known_names}
+    resolved_source = idx.get(source) or idx.get(source.lower())
+    resolved_target = idx.get(target) or idx.get(target.lower())
+    if not resolved_source or not resolved_target:
+        return None
+    return ExtractedRelationship(
+        source=resolved_source, target=resolved_target, type=rel_type,
+    )
+
+
+def _validate_extraction(raw: dict[str, Any]) -> DocumentExtractionResult:
+    """Validate and normalize raw LLM extraction output into typed DTOs."""
+    warnings: list[str] = []
+
+    raw_entities = raw.get("entities") or []
+    if not isinstance(raw_entities, list):
+        raw_entities = []
+
+    entities: list[ExtractedEntity] = []
+    seen_names: set[str] = set()
+    for item in raw_entities:
+        if not isinstance(item, dict):
+            continue
+        entity = _validate_entity(item)
+        if entity is None:
+            name = (item.get("name") or "").strip()
+            if name:
+                warnings.append("Entity with empty name skipped")
+            continue
+        if entity.name in seen_names:
+            continue
+        seen_names.add(entity.name)
+        entities.append(entity)
+    if len(raw_entities) > _MAX_EXTRACTED_ENTITIES:
+        warnings.append(
+            f"LLM returned {len(raw_entities)} entities, capped at {_MAX_EXTRACTED_ENTITIES}"
+        )
+        entities = entities[:_MAX_EXTRACTED_ENTITIES]
+
+    raw_experiments = raw.get("experiments") or []
+    if not isinstance(raw_experiments, list):
+        raw_experiments = []
+
+    experiments: list[ExtractedExperiment] = []
+    for idx, item in enumerate(raw_experiments):
+        if not isinstance(item, dict):
+            continue
+        exp = _validate_experiment(item, idx)
+        if exp is None:
+            mat = (item.get("material_name") or "").strip()
+            if not mat:
+                warnings.append(f"Experiment #{idx} skipped: empty material_name")
+            continue
+        experiments.append(exp)
+    if len(raw_experiments) > _MAX_EXTRACTED_EXPERIMENTS:
+        warnings.append(
+            f"LLM returned {len(raw_experiments)} experiments, capped at {_MAX_EXTRACTED_EXPERIMENTS}"
+        )
+        experiments = experiments[:_MAX_EXTRACTED_EXPERIMENTS]
+
+    raw_relationships = raw.get("relationships") or []
+    if not isinstance(raw_relationships, list):
+        raw_relationships = []
+
+    name_index: dict[str, str] = {}
+    for name in seen_names:
+        name_index[name] = name
+        name_index[name.lower()] = name
+
+    relationships: list[ExtractedRelationship] = []
+    for item in raw_relationships:
+        if not isinstance(item, dict):
+            continue
+        rel = _validate_relationship(item, seen_names, name_index)
+        if rel is None:
+            continue
+        relationships.append(rel)
+    if len(raw_relationships) > _MAX_EXTRACTED_RELATIONSHIPS:
+        warnings.append(
+            f"LLM returned {len(raw_relationships)} relationships, capped at {_MAX_EXTRACTED_RELATIONSHIPS}"
+        )
+        relationships = relationships[:_MAX_EXTRACTED_RELATIONSHIPS]
+
+    return DocumentExtractionResult(
+        entities=entities,
+        experiments=experiments,
+        relationships=relationships,
+        warnings=warnings,
+    )
+
+
+# ── Public extraction functions ─────────────────────────────────────
 
 
 def extract_entities_from_document(
     provider: LLMProvider,
     title: str,
     text: str,
-) -> dict[str, Any]:
-    """Use LLM to extract entities, experiments, and relationships from a document."""
+) -> DocumentExtractionResult:
+    """Use LLM to extract entities, experiments, and relationships from a document.
+
+    Returns a validated DocumentExtractionResult. Entities with empty names,
+    experiments without material_name, and relationships referencing unknown
+    entities are silently dropped with warnings.
+    """
     from kg_engine.config.settings import settings
 
-    truncated = text[: settings.llm_embedding_truncation_chars]
+    budget = settings.llm_embedding_truncation_chars
+    truncated = text[:budget] if len(text) > budget else text
+    if len(text) > budget:
+        logger.info(
+            "Document '%s' truncated from %d to %d chars for LLM extraction",
+            title, len(text), budget,
+        )
+
     messages = [
         {
             "role": "system",
@@ -312,17 +482,21 @@ def extract_entities_from_document(
         },
         {
             "role": "user",
-            "content": _EXTRACT_PROMPT.format(title=title, content=truncated),
+            "content": _EXTRACT_PROMPT.format(
+                title=title,
+                content=truncated,
+                max_entities=_MAX_EXTRACTED_ENTITIES,
+                max_experiments=_MAX_EXTRACTED_EXPERIMENTS,
+                max_relationships=_MAX_EXTRACTED_RELATIONSHIPS,
+            ),
         },
     ]
-    result = provider.chat_json(messages, temperature=0.1, max_tokens=4096)
-    if not result:
-        return {"entities": [], "experiments": [], "relationships": []}
-    return {
-        "entities": result.get("entities", []),
-        "experiments": result.get("experiments", []),
-        "relationships": result.get("relationships", []),
-    }
+    raw = provider.chat_json(messages, temperature=0.1, max_tokens=4096)
+    if not raw:
+        return DocumentExtractionResult(
+            warnings=["LLM returned empty response"],
+        )
+    return _validate_extraction(raw)
 
 
 def structure_upload_with_llm(
@@ -335,7 +509,8 @@ def structure_upload_with_llm(
     from kg_engine.config.settings import settings
 
     content = json.dumps(parsed_content, ensure_ascii=False, indent=2, default=str)
-    truncated = content[: settings.llm_embedding_truncation_chars]
+    budget = settings.llm_embedding_truncation_chars
+    truncated = content[:budget] if len(content) > budget else content
     messages = [
         {
             "role": "system",
@@ -363,57 +538,13 @@ def structure_upload_with_llm(
     }
 
 
-def llm_enhance_reference_entities(
-    provider: LLMProvider,
-    entities: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """Use LLM to enrich reference entities with better aliases and properties."""
-    if not entities:
-        return entities
-    names = [e.get("name", "") for e in entities[:50]]
-    messages = [
-        {
-            "role": "system",
-            "content": "You are a materials science ontology enricher. Return only valid JSON.",
-        },
-        {
-            "role": "user",
-            "content": (
-                "For each entity below, suggest additional aliases (alternative names, abbreviations, "
-                "common references) and any known properties. Return JSON: "
-                '{"enriched": [{"name": "...", "aliases": [...], "properties": {...}}]}'
-                f"\n\nEntities: {names}"
-            ),
-        },
-    ]
-    result = provider.chat_json(messages, temperature=0.2, max_tokens=2048)
-    enriched_list = result.get("enriched", [])
-    alias_map = {item.get("name", ""): item for item in enriched_list}
-    for entity in entities:
-        name = entity.get("name", "")
-        if name in alias_map:
-            extra = alias_map[name]
-            existing_aliases = set(entity.get("aliases", []))
-            existing_aliases.update(extra.get("aliases", []))
-            entity["aliases"] = list(existing_aliases)
-            extra_props = extra.get("properties", {})
-            if extra_props:
-                entity.setdefault("properties", {}).update(extra_props)
-    return entities
-
-
 def llm_generate_answer(
     provider: LLMProvider,
     question: str,
     graph_context: dict[str, Any],
     conversation_history: list[dict[str, str]] | None = None,
 ) -> str:
-    """Use LLM to generate a natural language answer from graph query results.
-
-    The answer must be grounded exclusively in the provided graph_context.
-    Raw source text fragments are included so the LLM can cite specific evidence.
-    Supports multi-turn conversation via conversation_history.
-    """
+    """Use LLM to generate a natural language answer from graph query results."""
     messages = build_answer_messages(question, graph_context, conversation_history)
     answer = provider.chat(messages, temperature=0.3, max_tokens=1024)
     return answer or ""

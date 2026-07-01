@@ -62,6 +62,14 @@ _FORBIDDEN_PATTERNS: list[tuple[str, re.Pattern]] = [
     ("hardcoded materials123", re.compile(r"materials123")),
 ]
 
+_ALLOWED_LANGCHAIN_PATHS: set[str] = {
+    "kg_engine/agents/__init__.py",
+    "kg_engine/agents/hypothesis_factory.py",
+    "kg_engine/llm_core/provider.py",
+    "kg_engine/requirements.txt",
+    "pyproject.toml",
+}
+
 
 def _collect_active_py() -> list[Path]:
     """Collect all .py files under kg_engine/ except tests/."""
@@ -85,6 +93,11 @@ def _scan(path: Path, pattern: re.Pattern) -> list[tuple[int, str]]:
     return hits
 
 
+def _is_allowed_hit(label: str, path: Path) -> bool:
+    rel = str(path.relative_to(_REPO_ROOT)).replace("\\", "/")
+    return label == "langchain" and rel in _ALLOWED_LANGCHAIN_PATHS
+
+
 def test_no_forbidden_references_in_active_package() -> None:
     """Scan all active .py files + surface docs for forbidden technology refs."""
     all_hits: dict[str, list[tuple[str, int, str]]] = {}
@@ -93,6 +106,8 @@ def test_no_forbidden_references_in_active_package() -> None:
         for label, pattern in _FORBIDDEN_PATTERNS:
             hits = _scan(path, pattern)
             for lineno, line in hits:
+                if _is_allowed_hit(label, path):
+                    continue
                 key = str(path.relative_to(_REPO_ROOT))
                 all_hits.setdefault(key, []).append((label, lineno, line))
 
@@ -102,6 +117,8 @@ def test_no_forbidden_references_in_active_package() -> None:
         for label, pattern in _FORBIDDEN_PATTERNS:
             hits = _scan(surface, pattern)
             for lineno, line in hits:
+                if _is_allowed_hit(label, surface):
+                    continue
                 key = str(surface.relative_to(_REPO_ROOT))
                 all_hits.setdefault(key, []).append((label, lineno, line))
 

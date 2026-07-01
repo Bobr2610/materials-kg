@@ -409,6 +409,10 @@ class HypothesisGenerationResult(BaseModel):
     """Hypothesis Factory response with evidence and ranking details."""
 
     target_kpi: str
+    generation_engine: str = Field(default="deterministic")
+    agent_trace: list[dict[str, Any]] = Field(default_factory=list)
+    llm_used: str | None = Field(default=None)
+    expert_adjustment_schema: dict[str, Any] = Field(default_factory=dict)
     resolved_query: dict[str, str | None] = Field(default_factory=dict)
     knowledge_base_summary: dict[str, Any] = Field(default_factory=dict)
     ranking_rubric: dict[str, Any] = Field(default_factory=dict)
@@ -438,3 +442,58 @@ class ConversationSession(BaseModel):
     created_at: datetime = Field(default_factory=utc_now)
     last_active: datetime = Field(default_factory=utc_now)
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+# ── Extraction result models ────────────────────────────────────────
+
+
+class ExtractedEntity(BaseModel):
+    """Entity extracted from a document by LLM or agent."""
+
+    kind: EntityKind
+    name: str = Field(min_length=1)
+    aliases: list[str] = Field(default_factory=list)
+    properties: dict[str, Any] = Field(default_factory=dict)
+
+
+class ExtractedExperiment(BaseModel):
+    """Experiment extracted from a document by LLM or agent."""
+
+    experiment_id: str = Field(min_length=1)
+    title: str = Field(default="")
+    material_name: str = Field(min_length=1)
+    mode_name: str = Field(default="")
+    observations: list[ObservationInput] = Field(default_factory=list)
+    findings: list[FindingInput] = Field(default_factory=list)
+
+
+class ExtractedRelationship(BaseModel):
+    """Relationship extracted from a document by LLM or agent."""
+
+    source: str = Field(min_length=1)
+    target: str = Field(min_length=1)
+    type: str = Field(min_length=1)
+
+
+RELATION_TYPE_MAP: dict[str, RelationType] = {
+    "evaluates_material": RelationType.EVALUATES_MATERIAL,
+    "uses_mode": RelationType.USES_MODE,
+    "measures_property": RelationType.MEASURES_PROPERTY,
+    "uses_equipment": RelationType.USES_EQUIPMENT,
+    "performed_by": RelationType.PERFORMED_BY,
+    "documented_in": RelationType.DOCUMENTED_IN,
+    "tagged_with": RelationType.TAGGED_WITH,
+    "references": RelationType.REFERENCES,
+    "related_to": RelationType.RELATED_TO,
+}
+
+
+class DocumentExtractionResult(BaseModel):
+    """Validated result of LLM/agent document extraction."""
+
+    entities: list[ExtractedEntity] = Field(default_factory=list)
+    experiments: list[ExtractedExperiment] = Field(default_factory=list)
+    relationships: list[ExtractedRelationship] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    extraction_engine: str = Field(default="llm")
+    agent_trace: list[dict[str, Any]] = Field(default_factory=list)

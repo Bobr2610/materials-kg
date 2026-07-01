@@ -43,6 +43,10 @@ from kg_engine.domain.models import SourceSpan
 from kg_engine.domain.models import TextUnitInput
 from kg_engine.domain.resolution import normalize_name
 from kg_engine.repositories.protocols import MaterialsKGRepository
+from kg_engine.services.hypothesis_adjustments import EXPERT_ADJUSTMENT_SCHEMA
+from kg_engine.services.hypothesis_adjustments import apply_expert_adjustments
+from kg_engine.services.hypothesis_adjustments import calculate_final_score
+from kg_engine.services.hypothesis_adjustments import clamp_score
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +55,20 @@ def _stable_id(prefix: str, *parts: Any) -> str:
     raw = "::".join(str(part) for part in parts if part is not None)
     digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
     return f"{prefix}_{digest}"
+
+
+def _merge_source_refs(
+    existing_refs: list[str] | None,
+    *,
+    source_ref: str | None,
+    upload_file: str | None,
+) -> list[str]:
+    refs = set(existing_refs or [])
+    if source_ref:
+        refs.add(source_ref)
+    if upload_file:
+        refs.add(upload_file)
+    return list(refs)
 
 
 def _entity_matches_sources(entity: Entity, source_set: set[str]) -> bool:
@@ -308,6 +326,7 @@ class MaterialsKGService:
     def ingest_documents(self, batch: list[DocumentInput]) -> dict[str, int]:
         trace_count = 0
         llm_extracted_count = 0
+        llm_extraction_errors: list[str] = []
         for document in batch:
             doc_src = document.source_ref or document.document_id
             document_entity = self._ensure_entity(
@@ -337,27 +356,25 @@ class MaterialsKGService:
                         extract_entities_from_document,
                     )
 
-                    extracted = extract_entities_from_document(
+                    extraction = extract_entities_from_document(
                         self._llm, document.title, document.text
                     )
-                    for ent in extracted.get("entities", []):
-                        kind_str = ent.get("kind", "document")
-                        try:
-                            kind = EntityKind(kind_str)
-                        except ValueError:
-                            kind = EntityKind.DOCUMENT
+
+                    name_to_id: dict[str, str] = {}
+                    for ent in extraction.entities:
                         entity = self._ensure_entity(
-                            kind,
-                            ent.get("name", ""),
+                            ent.kind,
+                            ent.name,
                             source_ref=doc_src,
-                            aliases=ent.get("aliases", []),
-                            properties=ent.get("properties", {}),
+                            aliases=ent.aliases,
+                            properties=ent.properties,
                         )
+                        name_to_id[ent.name] = entity.id
                         linked_entity_ids.append(entity.id)
                         evidence = self._create_evidence(
                             source_kind=SourceKind.DOCUMENT,
                             source_id=doc_src,
-                            fragment=ent.get("name", ""),
+                            fragment=ent.name,
                             extraction_method="llm_extraction",
                             confidence=0.85,
                         )
@@ -367,41 +384,15 @@ class MaterialsKGService:
                             RelationType.REFERENCES,
                             evidence_ids=[evidence.id],
                         )
-                    for exp in extracted.get("experiments", []):
-                        material_name = exp.get("material_name", "")
-                        mode_name = exp.get("mode_name", "")
-                        observations = []
-                        for obs in exp.get("observations", []):
-                            observations.append(
-                                ObservationInput(
-                                    property_name=obs.get("property_name", ""),
-                                    value=obs.get("value"),
-                                    unit=obs.get("unit", ""),
-                                    confidence=obs.get("confidence", 0.85),
-                                    extraction_method="llm_extraction",
-                                )
-                            )
-                        findings = []
-                        for f in exp.get("findings", []):
-                            from kg_engine.domain.models import FindingInput
 
-                            findings.append(
-                                FindingInput(
-                                    summary=f.get("summary", ""),
-                                    confidence=f.get("confidence", 0.85),
-                                    extraction_method="llm_extraction",
-                                )
-                            )
+                    for exp in extraction.experiments:
                         exp_input = ExperimentInput(
-                            experiment_id=exp.get(
-                                "experiment_id",
-                                f"{document.document_id}_exp_{llm_extracted_count}",
-                            ),
-                            title=exp.get("title", f"Extracted from {document.title}"),
-                            material_name=material_name,
-                            mode_name=mode_name,
-                            observations=observations,
-                            findings=findings,
+                            experiment_id=exp.experiment_id,
+                            title=exp.title or f"Extracted from {document.title}",
+                            material_name=exp.material_name,
+                            mode_name=exp.mode_name,
+                            observations=list(exp.observations),
+                            findings=list(exp.findings),
                             source_ref=doc_src,
                             metadata={
                                 "source_document": document.document_id,
@@ -410,9 +401,37 @@ class MaterialsKGService:
                         )
                         self.ingest_experiments([exp_input])
                         llm_extracted_count += 1
+
+                    for rel in extraction.relationships:
+                        source_id = name_to_id.get(rel.source)
+                        target_id = name_to_id.get(rel.target)
+                        if not source_id or not target_id:
+                            continue
+                        from kg_engine.agents.extraction_agent import (
+                            resolve_relation_type,
+                        )
+
+                        relation_type = resolve_relation_type(rel.type)
+                        self._link_entities(
+                            source_id,
+                            target_id,
+                            relation_type,
+                            evidence_ids=[],
+                            properties={"extraction_method": "llm"},
+                        )
+
+                    for warning in extraction.warnings:
+                        llm_extraction_errors.append(
+                            f"{document.document_id}: {warning}"
+                        )
+
                 except Exception:
                     logger.exception(
-                        "LLM extraction failed for document %s", document.document_id
+                        "LLM extraction failed for document %s",
+                        document.document_id,
+                    )
+                    llm_extraction_errors.append(
+                        f"{document.document_id}: extraction failed"
                     )
 
             for kind, values in (
@@ -507,6 +526,7 @@ class MaterialsKGService:
             "documents": len(batch),
             "decision_traces": trace_count,
             "llm_extracted_experiments": llm_extracted_count,
+            "llm_extraction_errors": llm_extraction_errors,
         }
 
     def _upsert_text_unit_with_embedding(
@@ -744,6 +764,7 @@ class MaterialsKGService:
         self,
         scope: str | None = None,
         filters: QueryFilters | None = None,
+        source_ids: list[str] | None = None,
     ) -> list[DataGap]:
         filters = filters or QueryFilters()
         observations = self._repository.list_observations()
@@ -801,7 +822,52 @@ class MaterialsKGService:
                                 metadata={"rule_name": rule.name},
                             )
                         )
-        return gaps
+        if source_ids is None:
+            return gaps
+
+        source_set = set(source_ids)
+        return [
+            gap
+            for gap in gaps
+            if (
+                entities := self._repository.find_entities(
+                    ids=[
+                        entity_id
+                        for entity_id in (
+                            gap.material_id,
+                            gap.mode_id,
+                            gap.property_id,
+                        )
+                        if entity_id
+                    ]
+                )
+            ) and all(
+                _entity_matches_sources(entity, source_set)
+                for entity in entities
+            )
+        ]
+
+    def search_evidence_units(
+        self,
+        query: str,
+        *,
+        limit: int = 8,
+        source_ids: list[str] | None = None,
+    ) -> list[SearchTextUnit]:
+        """Search read-only text evidence units for agent orchestration."""
+        if not query.strip():
+            return []
+        hits = self._repository.search_text_units(query, limit=limit)
+        if source_ids is None:
+            return hits
+        source_set = set(source_ids)
+        return [
+            hit
+            for hit in hits
+            if hit.source_entity_id in source_set
+            or hit.metadata.get("source_id") in source_set
+            or hit.metadata.get("source_file") in source_set
+        ]
 
     def _build_answer_context(
         self,
@@ -912,7 +978,7 @@ class MaterialsKGService:
                 property_entity = None
             experiments = [
                 e
-                for e in self._dedupe_entities(experiments)
+                for e in self._dedupe_by_id(experiments)
                 if _entity_matches_sources(e, source_set)
             ]
             observations = [
@@ -942,7 +1008,7 @@ class MaterialsKGService:
             ]
             related_entities = [
                 e
-                for e in self._dedupe_entities(related_entities)
+                for e in self._dedupe_by_id(related_entities)
                 if _entity_matches_sources(e, source_set)
             ]
             data_gaps = [
@@ -959,11 +1025,11 @@ class MaterialsKGService:
                 )
             ]
 
-        experiments_deduped = self._dedupe_entities(experiments)
+        experiments_deduped = self._dedupe_by_id(experiments)
         observations_deduped = self._dedupe_by_id(observations)
         findings_deduped = self._dedupe_by_id(findings)
         relations_deduped = self._dedupe_by_id(relations)
-        related_entities_deduped = self._dedupe_entities(related_entities)
+        related_entities_deduped = self._dedupe_by_id(related_entities)
 
         entity_ids: set[str] = set()
         for entity in [
@@ -1313,16 +1379,10 @@ class MaterialsKGService:
                 or h.metadata.get("source_id") in source_set
                 or h.metadata.get("source_file") in source_set
             ]
-            data_gaps = [
-                g
-                for g in data_gaps
-                if all(
-                    _entity_matches_sources(e, source_set)
-                    for e in self._repository.find_entities(
-                        ids=[x for x in (g.material_id, g.mode_id, g.property_id) if x]
-                    )
-                )
-            ]
+            data_gaps = self.query_data_gaps(
+                filters=filters,
+                source_ids=request.source_ids,
+            )
 
         total_observations = len(observations)
         total_evidence = len(evidence)
@@ -1636,64 +1696,7 @@ class MaterialsKGService:
                 )
             )
 
-        if request.expert_adjustments:
-            for hypothesis in hypotheses:
-                adj = request.expert_adjustments.get(hypothesis.id)
-                if adj is None:
-                    note = "Учтены общие экспертные корректировки: " + ", ".join(
-                        sorted(request.expert_adjustments)
-                    )
-                    hypothesis.expert_notes.append(note)
-                elif isinstance(adj, dict):
-                    if adj.get("reject"):
-                        hypothesis.score = HypothesisScore(
-                            novelty=0,
-                            risk=1.0,
-                            value=0,
-                            evidence_strength=0,
-                            final_score=0,
-                        )
-                    else:
-                        new_novelty = hypothesis.score.novelty
-                        new_risk = hypothesis.score.risk
-                        new_value = hypothesis.score.value
-                        new_ev = hypothesis.score.evidence_strength
-                        if "risk_adjustment" in adj:
-                            new_risk = max(
-                                0.0, min(1.0, new_risk + adj["risk_adjustment"])
-                            )
-                        if "value_adjustment" in adj:
-                            new_value = max(
-                                0.0, min(1.0, new_value + adj["value_adjustment"])
-                            )
-                        if "novelty_adjustment" in adj:
-                            new_novelty = max(
-                                0.0, min(1.0, new_novelty + adj["novelty_adjustment"])
-                            )
-                        if "evidence_strength_adjustment" in adj:
-                            new_ev = max(
-                                0.0,
-                                min(1.0, new_ev + adj["evidence_strength_adjustment"]),
-                            )
-                        if "score_override" in adj:
-                            final = max(0.0, min(1.0, adj["score_override"]))
-                        else:
-                            final = (
-                                0.35 * new_value
-                                + 0.25 * new_ev
-                                + 0.20 * new_novelty
-                                + 0.20 * (1.0 - new_risk)
-                            )
-                            final = max(0.0, min(1.0, final))
-                        hypothesis.score = HypothesisScore(
-                            novelty=new_novelty,
-                            risk=new_risk,
-                            value=new_value,
-                            evidence_strength=new_ev,
-                            final_score=final,
-                        )
-                    if "note" in adj:
-                        hypothesis.expert_notes.append(adj["note"])
+        apply_expert_adjustments(hypotheses, request.expert_adjustments)
 
         hypotheses.sort(key=lambda item: item.score.final_score, reverse=True)
         hypotheses = hypotheses[: request.max_hypotheses]
@@ -1748,6 +1751,8 @@ class MaterialsKGService:
         }
         return HypothesisGenerationResult(
             target_kpi=request.target_kpi,
+            generation_engine="deterministic",
+            expert_adjustment_schema=EXPERT_ADJUSTMENT_SCHEMA,
             resolved_query={
                 "material": material_entity.canonical_name if material_entity else None,
                 "mode": mode_entity.canonical_name if mode_entity else None,
@@ -1792,18 +1797,17 @@ class MaterialsKGService:
         value: float,
         evidence_strength: float,
     ) -> HypothesisScore:
-        final_score = (
-            0.35 * value
-            + 0.25 * evidence_strength
-            + 0.20 * novelty
-            + 0.20 * (1.0 - risk)
-        )
         return HypothesisScore(
-            novelty=max(0.0, min(1.0, novelty)),
-            risk=max(0.0, min(1.0, risk)),
-            value=max(0.0, min(1.0, value)),
-            evidence_strength=max(0.0, min(1.0, evidence_strength)),
-            final_score=max(0.0, min(1.0, final_score)),
+            novelty=clamp_score(novelty),
+            risk=clamp_score(risk),
+            value=clamp_score(value),
+            evidence_strength=clamp_score(evidence_strength),
+            final_score=calculate_final_score(
+                novelty=novelty,
+                risk=risk,
+                value=value,
+                evidence_strength=evidence_strength,
+            ),
         )
 
     def _entity_name(self, entity_id: str | None, fallback: str) -> str:
@@ -2054,13 +2058,13 @@ class MaterialsKGService:
             ]
             value_text = ", ".join(values[:5]) if values else "без числовых значений"
             parts.append(
-                f"Найдено экспериментов: {len(self._dedupe_entities(experiments))}; "
+                f"Найдено экспериментов: {len(self._dedupe_by_id(experiments))}; "
                 f"измерений: {len(self._dedupe_by_id(observations))}. "
                 f"Значения: {value_text}."
             )
         elif experiments:
             parts.append(
-                f"Найдены связанные эксперименты: {len(self._dedupe_entities(experiments))}, "
+                f"Найдены связанные эксперименты: {len(self._dedupe_by_id(experiments))}, "
                 "но прямые измерения для уточненного вопроса не найдены."
             )
         elif search_hits:
@@ -2080,9 +2084,6 @@ class MaterialsKGService:
         if context:
             parts.insert(0, f"Контекст запроса: {context}.")
         return " ".join(parts)
-
-    def _dedupe_entities(self, entities: list[Entity]) -> list[Entity]:
-        return list({entity.id: entity for entity in entities}.values())
 
     def _dedupe_by_id(self, items: list[Any]) -> list[Any]:
         return list({item.id: item for item in items}.values())
@@ -2207,20 +2208,6 @@ class MaterialsKGService:
         )
         return self._repository.upsert_entity(entity)
 
-    @staticmethod
-    def _merge_source_refs(
-        existing_refs: list[str] | None,
-        *,
-        source_ref: str | None,
-        upload_file: str | None,
-    ) -> list[str]:
-        refs = set(existing_refs or [])
-        if source_ref:
-            refs.add(source_ref)
-        if upload_file:
-            refs.add(upload_file)
-        return list(refs)
-
     def _ensure_entity(
         self,
         kind: EntityKind,
@@ -2237,7 +2224,7 @@ class MaterialsKGService:
             updates: dict[str, Any] = {
                 "aliases": list({*existing.aliases, *(aliases or [])}),
                 "properties": {**existing.properties, **(properties or {})},
-                "source_refs": self._merge_source_refs(
+                "source_refs": _merge_source_refs(
                     existing.source_refs,
                     source_ref=source_ref,
                     upload_file=upload_file,
@@ -2250,7 +2237,7 @@ class MaterialsKGService:
             canonical_name=name,
             aliases=aliases or [],
             properties=properties or {},
-            source_refs=self._merge_source_refs(
+            source_refs=_merge_source_refs(
                 None,
                 source_ref=source_ref,
                 upload_file=upload_file,

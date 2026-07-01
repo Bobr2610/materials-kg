@@ -705,6 +705,78 @@
       gap: 6px;
       align-items: center;
     }
+    .agent-trace {
+      display: grid;
+      gap: 6px;
+      font-size: 12px;
+      color: #5f6368;
+    }
+    .trace-row {
+      border: 1px solid #e8eaed;
+      border-radius: 8px;
+      background: #f8f9fa;
+      padding: 7px 9px;
+      overflow-wrap: anywhere;
+    }
+    .expert-panel {
+      border: 1px solid #e8eaed;
+      border-radius: 10px;
+      background: #f8f9fa;
+      padding: 10px;
+      display: grid;
+      gap: 8px;
+    }
+    .expert-controls {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(82px, 1fr));
+      gap: 8px;
+      align-items: end;
+    }
+    .expert-controls label {
+      display: grid;
+      gap: 4px;
+      font-size: 11px;
+      color: #5f6368;
+    }
+    .expert-controls input {
+      width: 100%;
+      height: 32px;
+      border: 1px solid #dadce0;
+      border-radius: 8px;
+      background: #fff;
+      padding: 0 8px;
+      font: inherit;
+      font-size: 12px;
+      color: #202124;
+      min-width: 0;
+    }
+    .expert-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+    .expert-actions button {
+      height: 32px;
+      border: 1px solid #dadce0;
+      border-radius: 8px;
+      background: #fff;
+      color: #202124;
+      font: inherit;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      padding: 0 10px;
+    }
+    .expert-actions button.primary {
+      border-color: #1a73e8;
+      background: #1a73e8;
+      color: #fff;
+    }
+    .expert-actions button.danger {
+      border-color: #fce8e6;
+      color: #d93025;
+    }
     @media (max-width: 420px) {
       .top-actions { gap: 2px; }
       .chat-top button { width: 30px; height: 30px; }
@@ -715,6 +787,7 @@
       .hypothesis-head { align-items: start; flex-direction: column; }
       .hypothesis-form { grid-template-columns: minmax(0, 1fr); }
       .score-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .expert-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
   </style>
   <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
@@ -866,7 +939,9 @@
       sourceFilter: "",
       sourceLimit: UI_CONFIG.sourcePageSize,
       total: 0,
-      overview: null
+      overview: null,
+      lastHypothesisRequest: null,
+      expertAdjustments: {}
     };
 
     function escapeHtml(v) {
@@ -874,7 +949,17 @@
     }
     async function postJson(url, payload = {}) {
       const r = await fetch(url, { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify(payload) });
-      if (!r.ok) throw new Error(await r.text() || r.statusText);
+      if (!r.ok) {
+        const text = await r.text();
+        let message = text || r.statusText;
+        try {
+          const body = JSON.parse(text);
+          message = body.detail || body.error || message;
+        } catch {
+          // Keep plain-text HTTP errors readable.
+        }
+        throw new Error(message);
+      }
       return r.json();
     }
     function formatSize(bytes) {
@@ -1000,6 +1085,8 @@
       const s = data.knowledge_base_summary || {};
       const rubric = data.ranking_rubric || {};
       const bits = [
+        "engine: " + (data.generation_engine || "n/a"),
+        "llm: " + (data.llm_used || "n/a"),
         "observations: " + (s.observations || 0),
         "evidence: " + (s.evidence || 0),
         "text hits: " + (s.text_hits || 0),
@@ -1008,6 +1095,38 @@
       return '<div class="answer-card"><h3>База знаний для KPI</h3><div class="chips">' +
         bits.map(x => '<span class="chip">' + escapeHtml(x) + '</span>').join("") +
         '</div><span style="font-size:12px;color:#5f6368">Ранжирование: ' + escapeHtml(rubric.final_score_formula || "") + "</span></div>";
+    }
+    function renderAgentTrace(trace) {
+      if (!trace?.length) return "";
+      const rows = trace.slice(0, 12).map(item => {
+        const label = item.event || item.tool || "trace";
+        const detail = JSON.stringify(item);
+        return '<div class="trace-row"><b>' + escapeHtml(label) + '</b><br>' + escapeHtml(detail) + '</div>';
+      }).join("");
+      return '<div class="answer-card"><h3>Agent trace</h3><div class="agent-trace">' + rows + "</div></div>";
+    }
+    function adjustmentFor(id) {
+      return state.expertAdjustments[id] || {};
+    }
+    function renderExpertControls(h) {
+      const id = h.id || "";
+      const adj = adjustmentFor(id);
+      const checked = adj.reject ? "checked" : "";
+      return '<div class="expert-panel" data-hypothesis-id="' + escapeHtml(id) + '">' +
+        '<div><b style="font-size:13px">Экспертная корректировка</b></div>' +
+        '<div class="expert-controls">' +
+          '<label>Риск<input class="expert-input" data-field="risk_adjustment" type="number" min="-1" max="1" step="0.05" value="' + escapeHtml(adj.risk_adjustment ?? "") + '"></label>' +
+          '<label>Ценность<input class="expert-input" data-field="value_adjustment" type="number" min="-1" max="1" step="0.05" value="' + escapeHtml(adj.value_adjustment ?? "") + '"></label>' +
+          '<label>Новизна<input class="expert-input" data-field="novelty_adjustment" type="number" min="-1" max="1" step="0.05" value="' + escapeHtml(adj.novelty_adjustment ?? "") + '"></label>' +
+          '<label>Данные<input class="expert-input" data-field="evidence_strength_adjustment" type="number" min="-1" max="1" step="0.05" value="' + escapeHtml(adj.evidence_strength_adjustment ?? "") + '"></label>' +
+        '</div>' +
+        '<label style="display:grid;gap:4px;font-size:11px;color:#5f6368">Заметка<input class="expert-input" data-field="note" type="text" value="' + escapeHtml(adj.note ?? "") + '"></label>' +
+        '<div class="expert-actions">' +
+          '<label style="font-size:12px;color:#5f6368"><input class="expert-input" data-field="reject" type="checkbox" ' + checked + '> отклонить</label>' +
+          '<button class="primary apply-expert" type="button">Пересчитать</button>' +
+          '<button class="danger clear-expert" type="button">Сбросить</button>' +
+        '</div>' +
+      '</div>';
     }
     function renderHypotheses(data) {
       const warnings = (data.warnings||[]).map(r => '<span class="chip" style="border-color:#fdd835;background:#fffde7">' + escapeHtml(r) + "</span>").join("");
@@ -1023,12 +1142,14 @@
           '<div><b style="font-size:13px">Риски</b>' + renderStringList(h.risk_items, "Риски не указаны") + '</div>' +
           '<div><b style="font-size:13px">Критерии фальсификации</b>' + renderStringList(h.falsification_criteria, "Критерии не указаны") + '</div>' +
           '<div><b style="font-size:13px">Что нужно собрать</b>' + renderStringList(h.required_evidence, "Нет списка evidence") + '</div>' +
+          renderExpertControls(h) +
         '</div>'
       ).join("") : '<div class="answer-card"><h3>' + UI_TEXT.noHypotheses + '</h3><span style="font-size:13px;color:#5f6368">Уточните KPI или загрузите источники.</span></div>';
       addMsg("assistant",
         '<div class="bubble">Сформирован список гипотез для KPI: <b>' + escapeHtml(data.target_kpi || "") + "</b></div>" +
         (warnings ? '<div class="answer-card"><h3>Предупреждения</h3><div class="chips">' + warnings + "</div></div>" : "") +
         renderKnowledgeSummary(data) +
+        renderAgentTrace(data.agent_trace || []) +
         cards
       );
     }
@@ -1208,12 +1329,47 @@
           max_hypotheses: maxHypotheses
         };
         if (sourceIds) payload.source_ids = sourceIds;
+        state.lastHypothesisRequest = payload;
+        state.expertAdjustments = {};
         const data = await postJson("/hypotheses/generate", payload);
         renderHypotheses(data);
       } catch(e) {
         addMsg("assistant", '<div class="bubble error">' + escapeHtml(e.message) + "</div>");
       } finally {
         $("generateHypotheses").disabled = false;
+      }
+    }
+    function updateExpertAdjustment(panel, input) {
+      const id = panel?.dataset?.hypothesisId;
+      const field = input?.dataset?.field;
+      if (!id || !field) return;
+      const next = { ...(state.expertAdjustments[id] || {}) };
+      if (input.type === "checkbox") {
+        if (input.checked) next[field] = true;
+        else delete next[field];
+      } else if (input.type === "number") {
+        if (input.value === "") delete next[field];
+        else next[field] = Number(input.value);
+      } else if (input.value.trim()) {
+        next[field] = input.value.trim();
+      } else {
+        delete next[field];
+      }
+      if (Object.keys(next).length) state.expertAdjustments[id] = next;
+      else delete state.expertAdjustments[id];
+    }
+    async function applyExpertAdjustments() {
+      if (!state.lastHypothesisRequest) return;
+      const payload = {
+        ...state.lastHypothesisRequest,
+        expert_adjustments: state.expertAdjustments
+      };
+      addMsg("user", '<div class="bubble">Экспертные корректировки применены</div>');
+      try {
+        const data = await postJson("/hypotheses/generate", payload);
+        renderHypotheses(data);
+      } catch(e) {
+        addMsg("assistant", '<div class="bubble error">' + escapeHtml(e.message) + "</div>");
       }
     }
     function graphDataUrl() {
@@ -1298,6 +1454,33 @@
     $("sources").addEventListener("click", e => {
       const btn = e.target.closest(".source-delete");
       if (btn?.dataset.name) deleteSource(btn.dataset.name);
+    });
+    $("chatBody").addEventListener("input", e => {
+      const input = e.target.closest(".expert-input");
+      if (!input) return;
+      updateExpertAdjustment(input.closest(".expert-panel"), input);
+    });
+    $("chatBody").addEventListener("change", e => {
+      const input = e.target.closest(".expert-input");
+      if (!input) return;
+      updateExpertAdjustment(input.closest(".expert-panel"), input);
+    });
+    $("chatBody").addEventListener("click", e => {
+      const applyBtn = e.target.closest(".apply-expert");
+      if (applyBtn) {
+        applyExpertAdjustments();
+        return;
+      }
+      const clearBtn = e.target.closest(".clear-expert");
+      if (!clearBtn) return;
+      const panel = clearBtn.closest(".expert-panel");
+      const id = panel?.dataset?.hypothesisId;
+      if (!id) return;
+      delete state.expertAdjustments[id];
+      panel.querySelectorAll(".expert-input").forEach(input => {
+        if (input.type === "checkbox") input.checked = false;
+        else input.value = "";
+      });
     });
     document.addEventListener("click", e => { if (!$("menuPopover").contains(e.target) && e.target !== $("menuButton")) $("menuPopover").classList.remove("open"); });
     let dragTimer;

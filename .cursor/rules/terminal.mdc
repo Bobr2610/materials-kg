@@ -22,12 +22,9 @@ python -m pytest kg_engine/tests/test_graph.py -v
 
 # Lint
 ruff check kg_engine/
-ruff check kg_engine/graph/
-ruff check --fix --unsafe-fixes kg_engine/graph/
 
-# Build knowledge graph
-python kg_engine/scripts/build_knowledge_graph.py --source chunks.json --output graph.json
-python kg_engine/scripts/build_knowledge_graph.py --source chunks.json --output graph.json --use-llm
+# Ingest data
+python kg_engine/scripts/ingest_materials_kg.py --input path/to/data --ensure-schema
 ```
 
 ## Agent Files Reference

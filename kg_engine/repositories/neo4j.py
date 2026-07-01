@@ -55,11 +55,6 @@ def _decode_json_fields(data: dict[str, Any], *field_names: str) -> dict[str, An
     return data
 
 
-def _record_value(record: Any, key: str) -> Any:
-    if isinstance(record, dict):
-        return record[key]
-    return record[key]
-
 
 class Neo4jMaterialsKGRepository:
     """Repository implementation backed by native Neo4j nodes and relationships."""
@@ -87,7 +82,7 @@ class Neo4jMaterialsKGRepository:
 
     def upsert_entity(self, entity: Entity) -> Entity:
         payload = self._entity_to_properties(entity)
-        self._write(
+        self._run(
             """
             MERGE (n:Entity {id: $id})
             SET n += $payload
@@ -98,11 +93,11 @@ class Neo4jMaterialsKGRepository:
         return self.get_entity(entity.id) or entity
 
     def get_entity(self, entity_id: str) -> Entity | None:
-        rows = self._read(
+        rows = self._run(
             "MATCH (n:Entity {id: $id}) RETURN n LIMIT 1",
             {"id": entity_id},
         )
-        return self._node_to_entity(_record_value(rows[0], "n")) if rows else None
+        return self._node_to_entity(rows[0]["n"]) if rows else None
 
     def find_entities(
         self,
@@ -111,13 +106,18 @@ class Neo4jMaterialsKGRepository:
         name: str | None = None,
         ids: list[str] | None = None,
     ) -> list[Entity]:
-        rows = self._read("MATCH (n:Entity) RETURN n", {})
-        entities = [self._node_to_entity(_record_value(row, "n")) for row in rows]
+        where_clauses: list[str] = []
+        params: dict[str, Any] = {}
         if kind is not None:
-            entities = [entity for entity in entities if entity.kind == kind]
+            where_clauses.append("n.kind = $kind")
+            params["kind"] = kind.value
         if ids is not None:
-            id_set = set(ids)
-            entities = [entity for entity in entities if entity.id in id_set]
+            where_clauses.append("n.id IN $ids")
+            params["ids"] = ids
+        where = (" WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+        query = f"MATCH (n:Entity){where} RETURN n"
+        rows = self._run(query, params)
+        entities = [self._node_to_entity(row["n"]) for row in rows]
         if name is not None:
             normalized = normalize_name(name)
             entities = [
@@ -131,7 +131,7 @@ class Neo4jMaterialsKGRepository:
 
     def resolve_entity(self, kind: EntityKind, raw_name: str) -> Entity | None:
         normalized = normalize_name(raw_name)
-        rows = self._read(
+        rows = self._run(
             """
             MATCH (n:Entity {kind: $kind})
             WHERE n.normalized_name = $normalized
@@ -142,12 +142,12 @@ class Neo4jMaterialsKGRepository:
             {"kind": kind.value, "normalized": normalized},
         )
         if rows:
-            return self._node_to_entity(_record_value(rows[0], "n"))
+            return self._node_to_entity(rows[0]["n"])
         matches = self.find_entities(kind=kind, name=raw_name)
         return matches[0] if matches else None
 
     def upsert_evidence(self, evidence: Evidence) -> Evidence:
-        self._write(
+        self._run(
             """
             MERGE (n:Evidence {id: $id})
             SET n += $payload
@@ -158,34 +158,42 @@ class Neo4jMaterialsKGRepository:
         return self.get_evidence(evidence.id) or evidence
 
     def get_evidence(self, evidence_id: str) -> Evidence | None:
-        rows = self._read(
+        rows = self._run(
             "MATCH (n:Evidence {id: $id}) RETURN n LIMIT 1",
             {"id": evidence_id},
         )
-        return self._node_to_evidence(_record_value(rows[0], "n")) if rows else None
+        return self._node_to_evidence(rows[0]["n"]) if rows else None
 
     def list_evidence(self, evidence_ids: list[str]) -> list[Evidence]:
         if not evidence_ids:
             return []
-        rows = self._read(
+        rows = self._run(
             "MATCH (n:Evidence) WHERE n.id IN $ids RETURN n",
             {"ids": evidence_ids},
         )
         by_id = {
             evidence.id: evidence
             for evidence in (
-                self._node_to_evidence(_record_value(row, "n")) for row in rows
+                self._node_to_evidence(row["n"]) for row in rows
             )
         }
         return [by_id[item] for item in evidence_ids if item in by_id]
 
     def upsert_relation(self, relation: Relation) -> Relation:
-        rows = self._write(
+        rows = self._run(
             """
             MATCH (source:Entity {id: $source_id})
             MATCH (target:Entity {id: $target_id})
             MERGE (source)-[r:KG_RELATION {id: $id}]->(target)
             SET r += $payload
+            WITH r, source, target
+            OPTIONAL MATCH (source)-[old:KG_RELATION {id: $id}]->(target)
+            WITH r, source, target,
+                 CASE WHEN old IS NOT NULL
+                      THEN coalesce(old.evidence_ids, []) + $new_evidence_ids
+                      ELSE $new_evidence_ids
+                 END AS merged_evidence
+            SET r.evidence_ids = merged_evidence
             RETURN r, source.id AS source_id, target.id AS target_id
             """,
             {
@@ -193,6 +201,7 @@ class Neo4jMaterialsKGRepository:
                 "source_id": relation.source_entity_id,
                 "target_id": relation.target_entity_id,
                 "payload": self._relation_to_properties(relation),
+                "new_evidence_ids": relation.evidence_ids,
             },
         )
         if rows:
@@ -215,7 +224,7 @@ class Neo4jMaterialsKGRepository:
             RETURN r, s.id AS source_id, t.id AS target_id
             """
             params = {"entity_id": entity_id}
-        rows = self._read(query, params)
+        rows = self._run(query, params)
         relations = [self._record_to_relation(row) for row in rows]
         if relation_types is not None:
             allowed = set(relation_types)
@@ -223,7 +232,7 @@ class Neo4jMaterialsKGRepository:
         return relations
 
     def upsert_observation(self, observation: Observation) -> Observation:
-        self._write(
+        self._run(
             """
             MERGE (n:Observation {id: $id})
             SET n += $payload
@@ -260,28 +269,27 @@ class Neo4jMaterialsKGRepository:
         experiment_id: str | None = None,
         mode_id: str | None = None,
     ) -> list[Observation]:
-        rows = self._read("MATCH (n:Observation) RETURN n", {})
-        observations = [
-            self._node_to_observation(_record_value(row, "n")) for row in rows
-        ]
+        where_clauses: list[str] = []
+        params: dict[str, Any] = {}
         if material_id is not None:
-            observations = [
-                item for item in observations if item.material_id == material_id
-            ]
+            where_clauses.append("n.material_id = $material_id")
+            params["material_id"] = material_id
         if property_id is not None:
-            observations = [
-                item for item in observations if item.property_id == property_id
-            ]
+            where_clauses.append("n.property_id = $property_id")
+            params["property_id"] = property_id
         if experiment_id is not None:
-            observations = [
-                item for item in observations if item.experiment_id == experiment_id
-            ]
+            where_clauses.append("n.experiment_id = $experiment_id")
+            params["experiment_id"] = experiment_id
         if mode_id is not None:
-            observations = [item for item in observations if item.mode_id == mode_id]
-        return observations
+            where_clauses.append("n.mode_id = $mode_id")
+            params["mode_id"] = mode_id
+        where = (" WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+        query = f"MATCH (n:Observation){where} RETURN n"
+        rows = self._run(query, params)
+        return [self._node_to_observation(row["n"]) for row in rows]
 
     def upsert_decision_trace(self, trace: DecisionTrace) -> DecisionTrace:
-        self._write(
+        self._run(
             """
             MERGE (n:DecisionTrace {id: $id})
             SET n += $payload
@@ -297,17 +305,23 @@ class Neo4jMaterialsKGRepository:
         entity_id: str | None = None,
         experiment_id: str | None = None,
     ) -> list[DecisionTrace]:
-        rows = self._read("MATCH (n:DecisionTrace) RETURN n", {})
-        traces = [self._node_to_trace(_record_value(row, "n")) for row in rows]
+        where_clauses: list[str] = []
+        params: dict[str, Any] = {}
         if entity_id is not None:
-            traces = [item for item in traces if entity_id in item.entity_ids]
+            where_clauses.append("any(eid IN n.entity_ids WHERE eid = $entity_id)")
+            params["entity_id"] = entity_id
         if experiment_id is not None:
-            traces = [item for item in traces if item.experiment_id == experiment_id]
+            where_clauses.append("n.experiment_id = $experiment_id")
+            params["experiment_id"] = experiment_id
+        where = (" WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+        query = f"MATCH (n:DecisionTrace){where} RETURN n"
+        rows = self._run(query, params)
+        traces = [self._node_to_trace(row["n"]) for row in rows]
         traces.sort(key=lambda item: item.timestamp)
         return traces
 
     def upsert_coverage_rule(self, rule: CoverageRuleInput) -> CoverageRuleInput:
-        self._write(
+        self._run(
             """
             MERGE (n:CoverageRule {rule_id: $rule_id})
             SET n += $payload
@@ -321,16 +335,16 @@ class Neo4jMaterialsKGRepository:
         return rule
 
     def list_coverage_rules(self) -> list[CoverageRuleInput]:
-        rows = self._read("MATCH (n:CoverageRule) RETURN n", {})
+        rows = self._run("MATCH (n:CoverageRule) RETURN n", {})
         rules = []
         for row in rows:
-            data = dict(_record_value(row, "n"))
+            data = dict(row["n"])
             _decode_json_fields(data, "metadata")
             rules.append(CoverageRuleInput.model_validate(data))
         return rules
 
     def upsert_text_unit(self, text_unit: SearchTextUnit) -> SearchTextUnit:
-        self._write(
+        self._run(
             """
             MERGE (n:TextUnit {id: $id})
             SET n += $payload
@@ -341,7 +355,7 @@ class Neo4jMaterialsKGRepository:
         return text_unit
 
     def search_text_units(self, query: str, *, limit: int = 5) -> list[SearchTextUnit]:
-        rows = self._read(
+        rows = self._run(
             """
             MATCH (n:TextUnit)
             WHERE toLower(n.content) CONTAINS toLower($text_query)
@@ -355,18 +369,12 @@ class Neo4jMaterialsKGRepository:
                 "limit": limit,
             },
         )
-        return [self._node_to_text_unit(_record_value(row, "n")) for row in rows]
+        return [self._node_to_text_unit(row["n"]) for row in rows]
 
     def _session(self) -> Any:
         if self._database:
             return self._driver.session(database=self._database)
         return self._driver.session()
-
-    def _read(self, query: str, params: dict[str, Any]) -> list[Any]:
-        return self._run(query, params)
-
-    def _write(self, query: str, params: dict[str, Any]) -> list[Any]:
-        return self._run(query, params)
 
     def _run(self, query: str, params: dict[str, Any]) -> list[Any]:
         with self._session() as session:
@@ -423,9 +431,9 @@ class Neo4jMaterialsKGRepository:
         return _neo4j_properties(_jsonable(relation.model_dump(mode="json")))
 
     def _record_to_relation(self, record: Any) -> Relation:
-        data = dict(_record_value(record, "r"))
-        data["source_entity_id"] = _record_value(record, "source_id")
-        data["target_entity_id"] = _record_value(record, "target_id")
+        data = dict(record["r"])
+        data["source_entity_id"] = record["source_id"]
+        data["target_entity_id"] = record["target_id"]
         _decode_json_fields(data, "properties")
         return Relation.model_validate(data)
 
@@ -454,10 +462,10 @@ class Neo4jMaterialsKGRepository:
         return SearchTextUnit.model_validate(data)
 
     def clear_all(self) -> None:
-        self._write("MATCH (n) DETACH DELETE n", {})
+        self._run("MATCH (n) DETACH DELETE n", {})
 
     def delete_source(self, source_id: str) -> int:
-        rows = self._read(
+        rows = self._run(
             """
             MATCH (n:Entity)
             WHERE $sid IN n.source_refs
@@ -473,34 +481,34 @@ class Neo4jMaterialsKGRepository:
                 entity_ids.append(row["id"])
                 continue
             new_refs = [ref for ref in refs if ref != source_id]
-            self._write(
+            self._run(
                 "MATCH (n:Entity {id: $id}) SET n.source_refs = $refs",
                 {"id": row["id"], "refs": new_refs},
             )
             removed += 1
         removed += len(entity_ids)
         if entity_ids:
-            self._write(
+            self._run(
                 "MATCH (n:TextUnit) WHERE n.source_entity_id IN $ids DETACH DELETE n",
                 {"ids": entity_ids},
             )
-            self._write(
-                "MATCH (n:Observation) WHERE n.experiment_id IN $ids OR n.material_id IN $ids DETACH DELETE n",
+            self._run(
+                "MATCH (n:Observation) WHERE n.experiment_id IN $ids OR n.material_id IN $ids OR n.property_id IN $ids OR n.mode_id IN $ids DETACH DELETE n",
                 {"ids": entity_ids},
             )
-            self._write(
+            self._run(
                 "MATCH (n:DecisionTrace) WHERE n.experiment_id IN $ids OR any(eid IN n.entity_ids WHERE eid IN $ids) DETACH DELETE n",
                 {"ids": entity_ids},
             )
-            self._write(
+            self._run(
                 "MATCH ()-[r:KG_RELATION]->() WHERE r.source_entity_id IN $ids OR r.target_entity_id IN $ids DELETE r",
                 {"ids": entity_ids},
             )
-            self._write(
+            self._run(
                 "MATCH (n:Entity) WHERE n.id IN $ids DETACH DELETE n",
                 {"ids": entity_ids},
             )
-        self._write(
+        self._run(
             "MATCH (n:Evidence) WHERE n.source_id = $sid DETACH DELETE n",
             {"sid": source_id},
         )

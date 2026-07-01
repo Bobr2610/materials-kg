@@ -5,12 +5,21 @@ import json
 from fastapi.testclient import TestClient
 
 from kg_engine.api.materials_core import create_materials_app
+from kg_engine.config.settings import Settings
 from kg_engine.repositories.memory import InMemoryMaterialsKGRepository
 from kg_engine.services.materials_kg import MaterialsKGService
 
 
+def deterministic_settings() -> Settings:
+    return Settings(
+        materials_hypothesis_engine="deterministic",
+        materials_enable_destructive_api=False,
+    )
+
+
 def test_materials_api_health_and_ingest_query_flow() -> None:
     app = create_materials_app(
+        settings=deterministic_settings(),
         service=MaterialsKGService(InMemoryMaterialsKGRepository())
     )
     client = TestClient(app)
@@ -100,6 +109,7 @@ def test_dashboard_and_sample_data_flow() -> None:
     ]
 
     app = create_materials_app(
+        settings=deterministic_settings(),
         service=MaterialsKGService(
             InMemoryMaterialsKGRepository(),
             llm_provider=mock_llm,
@@ -183,6 +193,7 @@ def test_dashboard_and_sample_data_flow() -> None:
 
 def test_demo_load_sample_powers_notebook_ui_queries() -> None:
     app = create_materials_app(
+        settings=deterministic_settings(),
         service=MaterialsKGService(InMemoryMaterialsKGRepository())
     )
     client = TestClient(app)
@@ -228,6 +239,7 @@ def test_demo_load_sample_powers_notebook_ui_queries() -> None:
 
 def test_free_question_material_and_property_fallbacks() -> None:
     app = create_materials_app(
+        settings=deterministic_settings(),
         service=MaterialsKGService(InMemoryMaterialsKGRepository())
     )
     client = TestClient(app)
@@ -334,7 +346,7 @@ def test_llm_extraction_and_answer_generation() -> None:
 
     repo = InMemoryMaterialsKGRepository()
     service = MaterialsKGService(repo, llm_provider=mock_llm)
-    app = create_materials_app(service=service)
+    app = create_materials_app(settings=deterministic_settings(), service=service)
     client = TestClient(app)
 
     doc_text = (
@@ -408,7 +420,7 @@ def test_upload_uses_llm_to_structure_ambiguous_csv_columns() -> None:
 
     repo = InMemoryMaterialsKGRepository()
     service = MaterialsKGService(repo, llm_provider=mock_llm)
-    app = create_materials_app(service=service)
+    app = create_materials_app(settings=deterministic_settings(), service=service)
     client = TestClient(app)
 
     csv_body = b"slot_a,slot_b,slot_c,slot_d,slot_e\nAX,Route 7,YS,810,MPa\n"
@@ -443,6 +455,7 @@ class TestDestructiveEndpoints:
 
     def test_delete_source_returns_403_by_default(self) -> None:
         app = create_materials_app(
+            settings=deterministic_settings(),
             service=MaterialsKGService(InMemoryMaterialsKGRepository())
         )
         client = TestClient(app)
@@ -452,6 +465,7 @@ class TestDestructiveEndpoints:
 
     def test_delete_all_sources_returns_403_by_default(self) -> None:
         app = create_materials_app(
+            settings=deterministic_settings(),
             service=MaterialsKGService(InMemoryMaterialsKGRepository())
         )
         client = TestClient(app)

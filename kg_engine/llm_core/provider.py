@@ -7,6 +7,8 @@ import json
 import logging
 import os
 import random
+import time
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -24,10 +26,36 @@ _OPENROUTER_BASE_URL = "https://openrouter.ai/api"
 _POLZA_BASE_URL = "https://polza.ai/api"
 _GROQ_BASE_URL = "https://api.groq.com/openai"
 _MISTRAL_BASE_URL = "https://api.mistral.ai"
+_PROVIDER_DEFAULT_BASE_URLS = {
+    "openai": _OPENAI_BASE_URL,
+    "openrouter": _OPENROUTER_BASE_URL,
+    "polza": _POLZA_BASE_URL,
+    "groq": _GROQ_BASE_URL,
+    "mistral": _MISTRAL_BASE_URL,
+}
+
+
+@dataclass(frozen=True)
+class OpenAICompatibleConfig:
+    """Resolved OpenAI-compatible provider configuration."""
+
+    provider: str
+    api_key: str
+    base_url: str
+    chat_model: str
+    embedding_model: str
 
 
 def _clean(value: str | None) -> str:
     return (value or "").strip()
+
+
+def _provider_env_prefix(provider: str) -> str:
+    return "".join(char if char.isalnum() else "_" for char in provider).upper()
+
+
+def _setting_or_env(settings: Any, attr: str, env_name: str) -> str:
+    return _clean(getattr(settings, attr, "")) or _clean(os.getenv(env_name))
 
 
 def _openrouter_model_name(model: str) -> str:
@@ -44,6 +72,78 @@ def _openai_compatible_root(base_url: str) -> str:
     if base_url.lower().endswith("/v1"):
         return base_url[:-3].rstrip("/")
     return base_url
+
+
+def _openai_compatible_api_base(base_url: str) -> str:
+    root = _openai_compatible_root(base_url)
+    return f"{root}/v1"
+
+
+def _selected_provider(settings: Any) -> str:
+    return _clean(getattr(settings, "default_llm_provider", "")) or _clean(
+        os.getenv("AGENT_PROVIDER")
+    )
+
+
+def _selected_chat_model(settings: Any) -> str:
+    return _clean(getattr(settings, "default_model", "")) or _clean(
+        os.getenv("AGENT_DEFAULT_MODEL")
+    )
+
+
+def _generic_api_key(settings: Any) -> str:
+    return _setting_or_env(settings, "llm_api_key", "LLM_API_KEY")
+
+
+def _generic_base_url(settings: Any) -> str:
+    return _setting_or_env(settings, "llm_base_url", "LLM_BASE_URL")
+
+
+def resolve_openai_compatible_config(
+    settings: Any,
+    *,
+    require_provider: bool = False,
+) -> OpenAICompatibleConfig | None:
+    """Resolve any OpenAI-compatible LLM provider from settings/env.
+
+    Known providers keep their built-in default base URLs. Any other provider
+    can be used through ``<PROVIDER>_API_KEY`` and ``<PROVIDER>_BASE_URL`` or
+    universal ``LLM_API_KEY`` and ``LLM_BASE_URL``.
+    """
+    provider = _selected_provider(settings)
+    if not provider:
+        if require_provider:
+            msg = "DEFAULT_LLM_PROVIDER or AGENT_PROVIDER must be set."
+            raise ValueError(msg)
+        return None
+
+    provider_key = provider.lower()
+    env_prefix = _provider_env_prefix(provider)
+    api_key = (
+        _setting_or_env(settings, f"{provider_key}_api_key", f"{env_prefix}_API_KEY")
+        or _generic_api_key(settings)
+    )
+    base_url = (
+        _setting_or_env(settings, f"{provider_key}_base_url", f"{env_prefix}_BASE_URL")
+        or _generic_base_url(settings)
+        or _PROVIDER_DEFAULT_BASE_URLS.get(provider_key, "")
+    )
+    if not api_key or not base_url:
+        return None
+
+    chat_model = _selected_chat_model(settings)
+    embedding_model = _clean(getattr(settings, "default_embedding_model", ""))
+    if provider_key == "openrouter":
+        chat_model = _openrouter_model_name(chat_model)
+        embedding_model = _openrouter_model_name(embedding_model)
+
+    return OpenAICompatibleConfig(
+        provider=provider,
+        api_key=api_key,
+        base_url=base_url,
+        chat_model=chat_model,
+        embedding_model=embedding_model,
+    )
 
 
 class LLMProvider:
@@ -132,8 +232,6 @@ class LLMProvider:
                     exc,
                     delay,
                 )
-                import time
-
                 time.sleep(delay)
             except Exception:
                 logger.exception("LLM chat call failed with unexpected error")
@@ -160,15 +258,28 @@ class LLMProvider:
         try:
             return json.loads(raw)
         except json.JSONDecodeError:
-            start = raw.find("{")
-            end = raw.rfind("}") + 1
-            if start >= 0 and end > start:
-                try:
-                    return json.loads(raw[start:end])
-                except json.JSONDecodeError:
-                    pass
-            logger.warning("Failed to parse LLM JSON response")
-            return {}
+            pass
+        stripped = raw.strip()
+        if stripped.startswith("```"):
+            lines = stripped.splitlines()
+            json_lines = [
+                line for line in lines
+                if not line.strip().startswith("```")
+            ]
+            try:
+                return json.loads("\n".join(json_lines))
+            except json.JSONDecodeError:
+                pass
+        start = stripped.find("{")
+        end = stripped.rfind("}") + 1
+        if start >= 0 and end > start:
+            candidate = stripped[start:end]
+            try:
+                return json.loads(candidate)
+            except json.JSONDecodeError:
+                pass
+        logger.warning("Failed to parse LLM JSON response (%d chars)", len(raw))
+        return {}
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         if not texts:
@@ -198,8 +309,6 @@ class LLMProvider:
                     exc,
                     delay,
                 )
-                import time
-
                 time.sleep(delay)
             except Exception:
                 logger.exception("Embedding call failed with unexpected error")
@@ -343,120 +452,77 @@ def create_provider_from_settings(settings: Any) -> LLMProvider | None:
     aliases for local workflows that already use those names.
     """
 
-    selected_provider = _clean(
-        getattr(settings, "default_llm_provider", "")
-    ) or _clean(os.getenv("AGENT_PROVIDER"))
-    chat = _clean(getattr(settings, "default_model", "")) or _clean(
-        os.getenv("AGENT_DEFAULT_MODEL")
-    )
-    embedding = _clean(getattr(settings, "default_embedding_model", ""))
-
     kwargs: dict[str, Any] = {
-        "chat_model": chat,
-        "embedding_model": embedding,
+        "chat_model": "",
+        "embedding_model": "",
         "max_retries": getattr(settings, "llm_max_retries", _MAX_RETRIES),
         "retry_base_delay": getattr(
             settings, "llm_retry_base_delay", _RETRY_BASE_DELAY
         ),
     }
 
-    def create_openai() -> LLMProvider | None:
-        api_key = _clean(getattr(settings, "openai_api_key", None))
-        if not api_key:
-            return None
-        base_url = _clean(getattr(settings, "openai_base_url", ""))
+    def create_from_config(config: OpenAICompatibleConfig) -> LLMProvider:
         return LLMProvider(
-            base_url=base_url or _OPENAI_BASE_URL,
-            api_key=api_key,
-            **kwargs,
+            base_url=config.base_url,
+            api_key=config.api_key,
+            chat_model=config.chat_model,
+            embedding_model=config.embedding_model,
+            max_retries=kwargs["max_retries"],
+            retry_base_delay=kwargs["retry_base_delay"],
         )
 
-    def create_vllm() -> LLMProvider | None:
-        base_url = _clean(getattr(settings, "vllm_base_url", ""))
-        api_key = _clean(getattr(settings, "vllm_api_key", ""))
-        if not base_url or not api_key:
-            return None
-        return LLMProvider(
-            base_url=base_url,
-            api_key=api_key,
-            **kwargs,
-        )
-
-    def create_openrouter() -> LLMProvider | None:
-        api_key = _clean(getattr(settings, "openrouter_api_key", ""))
-        if not api_key:
-            return None
-        base_url = _clean(getattr(settings, "openrouter_base_url", ""))
-        openrouter_kwargs = dict(kwargs)
-        openrouter_kwargs["chat_model"] = _openrouter_model_name(chat)
-        openrouter_kwargs["embedding_model"] = _openrouter_model_name(embedding)
-        return LLMProvider(
-            base_url=base_url or _OPENROUTER_BASE_URL,
-            api_key=api_key,
-            **openrouter_kwargs,
-        )
-
-    def create_polza() -> LLMProvider | None:
-        api_key = _clean(getattr(settings, "polza_api_key", ""))
-        if not api_key:
-            return None
-        base_url = _clean(getattr(settings, "polza_base_url", ""))
-        return LLMProvider(
-            base_url=base_url or _POLZA_BASE_URL,
-            api_key=api_key,
-            **kwargs,
-        )
-
-    def create_groq() -> LLMProvider | None:
-        api_key = _clean(getattr(settings, "groq_api_key", ""))
-        if not api_key:
-            return None
-        base_url = _clean(getattr(settings, "groq_base_url", ""))
-        return LLMProvider(
-            base_url=base_url or _GROQ_BASE_URL,
-            api_key=api_key,
-            **kwargs,
-        )
-
-    def create_mistral() -> LLMProvider | None:
-        api_key = _clean(getattr(settings, "mistral_api_key", ""))
-        if not api_key:
-            return None
-        base_url = _clean(getattr(settings, "mistral_base_url", ""))
-        return LLMProvider(
-            base_url=base_url or _MISTRAL_BASE_URL,
-            api_key=api_key,
-            **kwargs,
-        )
-
-    factories = {
-        "openai": create_openai,
-        "vllm": create_vllm,
-        "openrouter": create_openrouter,
-        "polza": create_polza,
-        "groq": create_groq,
-        "mistral": create_mistral,
-    }
-
+    selected_provider = _selected_provider(settings)
     if selected_provider:
-        factory = factories.get(selected_provider.lower())
-        if factory is None:
-            logger.warning("Unsupported LLM provider configured: %s", selected_provider)
-            return None
-        return factory()
+        config = resolve_openai_compatible_config(settings, require_provider=True)
+        return create_from_config(config) if config is not None else None
 
-    for factory in (
-        create_openai,
-        create_vllm,
-        create_openrouter,
-        create_polza,
-        create_groq,
-        create_mistral,
-    ):
-        provider = factory()
-        if provider is not None:
-            return provider
+    for provider_name in ("openai", "vllm", "openrouter", "polza", "groq", "mistral"):
+        proxy = type(
+            "_ProviderSettings",
+            (),
+            {
+                **vars(settings),
+                "default_llm_provider": provider_name,
+            },
+        )()
+        config = resolve_openai_compatible_config(proxy)
+        if config is not None:
+            return create_from_config(config)
     return None
+
+
+def create_langchain_chat_model_from_settings(settings: Any) -> tuple[Any, str]:
+    """Create a LangChain-compatible chat model from shared LLM settings."""
+    try:
+        from langchain_openai import ChatOpenAI
+    except ImportError as exc:
+        msg = (
+            "langchain-openai is required for Deep Agents. "
+            "Install kg_engine/requirements.txt before using deepagents mode."
+        )
+        raise RuntimeError(msg) from exc
+
+    config = resolve_openai_compatible_config(settings, require_provider=True)
+    if config is None:
+        provider = _selected_provider(settings)
+        if not provider:
+            msg = "DEFAULT_LLM_PROVIDER or AGENT_PROVIDER must be set."
+        else:
+            msg = (
+                f"API key and base URL for provider '{provider}' are not configured. "
+                "Use provider-specific env vars or LLM_API_KEY/LLM_BASE_URL."
+            )
+        raise RuntimeError(msg)
+
+    model = ChatOpenAI(
+        model=config.chat_model,
+        api_key=config.api_key,
+        base_url=_openai_compatible_api_base(config.base_url),
+        temperature=getattr(settings, "llm_temperature", 0.7),
+        timeout=_DEFAULT_TIMEOUT,
+        max_retries=getattr(settings, "llm_max_retries", _MAX_RETRIES),
+    )
+    return model, f"{config.provider}:{config.chat_model}"
 
 
 def create_provider_from_env() -> LLMProvider | None:

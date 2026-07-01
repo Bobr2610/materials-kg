@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from fastapi import FastAPI
+from fastapi import HTTPException
 from fastapi import Query
 from fastapi import UploadFile
 from fastapi.responses import HTMLResponse
@@ -626,7 +627,32 @@ def create_materials_app(
 
     @app.post("/hypotheses/generate")
     def generate_hypotheses(request: HypothesisInput) -> dict:
-        return runtime_service.generate_hypotheses(request).model_dump(mode="json")
+        from kg_engine.config.settings import settings as app_settings
+
+        effective_settings = runtime_settings or app_settings
+        engine = effective_settings.materials_hypothesis_engine.strip().lower()
+        if engine == "deterministic":
+            return runtime_service.generate_hypotheses(request).model_dump(mode="json")
+        if engine != "deepagents":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported hypothesis engine: {engine}",
+            )
+        try:
+            from kg_engine.agents import DeepAgentsConfigurationError
+            from kg_engine.agents import DeepAgentsResultError
+            from kg_engine.agents import generate_hypotheses_with_deep_agent
+
+            result = generate_hypotheses_with_deep_agent(
+                runtime_service,
+                request,
+                runtime_settings=effective_settings,
+            )
+        except DeepAgentsConfigurationError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except DeepAgentsResultError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        return result.model_dump(mode="json")
 
     @app.get("/source/overview")
     def source_overview() -> dict:

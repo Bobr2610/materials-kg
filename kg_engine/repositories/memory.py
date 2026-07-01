@@ -274,6 +274,8 @@ class InMemoryMaterialsKGRepository:
             for oid, o in self._observations.items()
             if o.experiment_id in entity_ids_to_remove
             or o.material_id in entity_ids_to_remove
+            or o.property_id in entity_ids_to_remove
+            or o.mode_id in entity_ids_to_remove
         ]
         for oid in obs_to_remove:
             del self._observations[oid]

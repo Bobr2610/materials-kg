@@ -97,11 +97,11 @@ source .venv/bin/activate                     # Linux/WSL
 # Install
 pip install -r kg_engine/requirements.txt
 
-# Build knowledge graph from document chunks
-python kg_engine/scripts/build_knowledge_graph.py --source chunks.json --output graph.json
+# Ingest mixed data folder
+python kg_engine/scripts/ingest_materials_kg.py --input path/to/data --ensure-schema
 
-# Build with LLM extraction
-python kg_engine/scripts/build_knowledge_graph.py --source chunks.json --output graph.json --use-llm
+# Ingest with separate streams
+python kg_engine/scripts/ingest_materials_kg.py --reference ref.json --experiments exp.json --documents docs.json
 
 # Test
 python -m pytest kg_engine/tests/test_graph.py -v

@@ -33,38 +33,33 @@ Before any coding or changes:
 source .venv/bin/activate                # Linux/WSL
 
 # Install
-pip install -r kg_engine/requirements.txt
+pip install -e ".[dev]"
 
 # Test
 python -m pytest kg_engine/tests/ -v
-python -m pytest kg_engine/tests/test_graph.py -v
 
 # Lint
 ruff check kg_engine/
 ruff check --fix --unsafe-fixes kg_engine/
-ruff check kg_engine/graph/          # specific module
 
-# Build knowledge graph
-python kg_engine/scripts/build_knowledge_graph.py --source chunks.json --output graph.json
-python kg_engine/scripts/build_knowledge_graph.py --source chunks.json --output graph.json --use-llm
+# Ingest data
+python kg_engine/scripts/ingest_materials_kg.py --input path/to/data --ensure-schema
 ```
 
 ## Project Structure
 
 ```
 kg_engine/
-  graph/          # Knowledge graph: entities, extraction, store, query, search, tools
-  retrieval/      # Vector search (ChromaDB, embeddings, reranker)
-  llm/            # LLM manager, agent factory, fallback
-  agent/          # LangChain agent, streaming, session management
-  api/            # Gradio UI + REST API
-  core/           # Document processing, chunking, indexing
-  storage/        # Vector store adapters
-  tools/          # LangChain tools for RAG
-  config/         # Settings, model registry
-  utils/          # Shared utilities (context tracker, thread pool, path utils)
-  scripts/        # Build/build_index/knowledge_graph scripts
-  tests/          # Test suite
+  domain/          # Typed entities, relations, observations, traces, query DTOs
+  repositories/    # Persistence protocol + Neo4j runtime, test memory
+  services/        # Ingestion/query/hypothesis API
+  agents/          # Deep Agents orchestration over read-only graph tools
+  api/             # Application-facing HTTP/UI entrypoints
+  ingestion/       # File parsing and payload adapters
+  llm_core/        # LLM provider, extraction, answer generation
+  config/          # Settings, env-driven configuration
+  scripts/         # CLI ingestion and API startup scripts
+  tests/           # Test suite
 ```
 
 ## Code Style & Conventions
@@ -82,20 +77,31 @@ kg_engine/
 ## Knowledge Graph Conventions
 
 ### Entity types (8)
-`MATERIAL`, `PROPERTY`, `EXPERIMENT`, `MODE`, `EQUIPMENT`, `TEAM`, `ARTICLE`, `CONCLUSION`
+`MATERIAL`, `EXPERIMENT`, `PROPERTY`, `MODE`, `EQUIPMENT`, `TEAM`, `DOCUMENT`, `TAG`
 
-### Relation types (12)
-`HAS_PROPERTY`, `USED_IN`, `MEASURES`, `USES_EQUIPMENT`, `HAS_MODE`, `CONDUCTED_BY`, `DESCRIBED_IN`, `HAS_CONCLUSION`, `DEPENDS_ON`, `COMPOSED_OF`, `COMPARED_TO`, `OPTIMIZED_FOR`
+### Relation types (9)
+`EVALUATES_MATERIAL`, `USES_MODE`, `MEASURES_PROPERTY`, `USES_EQUIPMENT`, `PERFORMED_BY`, `DOCUMENTED_IN`, `TAGGED_WITH`, `REFERENCES`, `RELATED_TO`
 
 ### Module responsibilities
-- **schemas.py:** Pydantic models only — `GraphEntity`, `GraphRelation`, enums
-- **store.py:** NetworkX-backed thread-safe storage, JSON serialization
-- **extractor.py:** Regex + LLM extraction — separate regex from LLM path
-- **query.py:** Read-only query interface over store (no mutation)
-- **search.py:** Hybrid search combining vector + graph results
-- **builder.py:** Document → graph transformation
-- **pipeline.py:** Orchestration — index → ask → find_gaps → save/load
-- **tools.py:** LangChain `@tool` decorated functions with Pydantic `args_schema`
+- **domain/models.py:** Pydantic models — entities, evidence, relations, observations, DTOs, query results
+- **domain/resolution.py:** Canonical name resolution via alias normalization
+- **repositories/protocols.py:** Persistence contract used by the service layer
+- **repositories/neo4j.py:** Primary runtime backend, Neo4j nodes and relationships
+- **repositories/memory.py:** In-memory storage for unit tests only
+- **repositories/factory.py:** Environment-driven repository bootstrap
+- **services/materials_kg.py:** Public graph-first ingestion, query, and deterministic hypothesis API
+- **services/hypothesis_adjustments.py:** Expert adjustment schema and score recalculation
+- **services/session.py:** In-memory conversation session store with TTL
+- **agents/hypothesis_factory.py:** Deep Agents orchestration for hypothesis generation
+- **agents/hypothesis_tools.py:** Read-only graph tools exposed to the agent
+- **agents/extraction_agent.py:** Deep Agents orchestration for document entity extraction
+- **api/materials_core.py:** FastAPI app with upload, query, hypothesis, and graph endpoints
+- **ingestion/adapters.py:** Normalize raw source-family payloads into domain inputs
+- **llm_core/provider.py:** OpenAI-compatible LLM provider with streaming and retry
+- **llm_core/extraction.py:** LLM-powered entity extraction and answer generation
+- **llm_core/token_budget.py:** Token budget management for context window fitting
+- **llm_core/fallback.py:** Fallback chain with circuit breaker for LLM providers
+- **config/settings.py:** Pydantic-settings loaded from .env
 
 ## Error Handling
 
@@ -117,14 +123,18 @@ kg_engine/
 
 ### Example Pattern
 ```python
-class TestGraphStore:
-    def test_add_and_get_entity(self) -> None:
-        store = GraphStore()
-        entity = GraphEntity(id="mat_1", type=EntityType.MATERIAL, name="Ti6Al4V")
-        store.add_entity(entity)
-        retrieved = store.get_entity("mat_1")
-        assert retrieved is not None
-        assert retrieved.name == "Ti6Al4V"
+class TestMaterialIngestion:
+    def test_reference_entity_is_persisted(self) -> None:
+        repo = InMemoryMaterialsKGRepository()
+        service = MaterialsKGService(repo)
+        service.ingest_reference_data(
+            ReferenceDataBatch(
+                entities=[CanonicalEntityInput(kind=EntityKind.MATERIAL, name="Ti-6Al-4V")]
+            )
+        )
+        entity = repo.resolve_entity(EntityKind.MATERIAL, "Ti-6Al-4V")
+        assert entity is not None
+        assert entity.canonical_name == "Ti-6Al-4V"
 ```
 
 ## Documentation Guidelines

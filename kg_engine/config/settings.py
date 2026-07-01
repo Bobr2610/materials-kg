@@ -41,7 +41,6 @@ class Settings(BaseSettings):
     """
 
     # LLM (used by llm_core for extraction and answer generation)
-    google_api_key: str = ""
     openrouter_api_key: str = ""
     openrouter_base_url: str = ""
     openai_api_key: str | None = None
@@ -52,16 +51,14 @@ class Settings(BaseSettings):
     groq_base_url: str = ""
     mistral_api_key: str = ""
     mistral_base_url: str = ""
+    llm_api_key: str = ""
+    llm_base_url: str = ""
     vllm_base_url: str = ""
     vllm_api_key: str = ""
     default_llm_provider: str = ""
     default_model: str = ""
     default_embedding_model: str = ""
     llm_temperature: float = 0.7
-
-    # HuggingFace
-    hf_token: str | None = None
-    hf_hub_disable_remote_validation: bool = False
 
     # Materials KG core API / storage
     materials_neo4j_uri: str = ""
@@ -82,13 +79,15 @@ class Settings(BaseSettings):
     llm_max_retries: int = 3
     llm_retry_base_delay: float = 1.0
 
+    # Hypothesis Factory orchestration
+    materials_hypothesis_engine: str = "deepagents"
+    materials_deepagents_enabled: bool = True
+    materials_deepagents_max_tool_steps: int = 12
+
     # Session management
     session_ttl_seconds: int = 3600
     session_max_messages: int = 50
     session_history_turns: int = 10
-
-    # Timezone
-    default_timezone: str = "UTC"
 
     model_config = SettingsConfigDict(
         case_sensitive=False,

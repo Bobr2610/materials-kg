@@ -3,7 +3,7 @@
 This repository now targets a Neo4j-backed Materials Hypothesis Factory built
 around domain models, repository interfaces, and a small service layer. The
 canonical runtime path is `domain -> repositories -> services -> api` with
-Neo4j as the graph engine. Legacy prototype code has been moved to `legacy/`.
+Neo4j as the graph engine.
 
 ---
 
@@ -69,13 +69,36 @@ Current implementations:
 - provenance creation
 - typed query assembly
 - coverage-rule-based gap detection
-- KPI-driven hypothesis generation and deterministic ranking
+- KPI-driven hypothesis generation and deterministic baseline ranking
 
-The service layer is the preferred integration point for API handlers, scripts, and future orchestration code.
+The service layer is the preferred integration point for API handlers, scripts,
+and agent orchestration code. It remains the source of truth for source
+isolation, scoring formulas, provenance, and typed result models.
+
+### Deep Agents Orchestration
+
+`kg_engine/agents/` contains the production orchestration path for the
+Hypothesis Factory. It creates a Deep Agent with read-only graph tools:
+
+- `kg_build_context`
+- `kg_generate_baseline_hypotheses`
+- `kg_query_data_gaps`
+- `kg_search_evidence`
+- `kg_get_source_overview`
+
+The agent coordinates evidence, novelty, risk, and ranking review subagents,
+but it does not receive write/delete tools. Final output is validated as
+`HypothesisGenerationResult`; invalid or non-JSON output returns an explicit
+agent error instead of falling back silently to the baseline generator.
+
+LLM provider wiring is not duplicated in the agent layer. `kg_engine/llm_core/`
+owns OpenAI-compatible provider resolution, credentials, base URLs, retry
+settings, and LangChain chat-model construction. The agent layer only asks
+`llm_core` for a chat model and then orchestrates the research workflow.
 
 ### API and Adapters
 
-`kg_engine/api/` remains the application-facing surface. It should depend on service methods and typed DTOs instead of reaching directly into legacy graph internals.
+`kg_engine/api/` remains the application-facing surface. It should depend on service methods and typed DTOs instead of reaching directly into repository internals.
 
 ---
 
@@ -206,6 +229,9 @@ gaps = service.query_data_gaps(filters=...)
 ```
 
 Gap detection is rule-driven. It compares observed material/mode/property combinations against explicit coverage rules instead of exploring an uncontrolled cartesian space.
+The same method accepts `source_ids` for scoped agent/API reads. Evidence search
+is exposed as `service.search_evidence_units(query, source_ids=...)`, also
+read-only and source-scoped.
 
 ---
 
@@ -251,12 +277,15 @@ kg_engine/
 │   ├── memory.py          In-memory implementation for tests
 │   └── factory.py         Repository bootstrap from settings
 ├── services/
-│   └── materials_kg.py    Ingestion and query orchestration
+│   ├── materials_kg.py    Ingestion and query orchestration
+│   └── hypothesis_adjustments.py Shared expert adjustment scoring helpers
+├── agents/
+│   ├── hypothesis_factory.py Deep Agents Hypothesis Factory runtime
+│   ├── hypothesis_tools.py   Read-only graph tools for agent orchestration
+│   └── extraction_agent.py   Deep Agents document extraction orchestration
 ├── ingestion/             File parsing and payload adapters
 ├── llm_core/              LLM provider, extraction, answer generation
 ├── api/                   App-facing entrypoints and adapters
-├── core/                  Chunking, indexing, and document-processing helpers
-├── retrieval/             Embeddings, reranking, and search helpers
 └── scripts/               CLI entrypoints for ingestion and API launch
 ```
 
@@ -267,8 +296,9 @@ kg_engine/
 - The core is graph-first, service-backed, and Neo4j-first.
 - Domain models define the contract.
 - Repositories isolate persistence with Neo4j as the production backend.
+- Deep Agents orchestrate hypothesis generation over typed read-only service tools.
+- `llm_core` is the single provider-adapter layer for both extraction/answers and agents.
 - In-memory repository is for unit tests only.
 - Ingestion and query flows go through `MaterialsKGService`.
-- Legacy prototype code is in `legacy/`, not the primary architecture.
 
 **Related files:** [README.md](../README.md), [AGENTS.md](../AGENTS.md), [`.agents/skills/materials-knowledge-graph/SKILL.md`](../.agents/skills/materials-knowledge-graph/SKILL.md)

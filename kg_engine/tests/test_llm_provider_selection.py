@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from kg_engine.config.settings import Settings
+from kg_engine.llm_core.provider import create_langchain_chat_model_from_settings
 from kg_engine.llm_core.provider import create_provider_from_settings
 
 
@@ -134,7 +135,7 @@ def test_agent_provider_alias_selects_provider_when_default_is_empty(
     provider.close()
 
 
-def test_unknown_configured_provider_returns_none() -> None:
+def test_unknown_configured_provider_without_generic_endpoint_returns_none() -> None:
     settings = Settings(
         default_llm_provider="unknown",
         default_model="gpt-4o-mini",
@@ -142,3 +143,37 @@ def test_unknown_configured_provider_returns_none() -> None:
     )
 
     assert create_provider_from_settings(settings) is None
+
+
+def test_unknown_configured_provider_uses_provider_specific_env(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("CUSTOM_AI_API_KEY", "custom-key")
+    monkeypatch.setenv("CUSTOM_AI_BASE_URL", "https://custom.example/v1")
+    settings = Settings(
+        default_llm_provider="custom-ai",
+        default_model="custom-chat",
+        default_embedding_model="custom-embed",
+    )
+
+    provider = create_provider_from_settings(settings)
+
+    assert provider is not None
+    assert provider.base_url == "https://custom.example"
+    assert provider.api_key == "custom-key"
+    assert provider.chat_model == "custom-chat"
+    assert provider.embedding_model == "custom-embed"
+    provider.close()
+
+
+def test_langchain_chat_model_uses_generic_provider_env(monkeypatch) -> None:
+    monkeypatch.setenv("ANY_PROVIDER_API_KEY", "any-key")
+    monkeypatch.setenv("ANY_PROVIDER_BASE_URL", "https://any-provider.example/v1")
+    settings = Settings(
+        default_llm_provider="any-provider",
+        default_model="any-model",
+    )
+
+    _model, label = create_langchain_chat_model_from_settings(settings)
+
+    assert label == "any-provider:any-model"

@@ -1,7 +1,11 @@
 # Graph-first Materials KG core
 
 # Domain & API
+deepagents>=0.2
 fastapi>=0.100,<1
+langchain-core>=0.3
+langchain-openai>=0.2
+langgraph>=0.2
 pydantic>=2.0,<3
 pydantic-settings>=2.0,<3
 uvicorn>=0.20
