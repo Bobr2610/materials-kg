@@ -4,6 +4,32 @@ Repo-specific guidance for this Python 3.11+ project.
 
 **Implementations follow:** TDD, SDD, @AGENTS.md, lean, dry, modular, pythonic, non-breaking.
 
+## CRITICAL: Branch Protection (MANDATORY)
+
+**NEVER work on `main` or `master` directly.** Before ANY code changes:
+
+```bash
+# 1. Check current branch
+git branch --show-current
+
+# 2. If on main/master → STOP. Create a branch:
+git checkout -b feat/short-description
+
+# Branch naming: feat/, fix/, refactor/, docs/, test/
+```
+
+**Agent pre-work checklist:**
+1. Read `CODEX.md` and root `AGENTS.md` (repo-wide rules)
+2. Read this file (project-specific rules)
+3. Verify branch — if on `main`/`master`, create a feature branch first
+4. Only commit/push when user explicitly asks
+
+**Prohibited actions:**
+- `git push --force` — PROHIBITED
+- `git reset --hard` — PROHIBITED
+- Pushing to `main`/`master` — PROHIBITED without user approval
+- Auto-committing without user request — PROHIBITED
+
 ## Research & Planning
 
 Before any coding or changes:
