@@ -9,11 +9,12 @@
 === ПРАВИЛА РАБОТЫ С РЕПОЗИТОРИЕМ ===
 1. Никогда не работай на main/master — создавай feature-ветку
 2. Ветки: feat/<модуль>-<описание>, fix/<модуль>-<описание>
-3. Мерж: feature → staging → main (только с согласия человека)
+3. Мерж: feature → staging → PR → master (только с согласия человека)
 4. Прочитай TEAM_STATUS.md — проверь задачи других участников
 5. Обновляй TEAM_STATUS.md при начале и завершении работы
 6. Никогда не коммить/пушь без явного запроса человека
 7. Используй Docker: docker compose up -d
+8. **Feature-ветки НЕ пушатся на GitHub** — только staging → PR → master
 === КОНЕЦ ПРАВИЛ ===
 ```
 
@@ -41,17 +42,19 @@ Model: mimo/mimo-auto (default)
 - Only if master is ahead of staging → branch from master: `git checkout -b feat/<module>-<desc> origin/master`
 - Check: `git log origin/master..origin/staging`
 - Modules: domain, repositories, services, agents, api, ingestion, llm_core, config
+- **Feature-ветки НЕ пушатся на GitHub** — только staging → PR → master
 
 ## Merge Workflow
 
 ```
-feature branch → staging → main
+feature branch (локально) → staging → PR → master
 ```
 
-1. Work on feature branch
+1. Work on feature branch locally
 2. Merge to staging, run lint + tests
 3. Ask human for approval
-4. Only then merge to main
+4. Push staging, create PR staging → master
+5. Feature-ветки НЕ пушатся на GitHub — только staging и master
 
 ## Mandatory Skills
 
@@ -70,8 +73,18 @@ Read these when needed:
 - `git push --force`, `git reset --hard` — NEVER
 - Merge to main without human approval — NEVER
 - Auto-commit without user request — NEVER
+- Push feature-ветки (`feat/*`, `fix/*`) на GitHub — NEVER
 - MiMo in project root — NEVER
 - Hardcode secrets — NEVER
+
+## GitHub Branch Protection
+
+**На GitHub только `master` и `staging`.** Все feature-ветки — локально.
+
+- `feat/*`, `fix/*`, `refactor/*`, `docs/*`, `test/*` — **НЕ пушатся на GitHub**
+- Пушь в staging только когда готов к PR
+- Из staging — PR в master
+- **Удаляй feature-ветки после мержа**
 
 ## Message Clarification Rule
 
