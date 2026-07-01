@@ -161,14 +161,14 @@ Full 30-line deps: deepagents, langchain, neo4j, networkx, openai, tiktoken, fas
 | `conftest.py` | Adds project root to `sys.path` |
 | `test_materials_kg_core.py` | **903 lines.** Comprehensive service tests: ingestion, queries, gaps, hypotheses, streaming |
 | `test_materials_graph_database_behavior.py` | **255 lines.** Behavioral tests: adapter → service → repository path |
-| `test_materials_api_smoke.py` | **626 lines.** FastAPI TestClient smoke tests for every endpoint, including offline metrics endpoints |
+| `test_materials_api_smoke.py` | **712 lines.** FastAPI TestClient smoke tests for every endpoint, including offline metrics endpoints |
 | `test_deepagents_hypothesis_factory.py` | **430 lines.** Deep Agents hypothesis workflow tests |
 | `test_neo4j_repository.py` | **90 lines.** Neo4j repo with `FakeSession` mock |
 | `test_repository_factory.py` | **79 lines.** Factory: memory vs Neo4j selection |
 | `test_ingestion_adapters.py` | **141 lines.** Unit tests for each adapter |
 | `test_ingest_materials_cli_loading.py` | **113 lines.** CLI `_load_bundle()` and `_load_payload()` tests |
 | `test_llm_provider_selection.py` | **179 lines.** LLM provider detection and creation |
-| `test_metrics_evaluation.py` | **485 lines.** Offline metrics tests: extraction F1, context recall, repository coverage heatmap, full run comparison, calibrated reranking, expert feedback calibration, edge cases |
+| `test_metrics_evaluation.py` | **493 lines.** Offline metrics tests: extraction F1, context recall, repository coverage heatmap, full run comparison, calibrated reranking, expert feedback calibration, edge cases |
 | `test_no_donor_brand_in_core.py` | **133 lines.** Isolation guard: scans for forbidden legacy brand references |
 
 ---

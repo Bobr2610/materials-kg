@@ -280,6 +280,19 @@ def test_metrics_api_offline_quality_flow() -> None:
     assert coverage.status_code == 200
     assert coverage.json()["coverage_ratio"] == 1.0
 
+    explicit_coverage = client.post(
+        "/metrics/coverage",
+        json={
+            "axes": {
+                "material_ids": ["mat-cucrzr"],
+                "mode_ids": ["mode-aged"],
+                "property_ids": ["prop-conductivity", "prop-hardness"],
+            }
+        },
+    )
+    assert explicit_coverage.status_code == 200
+    assert explicit_coverage.json()["coverage_ratio"] == 0.5
+
     extraction = client.post(
         "/metrics/extraction",
         json={
@@ -306,6 +319,74 @@ def test_metrics_api_offline_quality_flow() -> None:
     )
     assert context.status_code == 200
     assert context.json()["context_recall"] == 0.5
+
+    hypotheses = client.post(
+        "/metrics/hypotheses",
+        json={
+            "run": {
+                "name": "deterministic",
+                "result": {
+                    "target_kpi": "Conductivity",
+                    "generation_engine": "deterministic",
+                    "hypotheses": [
+                        {
+                            "id": "grounded-1",
+                            "target_kpi": "Conductivity",
+                            "statement": "Validate measured CuCrZr conductivity",
+                            "rationale": "ev-1 and obs-1 support the claim",
+                            "test_plan": "Repeat measurement",
+                            "score": {
+                                "novelty": 0.4,
+                                "risk": 0.2,
+                                "value": 0.7,
+                                "evidence_strength": 0.8,
+                                "final_score": 0.72,
+                            },
+                            "supporting_entity_ids": [
+                                "mat-cucrzr",
+                                "mode-aged",
+                                "prop-conductivity",
+                            ],
+                            "supporting_evidence_ids": ["ev-1"],
+                            "supporting_observation_ids": ["obs-1"],
+                        }
+                    ],
+                },
+                "context": {
+                    "evidence_ids": ["ev-1"],
+                    "observation_ids": ["obs-1"],
+                    "entity_ids": [
+                        "mat-cucrzr",
+                        "mode-aged",
+                        "prop-conductivity",
+                    ],
+                },
+                "coverage": {
+                    "axes": {
+                        "material_ids": ["mat-cucrzr"],
+                        "mode_ids": ["mode-aged"],
+                        "property_ids": ["prop-conductivity"],
+                    },
+                    "cells": [
+                        {
+                            "material_id": "mat-cucrzr",
+                            "mode_id": "mode-aged",
+                            "property_id": "prop-conductivity",
+                            "measured": True,
+                            "observation_count": 1,
+                            "observation_ids": ["obs-1"],
+                        }
+                    ],
+                },
+            }
+        },
+    )
+    assert hypotheses.status_code == 200
+    hypotheses_body = hypotheses.json()
+    assert hypotheses_body["average_faithfulness"] == 1.0
+    assert hypotheses_body["average_groundedness"] == 1.0
+    assert hypotheses_body["average_novelty"] == 0.0
+    assert hypotheses_body["items"][0]["coverage_status"] == "measured"
 
     compare = client.post(
         "/metrics/runs/compare",
@@ -382,6 +463,11 @@ def test_metrics_api_offline_quality_flow() -> None:
     assert feedback.status_code == 200
     assert feedback.json()["saved"] == 1
     assert feedback.json()["invalid_feedback_lines"] == 0
+
+    weights = client.get("/metrics/feedback/weights")
+    assert weights.status_code == 200
+    assert weights.json()["sample_size"] >= 1
+    assert weights.json()["weights"]["total"] == 1.0
 
     correlation = client.get("/metrics/feedback/correlation")
     assert correlation.status_code == 200

@@ -392,6 +392,14 @@ def test_calibrated_ranking_reorders_hypotheses_with_expert_weights() -> None:
         "high-value",
     ]
     assert [hypothesis.rank for hypothesis in reranked.hypotheses] == [1, 2]
+    assert reranked.ranking_rubric["calibrated_weights"] == {
+        "value": 0.05,
+        "evidence_strength": 0.8,
+        "novelty": 0.05,
+        "inverse_risk": 0.1,
+        "total": 1.0,
+    }
+    assert "final_score_formula" in reranked.ranking_rubric
 
 
 def test_coverage_heatmap_can_be_built_from_repository() -> None:
