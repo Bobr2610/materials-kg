@@ -405,6 +405,7 @@ kg_engine/
 | File | Purpose |
 |------|---------|
 | `AGENTS.md` | **This file** — source of truth |
+| `.mimocode/RULES.md` | MiMoCode-specific rules (session start, TDD, git flow, clarification) |
 | `.agents/skills/materials-knowledge-graph/SKILL.md` | Domain skill |
 | `.agents/skills/mimo-subagent/SKILL.md` | MiMo delegation |
 | `.agents/skills/docker-workflow/SKILL.md` | Docker commands |
