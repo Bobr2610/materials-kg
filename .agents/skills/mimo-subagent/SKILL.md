@@ -245,6 +245,78 @@ Do NOT modify files.
 - For public research → proceed when user asks
 - For proprietary code → warn the user first
 
+## How to Invoke This Skill
+
+**This skill is a markdown file that gets loaded as instructions when called.**
+
+### Codex (OpenAI)
+
+Codex reads `.codex/instructions.md` at start. To invoke this skill:
+
+```
+/mimo-subagent
+```
+
+Codex loads `.agents/skills/mimo-subagent/SKILL.md` into context.
+
+### Claude Code
+
+Claude Code reads `.claude/CLAUDE.md` at start. To invoke:
+
+```
+/mimo-subagent
+```
+
+Claude loads the skill file as additional instructions.
+
+### Cursor
+
+Cursor reads `.cursor/rules/*.mdc`. To invoke, ask the agent:
+
+```
+Use the mimo-subagent skill to review this code
+```
+
+Cursor loads `.agents/skills/mimo-subagent/SKILL.md`.
+
+### MiMo (MiMoCode)
+
+MiMo has a `skill()` tool. To invoke:
+
+```javascript
+skill({ name: "mimo-subagent" })
+```
+
+MiMo loads `.agents/skills/mimo-subagent/SKILL.md` into context.
+
+### Any Agent via AGENTS.md
+
+AGENTS.md has a skills table. The agent reads it and decides:
+
+```
+When to load: Delegating tasks to MiMo
+```
+
+Agent calls `Read(file_path=".agents/skills/mimo-subagent/SKILL.md")`.
+
+### Manual (bash)
+
+Any agent can read the file directly:
+
+```bash
+cat .agents/skills/mimo-subagent/SKILL.md
+```
+
+### Quick Reference
+
+| Agent | Method | Command |
+|-------|--------|---------|
+| Codex | Slash command | `/mimo-subagent` |
+| Claude Code | Slash command | `/mimo-subagent` |
+| Cursor | Natural language | "Use mimo-subagent skill" |
+| MiMo | Tool call | `skill({name: "mimo-subagent"})` |
+| Any | Read file | `Read(".agents/skills/mimo-subagent/SKILL.md")` |
+
 ## Checklist
 - [ ] MiMo CLI available (checked at conversation start)
 - [ ] Provider login state verified
