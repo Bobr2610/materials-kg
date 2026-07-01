@@ -14,11 +14,10 @@ Always activate venv before running Python. Detect OS first:
 
 ```bash
 # Install
-pip install -r kg_engine/requirements.txt
+pip install -e ".[dev]"
 
 # Test
 python -m pytest kg_engine/tests/ -v
-python -m pytest kg_engine/tests/test_graph.py -v
 
 # Lint
 ruff check kg_engine/
@@ -29,12 +28,12 @@ python kg_engine/scripts/ingest_materials_kg.py --input path/to/data --ensure-sc
 
 ## Agent Files Reference
 
-All 5 agent-facing files in this project must stay consistent. If one is overwritten, check the others:
+All agent-facing files in this project must stay consistent:
 
 | File | Purpose |
 |------|---------|
-| [`AGENTS.md`](../AGENTS.md) | **Source of truth** — full conventions, dev commands, structure |
-| [`.agents/skills/materials-knowledge-graph/SKILL.md`](../.agents/skills/materials-knowledge-graph/SKILL.md) | Domain skill — architecture, entity/relation types, query examples |
-| [`.cursor/rules/materials-kg-agent.mdc`](./materials-kg-agent.mdc) | Coding rules, domain overview, key patterns |
+| `AGENTS.md` | **Source of truth** — full conventions, dev commands, structure |
+| `.agents/skills/materials-knowledge-graph/SKILL.md` | Domain skill — architecture, entity/relation types, query examples |
+| `.cursor/rules/materials-kg-agent.mdc` | Coding rules, domain overview, key patterns |
 | `.cursor/rules/terminal.mdc` (this file) | Terminal setup, venv, common commands |
-| [`.cursor/rules/commit.mdc`](./commit.mdc) | Commit message format and guidelines |
+| `.cursor/rules/commit.mdc` | Commit message format and guidelines |

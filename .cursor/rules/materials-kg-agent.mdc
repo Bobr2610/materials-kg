@@ -5,39 +5,38 @@ alwaysApply: true
 
 - Always research & plan before coding: search docs, digest hierarchy, base on ground truth
 - PLAN course of action after gathering reference info
-- Code style: super dry, lean, modular, pythonic, pydantic, NetworkX for in-memory graph
+- Code style: super dry, lean, modular, pythonic, pydantic
 - Lint with Ruff after changes: `ruff check <file_path>` — only changed files
 - Always run tests after changes: `python -m pytest kg_engine/tests/ -v`
 - Never break existing code; avoid unnecessary try-catches and hardcoded fallbacks
 
 ## Domain: Materials Knowledge Graph
 
-Architecture: hybrid graph + vector search (NetworkX in-memory + embeddings for semantic retrieval)
+Architecture: Neo4j graph storage + LLM-powered extraction
 Answer queries like: "что уже делали по сплавам X при режиме Y и какой был эффект на свойство Z"
 
 ### 8 Entity Types
-MATERIAL, PROPERTY, EXPERIMENT, MODE, EQUIPMENT, TEAM, ARTICLE, CONCLUSION
+MATERIAL, EXPERIMENT, PROPERTY, MODE, EQUIPMENT, TEAM, DOCUMENT, TAG
 
-### 12 Relation Types
-HAS_PROPERTY, USED_IN, MEASURES, USES_EQUIPMENT, HAS_MODE, CONDUCTED_BY,
-DESCRIBED_IN, HAS_CONCLUSION, DEPENDS_ON, COMPOSED_OF, COMPARED_TO, OPTIMIZED_FOR
+### 9 Relation Types
+EVALUATES_MATERIAL, USES_MODE, MEASURES_PROPERTY, USES_EQUIPMENT, PERFORMED_BY,
+DOCUMENTED_IN, TAGGED_WITH, REFERENCES, RELATED_TO
 
 ### Key Patterns
-- Extraction: regex first, LLM fallback for complex relations
-- Storage: NetworkX Graph, Pydantic schemas, JSON serialization
-- Query: read-only query interface, hybrid search (vector + graph traversal)
-- Pipeline: index → ask → find_gaps → save/load
+- Extraction: LLM-powered entity/relation extraction
+- Storage: Neo4j backend with Pydantic models
+- Query: read-only query interface via services
 - Tools: LangChain @tool decorated with Pydantic args_schema
-- Gap analysis: find missing relations, unconnected entities, sparse subgraphs
+- Hypothesis: Deep Agents orchestration for hypothesis generation
 
 ## Agent Files Reference
 
-All 5 agent-facing files in this project must stay consistent. If one is overwritten, check the others:
+All agent-facing files in this project must stay consistent:
 
 | File | Purpose |
 |------|---------|
-| [`AGENTS.md`](../AGENTS.md) | **Source of truth** — full conventions, dev commands, structure |
-| [`.agents/skills/materials-knowledge-graph/SKILL.md`](../.agents/skills/materials-knowledge-graph/SKILL.md) | Domain skill — architecture, entity/relation types, query examples |
+| `AGENTS.md` | **Source of truth** — full conventions, dev commands, structure |
+| `.agents/skills/materials-knowledge-graph/SKILL.md` | Domain skill — architecture, entity/relation types, query examples |
 | `.cursor/rules/materials-kg-agent.mdc` (this file) | Coding rules, domain overview, key patterns |
 | `.cursor/rules/terminal.mdc` | Terminal setup, venv, common commands |
 | `.cursor/rules/commit.mdc` | Commit message format and guidelines |
