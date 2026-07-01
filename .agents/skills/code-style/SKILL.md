@@ -52,8 +52,13 @@ class MyService:
 
 ## Testing
 
-- Test behavior, not implementation
+- **TDD:** тест → код → рефакторинг (никогда код без теста)
 - Location: `kg_engine/tests/`
-- Use `pytest.mark.integration` for integration tests
+- Test behavior, not implementation
+- **Permanent** (`test_*.py`): регрессия, контракты — навсегда
+- **Temporary** (`test_tmp_*.py`): отладка, эксперименты — удалить после задачи
+- Один тест = одно поведение, не дублируй
+- Запуск: `python -m pytest kg_engine/tests/ -v`
+- Без tmp: `python -m pytest -m "not tmp" kg_engine/tests/ -v`
 
 ## DRY, Lean, Modular, Pythonic

@@ -162,6 +162,10 @@ python_files = [
     "test_no_donor_brand_in_core.py",
     "test_repository_factory.py",
 ]
+markers = [
+    "integration: marks tests as integration (deselect with '-m \"not integration\"')",
+    "tmp: marks temporary tests (cleaned up after task)",
+]
 
 [dependency-groups]
 dev = [
