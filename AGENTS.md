@@ -9,15 +9,16 @@
 ```
 === PRE-FLIGHT GATE ===
 
-1. git branch — текущая ветка?
-2. Если master/main/STAGING → СТОП. Создай feature-ветку СРАЗУ.
-3. TEAM_STATUS.md прочитан? Задачи других участников проверены?
-4. Правила из AGENTS.md прочитаны? (ты сейчас их читаешь)
-5. Никаких коммитов без запроса человека.
-6. Никаких push без явного согласия.
-7. Перед merge в master — ОБЯЗАТЕЛЬНО спроси человека.
+1. git fetch origin — синхронизация с remote
+2. git branch — текущая ветка?
+3. Если master/main/STAGING → СТОП. Создай feature-ветку СРАЗУ.
+4. TEAM_STATUS.md прочитан? Задачи других участников проверены?
+5. Правила из AGENTS.md прочитаны? (ты сейчас их читаешь)
+6. Никаких коммитов без запроса человека.
+7. Никаких push без явного согласия.
+8. Перед merge в master — ОБЯЗАТЕЛЬНО спроси человека.
 
-ВСЕ 7 пунктов = OK → продолжай.
+ВСЕ 8 пунктов = OK → продолжай.
 ЛЮБОЙ пункт = NO → исправь ПЕРЕД работой.
 
 === GATE PASSED ===
@@ -65,19 +66,25 @@
 ```
 ЛЮБАЯ РАБОТА
     │
+    ├─ git fetch origin (всегда первым делом)
+    │
     ├─ Pre-Flight Gate (выше) → FAIL? → СТОП, исправь
     │
     ├─ git branch → master/main? → git checkout -b feat/<module>-<desc>
+    │
+    ├─ git pull origin <ветка> (после checkout — синхронизация)
     │
     ├─ Работа (edit, code, etc.)
     │
     ├─ git add + git commit (только по запросу человека)
     │
-    ├─ git checkout staging && git merge feat/...
+    ├─ git fetch origin (перед push — проверить что нет новых коммитов)
+    │
+    ├─ git checkout staging && git merge origin/staging && git merge feat/...
     │
     ├─ git push origin staging (только с согласия)
     │
-    ├─ git checkout master && git merge staging
+    ├─ git checkout master && git merge origin/master && git merge staging
     │       │
     │       └─ ⚠️  СПРОСИ ЧЕЛОВЕКА: "Точно смержить в master?"
     │          Человек сказал "да" → git push origin master
