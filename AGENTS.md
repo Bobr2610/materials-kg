@@ -37,12 +37,14 @@
 1. Никогда не работай на main/master — создавай feature-ветку
 2. Ветки: feat/<модуль>-<описание>, fix/<модуль>-<описание>
 3. Модули: domain, repositories, services, agents, api, ingestion, llm_core, config
-4. Мерж: feature → staging → main (только с согласия человека)
+4. Мерж: feature → staging → PR → master (только с согласия человека)
 5. Прочитай TEAM_STATUS.md — проверь задачи других участников
 6. Обновляй TEAM_STATUS.md при начале и завершении работы
 7. Никогда не коммить/пушь без явного запроса человека
 8. Никогда не дублируй задачи других участников команды
 9. Используй Docker для запуска: docker compose up -d
+
+⚠️  **Feature-ветки НЕ пушатся на GitHub** — только staging → PR → master.
 
 ⚠️  ПЕРЕД ЛЮБОЙ РАБОТОЙ: пройди Pre-Flight Gate (выше).
     Если ты на master/main — создай feature-ветку ПЕРВЫМ ДЕЛОМ.
@@ -67,8 +69,9 @@ Model: mimo/mimo-auto (default)
 
 | What | How |
 |------|-----|
-| Branch | `git checkout -b feat/<module>-<desc>` |
-| Merge | feature → staging → main (human approval) |
+| Branch | `git checkout -b feat/<module>-<desc>` (локально) |
+| Push | Только в staging (с согласия) |
+| Merge | staging → PR → master (human approval) |
 | Lint | `ruff check kg_engine/` |
 | Test | `python -m pytest kg_engine/tests/ -v` |
 | Docker | `docker compose up -d --build` |
@@ -99,25 +102,23 @@ Model: mimo/mimo-auto (default)
     │
     ├─ git push origin staging (только с согласия)
     │
-    ├─ git checkout master && git merge origin/master && git merge staging
-    │       │
-    │       └─ ⚠️  СПРОСИ ЧЕЛОВЕКА: "Точно смержить в master?"
-    │          Человек сказал "да" → git push origin master
-    │          Человек сказал "нет" или сомневается → СТОП
+    ├─ ⚠️  Feature-ветки НЕ пушатся на GitHub
+    │   На GitHub только master и staging
+    │   Из staging — PR в master
     │
     └─ ГОТОВО
 ```
 
 ### Confirmation Required Before Every Main Merge
 
-**Перед `git merge staging → master` агент ОБЯЗАН:**
+**Перед мержем в master агент ОБЯЗАН:**
 
 1. Показать что будет смержено (diff summary)
-2. Спросить явно: **"Точно смержить в master?"**
-3. **НЕ push'ить пока человек не ответит "да" / "yes" / "погнали"**
+2. Спросить явно: **"Создать PR staging → master?"**
+3. **НЕ создавай PR пока человек не ответит "да" / "yes" / "погнали"**
 4. Если человек ответил "нет" / "подожди" / сомневается → СТОП, ждать
 
-**Это НЕ опционально. Даже если человек сказал "запушь в master" ранее — уточняй ПЕРЕД каждым мерджем.**
+**На GitHub только master и staging.** Feature-ветки — локально. Удаляй после мержа.
 
 ## Mandatory Skills
 
@@ -138,9 +139,27 @@ Model: mimo/mimo-auto (default)
 - Merge to `main` without human approval — NEVER
 - Auto-commit without user request — NEVER
 - Direct commits to `main`/`master` — NEVER
+- Push feature-ветки (`feat/*`, `fix/*`) на GitHub — NEVER
 - Let MiMo work in project root — NEVER
 - Hardcode secrets — NEVER
 - **Работать без Pre-Flight Gate — NEVER (нарушение = стоп)**
+
+## GitHub Branch Protection
+
+**На GitHub только `master` и `staging`.** Все остальные ветки — локально.
+
+- `feat/*`, `fix/*`, `refactor/*`, `docs/*`, `test/*` — **НЕ пушатся на GitHub**
+- Пушь в GitHub только когда готов к PR
+- Из staging — PR в master
+
+```
+feature branch → локально → git push staging (только готовое) → PR → master
+```
+
+- Ветки `feat/*`, `fix/*`, `refactor/*`, `docs/*`, `test/*` — работай локально
+- Пушь в staging только после готовности и согласия человека
+- Из staging — PR в master
+- **Удаляй feature-ветки после мержа**
 
 ## ARCHITECTURE.md Maintenance Rule
 
@@ -361,6 +380,8 @@ python -m pytest -m "integration" kg_engine/tests/ -v
 Modules: `domain`, `repositories`, `services`, `agents`, `api`, `ingestion`, `llm_core`, `config`
 
 **Branch from:** `origin/staging` (по умолчанию). Только если master впереди staging → от `origin/master`.
+
+**На GitHub только master и staging.** Feature-ветки — локально. Не пушь на GitHub.
 
 ## Project Structure
 
