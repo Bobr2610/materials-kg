@@ -37,12 +37,14 @@
 1. Никогда не работай на main/master — создавай feature-ветку
 2. Ветки: feat/<модуль>-<описание>, fix/<модуль>-<описание>
 3. Модули: domain, repositories, services, agents, api, ingestion, llm_core, config
-4. Мерж: feature → staging → main (только с согласия человека)
+4. Мерж: feature → staging → PR → master (только с согласия человека)
 5. Прочитай TEAM_STATUS.md — проверь задачи других участников
 6. Обновляй TEAM_STATUS.md при начале и завершении работы
 7. Никогда не коммить/пушь без явного запроса человека
 8. Никогда не дублируй задачи других участников команды
 9. Используй Docker для запуска: docker compose up -d
+
+⚠️  **Master закрыт на GitHub** — push напрямую невозможен. Только через Pull Request.
 
 ⚠️  ПЕРЕД ЛЮБОЙ РАБОТОЙ: пройди Pre-Flight Gate (выше).
     Если ты на master/main — создай feature-ветку ПЕРВЫМ ДЕЛОМ.
@@ -68,7 +70,7 @@ Model: mimo/mimo-auto (default)
 | What | How |
 |------|-----|
 | Branch | `git checkout -b feat/<module>-<desc>` |
-| Merge | feature → staging → main (human approval) |
+| Merge | feature → staging → PR → master (human approval) |
 | Lint | `ruff check kg_engine/` |
 | Test | `python -m pytest kg_engine/tests/ -v` |
 | Docker | `docker compose up -d --build` |
@@ -99,25 +101,23 @@ Model: mimo/mimo-auto (default)
     │
     ├─ git push origin staging (только с согласия)
     │
-    ├─ git checkout master && git merge origin/master && git merge staging
-    │       │
-    │       └─ ⚠️  СПРОСИ ЧЕЛОВЕКА: "Точно смержить в master?"
-    │          Человек сказал "да" → git push origin master
-    │          Человек сказал "нет" или сомневается → СТОП
+    ├─ ⚠️  master закрыт — push напрямую невозможен
+    │   Создай PR: staging → master (или gh pr create)
+    │   После мержа PR master обновится автоматически
     │
     └─ ГОТОВО
 ```
 
 ### Confirmation Required Before Every Main Merge
 
-**Перед `git merge staging → master` агент ОБЯЗАН:**
+**Перед мержем в master агент ОБЯЗАН:**
 
 1. Показать что будет смержено (diff summary)
-2. Спросить явно: **"Точно смержить в master?"**
-3. **НЕ push'ить пока человек не ответит "да" / "yes" / "погнали"**
+2. Спросить явно: **"Создать PR staging → master?"**
+3. **НЕ создавай PR пока человек не ответит "да" / "yes" / "погнали"**
 4. Если человек ответил "нет" / "подожди" / сомневается → СТОП, ждать
 
-**Это НЕ опционально. Даже если человек сказал "запушь в master" ранее — уточняй ПЕРЕД каждым мерджем.**
+**Master закрыт на GitHub — push напрямую невозможен. Только через Pull Request.**
 
 ## Mandatory Skills
 
@@ -141,6 +141,18 @@ Model: mimo/mimo-auto (default)
 - Let MiMo work in project root — NEVER
 - Hardcode secrets — NEVER
 - **Работать без Pre-Flight Gate — NEVER (нарушение = стоп)**
+
+## GitHub Branch Protection
+
+**`master` закрыт на GitHub для прямых коммитов.** Push в master напрямую запрещён.
+
+- Все изменения в master — **только через Pull Request**
+- PR из `staging` в `master`
+- После мержа staging → master через PR — автоматический push
+
+```
+feature → staging → PR → master
+```
 
 ## ARCHITECTURE.md Maintenance Rule
 
@@ -361,6 +373,8 @@ python -m pytest -m "integration" kg_engine/tests/ -v
 Modules: `domain`, `repositories`, `services`, `agents`, `api`, `ingestion`, `llm_core`, `config`
 
 **Branch from:** `origin/staging` (по умолчанию). Только если master впереди staging → от `origin/master`.
+
+**Master закрыт на GitHub** — push напрямую запрещён. Все изменения в master — только через Pull Request.
 
 ## Project Structure
 
