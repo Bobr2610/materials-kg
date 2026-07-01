@@ -242,6 +242,42 @@ Model: mimo/mimo-auto (default)
 - НЕ добавляй секреты в `.env.example` — только плейсхолдеры
 - Всегда показывай diff перед изменением `.env`
 
+## Plan File Rule
+
+**При создании плана агент ОБЯЗАН сохранять его в `.plans/` (gitignored):**
+
+```
+.plans/
+  YYYYMMDD-<topic>.md    # Один файл на план
+```
+
+**Правила:**
+- НЕ коммить планы в git — они в `.gitignore`
+- Формат файла: заголовок, цель, шаги, checkpoint'ы
+- План — это черновик, не финальный документ
+- После реализации план можно удалить или оставить как справку
+- Имя файла: `YYYYMMDD-<topic>.md` (например `20260701-add-auth.md`)
+
+**Пример плана:**
+```markdown
+# Plan: Add Authentication
+
+## Goal
+Добавить JWT аутентификацию в API
+
+## Steps
+1. Добавить dependency `python-jose`
+2. Создать `kg_engine/auth/`
+3. Добавить middleware
+4. Написать тесты
+
+## Checkpoint
+- [ ] Зависимость установлена
+- [ ] Модуль создан
+- [ ] Middleware работает
+- [ ] Тесты проходят
+```
+
 ## Branch Naming
 
 | Type | Pattern | Example |

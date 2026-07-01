@@ -46,6 +46,9 @@ node_modules/
 .scratch/
 !.scratch/README.md
 
+# Agent plans (не коммитить — мусорит git)
+.plans/
+
 # OS files
 *.swp
 Thumbs.db
