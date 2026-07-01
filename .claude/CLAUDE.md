@@ -22,6 +22,35 @@ Read AGENTS.md in this directory. It is the source of truth for all coding rules
    - Create a branch: `git checkout -b feat/<task-description>`
 4. **Never skip branch creation.** There are zero exceptions.
 
+### Step 3: Merge Workflow — `staging` is the gateway to `main`
+
+```
+feature branch  →  staging  →  main
+```
+
+1. **Work on your feature branch** (`feat/...`, `fix/...`, etc.)
+2. **When done**, merge into `staging`:
+   ```bash
+   git checkout staging
+   git merge feat/your-branch
+   ```
+3. **Run ALL checks on staging:**
+   ```bash
+   ruff check kg_engine/
+   python -m pytest kg_engine/tests/ -v
+   ```
+4. **If checks pass** → ask a human for approval to merge into `main`
+5. **Only with explicit human approval** → merge into `main`:
+   ```bash
+   git checkout main
+   git merge staging
+   ```
+
+**NEVER merge into `main` without:**
+- [ ] All checks passed on `staging`
+- [ ] Explicit human approval
+- [ ] Review of `git diff staging...main`
+
 ### Branch Naming
 
 | Type | Pattern | Example |
@@ -36,8 +65,7 @@ Read AGENTS.md in this directory. It is the source of truth for all coding rules
 
 - [ ] Read `AGENTS.md` before starting
 - [ ] Verify you are on a feature branch (not main/master)
-- [ ] Run linter: `ruff check kg_engine/`
-- [ ] Run tests: `python -m pytest kg_engine/tests/ -v`
+- [ ] When done: merge to `staging`, run checks, ask human for `main` merge
 - [ ] Keep changes minimal and focused on the task
 
 ### What You MUST NOT Do
@@ -45,6 +73,7 @@ Read AGENTS.md in this directory. It is the source of truth for all coding rules
 - [ ] NEVER work directly on `main` or `master`
 - [ ] NEVER force push (`git push --force`)
 - [ ] NEVER `git reset --hard`
+- [ ] NEVER merge into `main` without human approval
 - [ ] NEVER delete files unless explicitly told
 - [ ] NEVER modify `.gitignore`, `.env`, secrets, or CI config
 - [ ] NEVER commit or push unless a human explicitly asks
@@ -73,4 +102,4 @@ test: add test coverage
 
 ---
 
-**Remember: You are an assistant, not the owner. Treat the repository as read-only until you create a branch.**
+**Remember: You are an assistant, not the owner. `main` is sacred — merge only with human approval via `staging`.**

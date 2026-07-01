@@ -6,7 +6,9 @@ Repo-specific guidance for this Python 3.11+ project.
 
 ## CRITICAL: Branch Protection (MANDATORY)
 
-**NEVER work on `main` or `master` directly.** Before ANY code changes:
+### Rule 1: NEVER work on `main` or `master` directly
+
+Before ANY code changes:
 
 ```bash
 # 1. Check current branch
@@ -18,17 +20,50 @@ git checkout -b feat/short-description
 # Branch naming: feat/, fix/, refactor/, docs/, test/
 ```
 
-**Agent pre-work checklist:**
-1. Read `CODEX.md` and root `AGENTS.md` (repo-wide rules)
-2. Read this file (project-specific rules)
-3. Verify branch — if on `main`/`master`, create a feature branch first
-4. Only commit/push when user explicitly asks
+### Rule 2: Merge workflow — `staging` is the gateway to `main`
 
-**Prohibited actions:**
+```
+feature branch  →  staging  →  main
+```
+
+**Step-by-step:**
+
+1. **Work on your feature branch** (`feat/...`, `fix/...`, etc.)
+2. **When work is done**, merge into `staging`:
+   ```bash
+   git checkout staging
+   git merge feat/your-branch
+   ```
+3. **Run ALL checks on staging:**
+   ```bash
+   ruff check kg_engine/
+   python -m pytest kg_engine/tests/ -v
+   ```
+4. **If checks pass** → ask a human for approval to merge into `main`
+5. **Only with explicit human approval** → merge into `main`:
+   ```bash
+   git checkout main
+   git merge staging
+   ```
+
+**NEVER merge into `main` without:**
+- [ ] All checks passed on `staging`
+- [ ] Explicit human approval (verbal, PR approval, or written)
+- [ ] Review of `git diff staging...main` before merge
+
+### Rule 3: Prohibited actions
+
 - `git push --force` — PROHIBITED
 - `git reset --hard` — PROHIBITED
-- Pushing to `main`/`master` — PROHIBITED without user approval
+- Merging into `main` without human approval — PROHIBITED
 - Auto-committing without user request — PROHIBITED
+- Direct commits to `main`/`master` — PROHIBITED
+
+**Agent pre-work checklist:**
+1. Read this file (project-specific rules)
+2. Verify branch — if on `main`/`master`, create a feature branch first
+3. Only commit/push when user explicitly asks
+4. When done: merge to `staging`, run checks, ask human for `main` merge
 
 ## Research & Planning
 
