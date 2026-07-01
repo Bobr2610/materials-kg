@@ -163,37 +163,56 @@ feature branch  →  staging  →  main
 
 ### MiMo Subagent — Delegate Tasks
 
-**You CAN call mimocode (MiMo CLI) as a subagent:**
-
+**Check MiMo at conversation start:**
 ```bash
-# Basic call
-mimo run -m "mimo/mimo-auto" "Your task description"
-
-# With PowerShell script (Windows)
-.\.agents\skills\mimo-subagent\scripts\run_mimo.ps1 -Prompt "Your task" -TaskSlug "task-name"
-
-# JSON output
-mimo run -m "mimo/mimo-auto" --format json "Your task"
+mimo --help 2>$null; mimo providers whoami 2>$null
 ```
 
-**When to delegate to MiMo:**
-- Web research (docs, best practices, API references)
-- Code review from second perspective
-- Summarization of large outputs
-- Isolated coding subtasks
+**Work tree pattern (MANDATORY):**
+```bash
+# Create isolated work tree
+$slug = "task-name"
+$wt = ".mimo-worktrees/$slug"
+New-Item -ItemType Directory -Force -Path $wt | Out-Null
+Copy-Item "needed_file.py" "$wt/"
 
-**Prompting rules:**
+# Run MiMo
+mimo run -m "mimo/mimo-auto" "Review file.py. Files in: $wt"
+
+# Save report to docs/mimo-runs/ (this stays)
+# DELETE work tree (mandatory)
+Remove-Item -Recurse -Force $wt
+```
+
+**Rules:**
+- NEVER let MiMo work in project root
+- ALWAYS use `.mimo-worktrees/<slug>/`
+- ALWAYS delete work tree after use
+- NEVER merge MiMo branches into your branches
+- ONLY report in `docs/mimo-runs/` stays
+
+**Call MiMo:**
+```bash
+mimo run -m "mimo/mimo-auto" "Your task"
+```
+
+**Prompt structure:**
+```
+[ROLE] You are a [role].
+[TASK] Your task is to [action].
+[CONTEXT] [paste needed code]
+[CONSTRAINTS] Do NOT modify files. Return as [format].
+[OUTPUT FORMAT] ## Summary / ## Findings / ## Sources
+```
+
+**Prompt rules:**
 1. Be specific — exact task, constraints, output format
 2. Minimal context — only what MiMo needs
 3. Request citations for web research
 4. Never send secrets or confidential code
+5. Never let MiMo modify main project files
 
-**Example:**
-```bash
-mimo run -m "mimo/mimo-auto" "Review kg_engine/services/materials_kg.py for bugs. Return findings ordered by severity."
-```
-
-**Output saved to:** `docs/mimo-runs/YYYYMMDD/<task-slug>/`
+**Output:** `docs/mimo-runs/YYYYMMDD/<task-slug>/`
 
 ### Emergency Protocol
 

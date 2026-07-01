@@ -159,64 +159,94 @@ Before starting ANY work, the agent MUST:
 
 **Agents CAN call mimocode (MiMo CLI) as a subagent to delegate research, coding, or summarization tasks.**
 
-### When to use MiMo subagent
-- Web research (documentation, best practices, API references)
-- Code review from a second perspective
-- Summarization of large files or outputs
-- Delegated coding subtasks (isolated from main context)
-- Reproducible CLI-based workflows
+### Check MiMo at conversation start
+
+```bash
+# Verify MiMo is available
+mimo --help 2>$null; if ($LASTEXITCODE -ne 0) { "MiMo NOT available" } else { "MiMo available" }
+mimo providers whoami 2>$null
+```
+
+Display status to user before proceeding.
+
+### Work tree pattern (MANDATORY)
+
+**MiMo ALWAYS works in an isolated work tree that gets DELETED after use.**
+
+```bash
+# 1. Create work tree
+$slug = "task-name"
+$wt = ".mimo-worktrees/$slug"
+New-Item -ItemType Directory -Force -Path $wt | Out-Null
+
+# 2. Copy ONLY needed files
+Copy-Item "kg_engine/services/materials_kg.py" "$wt/"
+
+# 3. Run MiMo (it works in work tree, NOT in main project)
+mimo run -m "mimo/mimo-auto" "Review materials_kg.py for bugs. Files in: $wt"
+
+# 4. Save report to docs/mimo-runs/ (this stays permanently)
+
+# 5. DELETE work tree (mandatory)
+Remove-Item -Recurse -Force $wt
+```
+
+**Rules:**
+- NEVER let MiMo work in project root
+- ALWAYS create `.mimo-worktrees/<slug>/` per task
+- ALWAYS delete work tree after MiMo finishes
+- NEVER merge MiMo branches into feature/staging/master
+- ONLY the report in `docs/mimo-runs/` stays
 
 ### How to call MiMo
 
-**Basic command:**
 ```bash
-mimo run -m "mimo/mimo-auto" "Your task description here"
+mimo run -m "mimo/mimo-auto" "Your task description"
 ```
 
-**With PowerShell script (recommended for Windows):**
-```powershell
-.\.agents\skills\mimo-subagent\scripts\run_mimo.ps1 -Prompt "Your task" -TaskSlug "task-name"
+### Prompt structure
+
+```
+[ROLE] You are a [specific role].
+
+[TASK] Your task is to [exact action].
+
+[CONTEXT]
+[paste ONLY needed code/data]
+
+[CONSTRAINTS]
+- Do NOT modify files
+- Return as [format]
+- Include source URLs for web research
+
+[OUTPUT FORMAT]
+## Summary
+[1-2 sentences]
+## Findings
+1. [finding]
+## Sources
+- [URL]
 ```
 
-**Structured output (JSON):**
-```bash
-mimo run -m "mimo/mimo-auto" --format json "Your task"
-```
-
-### Prompting rules for MiMo delegation
-1. **Be specific** — include the exact task, constraints, and desired output format
-2. **Minimal context** — only the files/subproblem MiMo needs, not the whole repo
-3. **Request citations** — ask for source URLs on web research tasks
-4. **Define output format** — "Return a summary in markdown with bullet points"
-5. **No secrets** — never send credentials, API keys, or confidential code
-
-### Example delegations
-
-**Research:**
-```
-mimo run -m "mimo/mimo-auto" "Find official documentation for Neo4j Python driver async support. Use authoritative sources only. Return a short summary and source URLs."
-```
-
-**Code review:**
-```
-mimo run -m "mimo/mimo-auto" "Review kg_engine/services/materials_kg.py for likely bugs and behavioral regressions. Return findings ordered by severity."
-```
-
-**Summarization:**
-```
-mimo run -m "mimo/mimo-auto" "Summarize the following test output and identify failures: [paste output]"
-```
+### Prompt rules
+1. **Be specific** — exact task, constraints, output format
+2. **Minimal context** — only what MiMo needs
+3. **Request citations** — for web research
+4. **Define format** — "Return as markdown bullets"
+5. **No secrets** — never send credentials or confidential code
+6. **No file modifications** — MiMo reports, doesn't edit
 
 ### Output storage
-MiMo results are saved in: `docs/mimo-runs/YYYYMMDD/<task-slug>/`
+Report saved to: `docs/mimo-runs/YYYYMMDD/<task-slug>/`
 - `00_prompt.txt` — prompt sent
 - `20_summary.md` — cleaned output
 - `sources.md` — URLs (for research tasks)
 
 ### Safety
-- Pause before sending proprietary code or secrets to MiMo
-- For public research → proceed
-- For confidential data → warn the human first
+- NEVER send secrets, API keys, or credentials
+- NEVER let MiMo modify main project files
+- ALWAYS use work tree isolation
+- ALWAYS delete work tree after use
 
 ## Research & Planning
 
