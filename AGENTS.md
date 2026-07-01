@@ -10,15 +10,16 @@
 === PRE-FLIGHT GATE ===
 
 1. git fetch origin — синхронизация с remote
-2. git branch — текущая ветка?
-3. Если master/main/STAGING → СТОП. Создай feature-ветку СРАЗУ.
+2. git log origin/master..origin/staging — staging впереди master?
+3. Если staging впереди → ветка от staging. Если master впереди → от master.
 4. TEAM_STATUS.md прочитан? Задачи других участников проверены?
 5. Правила из AGENTS.md прочитаны? (ты сейчас их читаешь)
-6. Никаких коммитов без запроса человека.
-7. Никаких push без явного согласия.
-8. Перед merge в master — ОБЯЗАТЕЛЬНО спроси человека.
+6. **MiMo CLI доступен?** → `mimo --help` + `mimo providers whoami` → показать статус
+7. Никаких коммитов без запроса человека.
+8. Никаких push без явного согласия.
+9. Перед merge в master — ОБЯЗАТЕЛЬНО спроси человека.
 
-ВСЕ 8 пунктов = OK → продолжай.
+ВСЕ 9 пунктов = OK → продолжай.
 ЛЮБОЙ пункт = NO → исправь ПЕРЕД работой.
 
 === GATE PASSED ===
@@ -41,12 +42,24 @@
 6. Обновляй TEAM_STATUS.md при начале и завершении работы
 7. Никогда не коммить/пушь без явного запроса человека
 8. Никогда не дублируй задачи других участников команды
-9. MiMo доступен? Проверь: mimo --help
-10. Используй Docker для запуска: docker compose up -d
+9. Используй Docker для запуска: docker compose up -d
 
 ⚠️  ПЕРЕД ЛЮБОЙ РАБОТОЙ: пройди Pre-Flight Gate (выше).
     Если ты на master/main — создай feature-ветку ПЕРВЫМ ДЕЛОМ.
 
+=== MiMo CHECK (ОБЯЗАТЕЛЕН) ===
+Выполни:
+  mimo --help
+  mimo providers whoami
+
+Покажи результат:
+=== MiMo Status ===
+CLI: [available / not found]
+Provider: [logged in / not logged in / error]
+Model: mimo/mimo-auto (default)
+====================
+
+Если MiMo недоступен — предупреди и продолжай без delegation.
 === КОНЕЦ ПРАВИЛ ===
 ```
 
@@ -70,7 +83,9 @@
     │
     ├─ Pre-Flight Gate (выше) → FAIL? → СТОП, исправь
     │
-    ├─ git branch → master/main? → git checkout -b feat/<module>-<desc>
+    ├─ git log origin/master..origin/staging → staging впереди?
+    │   ├─ ДА → git checkout -b feat/... origin/staging (ветка от staging)
+    │   └─ НЕТ (master впереди) → git checkout -b feat/... origin/master
     │
     ├─ git pull origin <ветка> (после checkout — синхронизация)
     │
@@ -165,6 +180,8 @@
 | Test | `test/<module>-<desc>` | `test/services-coverage` |
 
 Modules: `domain`, `repositories`, `services`, `agents`, `api`, `ingestion`, `llm_core`, `config`
+
+**Branch from:** `origin/staging` (по умолчанию). Только если master впереди staging → от `origin/master`.
 
 ## Project Structure
 

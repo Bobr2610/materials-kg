@@ -17,13 +17,29 @@
 === КОНЕЦ ПРАВИЛ ===
 ```
 
-2. Check MiMo: `mimo --help 2>$null; mimo providers whoami 2>$null`
+2. **MiMo Check (ОБЯЗАТЕЛЕН):**
+```bash
+mimo --help
+mimo providers whoami
+```
+Покажи результат:
+```
+=== MiMo Status ===
+CLI: [available / not found]
+Provider: [logged in / not logged in / error]
+Model: mimo/mimo-auto (default)
+====================
+```
+Если MiMo недоступен — предупреди и продолжай без delegation.
+
 3. Read `TEAM_STATUS.md`, show status, ask user role and task
 
 ## Branch Enforcement
 
 - NEVER work on main/master
-- Create: `git checkout -b feat/<module>-<desc>`
+- **Branch from staging** (default): `git checkout -b feat/<module>-<desc> origin/staging`
+- Only if master is ahead of staging → branch from master: `git checkout -b feat/<module>-<desc> origin/master`
+- Check: `git log origin/master..origin/staging`
 - Modules: domain, repositories, services, agents, api, ingestion, llm_core, config
 
 ## Merge Workflow
@@ -60,8 +76,9 @@ Read these when needed:
 ## MiMo Quick Reference
 
 ```bash
-# Check availability
+# Check availability + login
 mimo --help
+mimo providers whoami
 
 # Work tree pattern
 $wt = ".mimo-worktrees/<slug>"

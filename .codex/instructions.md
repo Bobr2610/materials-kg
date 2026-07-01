@@ -17,13 +17,29 @@
 === КОНЕЦ ПРАВИЛ ===
 ```
 
-2. Check MiMo: `mimo --help 2>$null; mimo providers whoami 2>$null`
+2. **MiMo Check (ОБЯЗАТЕЛЕН):**
+```bash
+mimo --help
+mimo providers whoami
+```
+Покажи результат:
+```
+=== MiMo Status ===
+CLI: [available / not found]
+Provider: [logged in / not logged in / error]
+Model: mimo/mimo-auto (default)
+====================
+```
+Если MiMo недоступен — предупреди и продолжай без delegation.
+
 3. Read `TEAM_STATUS.md`, show status, ask user role and task
 
 ## Branch Enforcement
 
 - NEVER work on main/master
-- Create: `git checkout -b feat/<module>-<desc>`
+- **Branch from staging** (default): `git checkout -b feat/<module>-<desc> origin/staging`
+- Only if master is ahead of staging → branch from master: `git checkout -b feat/<module>-<desc> origin/master`
+- Check: `git log origin/master..origin/staging`
 - Modules: domain, repositories, services, agents, api, ingestion, llm_core, config
 
 ## Merge Workflow
@@ -56,12 +72,33 @@ Read these when needed:
 - Auto-commit without user request — NEVER
 - MiMo in project root — NEVER
 - Hardcode secrets — NEVER
+- Работать без Pre-Flight Gate — NEVER
+
+## Pre-Flight Gate
+
+**Перед ЛЮБОЙ работой проверь:**
+1. `git fetch origin`
+2. `git branch` → на master? → создай feature-ветку
+3. TEAM_STATUS.md прочитан
+4. MiMo check выполнен (см. выше)
+5. Нет коммитов без запроса
+6. Нет push без согласия
+7. Перед merge в master — спроси человека
+
+## .env.example Sync Rule
+
+**При изменении `.env.example`:**
+1. Сравни с `.env`
+2. Покажи недостающие переменные
+3. Предложи добавить в `.env`
+4. Не перезаписывай существующие значения
 
 ## MiMo Quick Reference
 
 ```bash
-# Check availability
+# Check availability + login
 mimo --help
+mimo providers whoami
 
 # Work tree pattern
 $wt = ".mimo-worktrees/<slug>"
