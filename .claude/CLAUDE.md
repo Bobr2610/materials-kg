@@ -14,7 +14,7 @@
 5. Обновляй TEAM_STATUS.md при начале и завершении работы
 6. Никогда не коммить/пушь без явного запроса человека
 7. Используй Docker: docker compose up -d
-8. **Master закрыт на GitHub** — push напрямую невозможен, только через PR
+8. **Feature-ветки НЕ пушатся на GitHub** — только staging → PR → master
 === КОНЕЦ ПРАВИЛ ===
 ```
 
@@ -42,19 +42,19 @@ Model: mimo/mimo-auto (default)
 - Only if master is ahead of staging → branch from master: `git checkout -b feat/<module>-<desc> origin/master`
 - Check: `git log origin/master..origin/staging`
 - Modules: domain, repositories, services, agents, api, ingestion, llm_core, config
-- **Master закрыт на GitHub** — push напрямую запрещён. Только через Pull Request.
+- **Feature-ветки НЕ пушатся на GitHub** — только staging → PR → master
 
 ## Merge Workflow
 
 ```
-feature branch → staging → PR → master
+feature branch (локально) → staging → PR → master
 ```
 
-1. Work on feature branch
+1. Work on feature branch locally
 2. Merge to staging, run lint + tests
 3. Ask human for approval
-4. Create PR staging → master (push в master напрямую запрещён)
-5. После мержа PR master обновится автоматически
+4. Push staging, create PR staging → master
+5. Feature-ветки НЕ пушатся на GitHub — только staging и master
 
 ## Mandatory Skills
 
@@ -73,16 +73,18 @@ Read these when needed:
 - `git push --force`, `git reset --hard` — NEVER
 - Merge to main without human approval — NEVER
 - Auto-commit without user request — NEVER
+- Push feature-ветки (`feat/*`, `fix/*`) на GitHub — NEVER
 - MiMo in project root — NEVER
 - Hardcode secrets — NEVER
 
 ## GitHub Branch Protection
 
-**`master` закрыт на GitHub для прямых коммитов.** Push в master напрямую запрещён.
+**На GitHub только `master` и `staging`.** Все feature-ветки — локально.
 
-- Все изменения в master — **только через Pull Request**
-- PR из `staging` в `master`
-- После мержа staging → master через PR — автоматический push
+- `feat/*`, `fix/*`, `refactor/*`, `docs/*`, `test/*` — **НЕ пушатся на GitHub**
+- Пушь в staging только когда готов к PR
+- Из staging — PR в master
+- **Удаляй feature-ветки после мержа**
 
 ## Message Clarification Rule
 

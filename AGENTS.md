@@ -44,7 +44,7 @@
 8. Никогда не дублируй задачи других участников команды
 9. Используй Docker для запуска: docker compose up -d
 
-⚠️  **Master закрыт на GitHub** — push напрямую невозможен. Только через Pull Request.
+⚠️  **Feature-ветки НЕ пушатся на GitHub** — только staging → PR → master.
 
 ⚠️  ПЕРЕД ЛЮБОЙ РАБОТОЙ: пройди Pre-Flight Gate (выше).
     Если ты на master/main — создай feature-ветку ПЕРВЫМ ДЕЛОМ.
@@ -69,8 +69,9 @@ Model: mimo/mimo-auto (default)
 
 | What | How |
 |------|-----|
-| Branch | `git checkout -b feat/<module>-<desc>` |
-| Merge | feature → staging → PR → master (human approval) |
+| Branch | `git checkout -b feat/<module>-<desc>` (локально) |
+| Push | Только в staging (с согласия) |
+| Merge | staging → PR → master (human approval) |
 | Lint | `ruff check kg_engine/` |
 | Test | `python -m pytest kg_engine/tests/ -v` |
 | Docker | `docker compose up -d --build` |
@@ -101,9 +102,9 @@ Model: mimo/mimo-auto (default)
     │
     ├─ git push origin staging (только с согласия)
     │
-    ├─ ⚠️  master закрыт — push напрямую невозможен
-    │   Создай PR: staging → master (или gh pr create)
-    │   После мержа PR master обновится автоматически
+    ├─ ⚠️  Feature-ветки НЕ пушатся на GitHub
+    │   На GitHub только master и staging
+    │   Из staging — PR в master
     │
     └─ ГОТОВО
 ```
@@ -117,7 +118,7 @@ Model: mimo/mimo-auto (default)
 3. **НЕ создавай PR пока человек не ответит "да" / "yes" / "погнали"**
 4. Если человек ответил "нет" / "подожди" / сомневается → СТОП, ждать
 
-**Master закрыт на GitHub — push напрямую невозможен. Только через Pull Request.**
+**На GitHub только master и staging.** Feature-ветки — локально. Удаляй после мержа.
 
 ## Mandatory Skills
 
@@ -138,21 +139,27 @@ Model: mimo/mimo-auto (default)
 - Merge to `main` without human approval — NEVER
 - Auto-commit without user request — NEVER
 - Direct commits to `main`/`master` — NEVER
+- Push feature-ветки (`feat/*`, `fix/*`) на GitHub — NEVER
 - Let MiMo work in project root — NEVER
 - Hardcode secrets — NEVER
 - **Работать без Pre-Flight Gate — NEVER (нарушение = стоп)**
 
 ## GitHub Branch Protection
 
-**`master` закрыт на GitHub для прямых коммитов.** Push в master напрямую запрещён.
+**На GitHub только `master` и `staging`.** Все остальные ветки — локально.
 
-- Все изменения в master — **только через Pull Request**
-- PR из `staging` в `master`
-- После мержа staging → master через PR — автоматический push
+- `feat/*`, `fix/*`, `refactor/*`, `docs/*`, `test/*` — **НЕ пушатся на GitHub**
+- Пушь в GitHub только когда готов к PR
+- Из staging — PR в master
 
 ```
-feature → staging → PR → master
+feature branch → локально → git push staging (только готовое) → PR → master
 ```
+
+- Ветки `feat/*`, `fix/*`, `refactor/*`, `docs/*`, `test/*` — работай локально
+- Пушь в staging только после готовности и согласия человека
+- Из staging — PR в master
+- **Удаляй feature-ветки после мержа**
 
 ## ARCHITECTURE.md Maintenance Rule
 
@@ -374,7 +381,7 @@ Modules: `domain`, `repositories`, `services`, `agents`, `api`, `ingestion`, `ll
 
 **Branch from:** `origin/staging` (по умолчанию). Только если master впереди staging → от `origin/master`.
 
-**Master закрыт на GitHub** — push напрямую запрещён. Все изменения в master — только через Pull Request.
+**На GitHub только master и staging.** Feature-ветки — локально. Не пушь на GitHub.
 
 ## Project Structure
 
