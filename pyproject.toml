@@ -158,7 +158,6 @@ python_files = [
     "test_materials_api_smoke.py",
     "test_materials_graph_database_behavior.py",
     "test_materials_kg_core.py",
-    "test_metrics_evaluation.py",
     "test_neo4j_repository.py",
     "test_no_donor_brand_in_core.py",
     "test_repository_factory.py",

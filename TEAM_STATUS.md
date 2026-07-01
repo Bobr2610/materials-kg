@@ -104,7 +104,7 @@
 
 | Роль | Участник | Задача | Результат | Дата |
 |------|----------|--------|-----------|------|
-| Data Scientist | Codex | Метрики и оценка качества гипотез offline | Добавлены offline metrics module и API: Entity/Relation F1, Context Recall, Context Entities Recall, Faithfulness/Groundedness, Novelty, repository coverage heatmap, deterministic-vs-agent full comparison, экспертный JSONL feedback, recalibrated ranking weights, auto/expert correlation, regression tests, MiMo review без blockers | 2026-07-01 |
+| _(пока пусто)_ | — | — | — | — |
 
 ---
 
