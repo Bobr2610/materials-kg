@@ -161,6 +161,40 @@ feature branch  →  staging  →  main
 - "This will work because X, but consider Y risk"
 - If bad idea: "I don't recommend this because [reason]. Consider [alternative]"
 
+### MiMo Subagent — Delegate Tasks
+
+**You CAN call mimocode (MiMo CLI) as a subagent:**
+
+```bash
+# Basic call
+mimo run -m "mimo/mimo-auto" "Your task description"
+
+# With PowerShell script (Windows)
+.\.agents\skills\mimo-subagent\scripts\run_mimo.ps1 -Prompt "Your task" -TaskSlug "task-name"
+
+# JSON output
+mimo run -m "mimo/mimo-auto" --format json "Your task"
+```
+
+**When to delegate to MiMo:**
+- Web research (docs, best practices, API references)
+- Code review from second perspective
+- Summarization of large outputs
+- Isolated coding subtasks
+
+**Prompting rules:**
+1. Be specific — exact task, constraints, output format
+2. Minimal context — only what MiMo needs
+3. Request citations for web research
+4. Never send secrets or confidential code
+
+**Example:**
+```bash
+mimo run -m "mimo/mimo-auto" "Review kg_engine/services/materials_kg.py for bugs. Return findings ordered by severity."
+```
+
+**Output saved to:** `docs/mimo-runs/YYYYMMDD/<task-slug>/`
+
 ### Emergency Protocol
 
 If you accidentally made changes on `main`:

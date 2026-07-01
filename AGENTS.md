@@ -155,6 +155,69 @@ Before starting ANY work, the agent MUST:
 - Report: "This will work because X, but consider Y risk"
 - If bad idea: "I don't recommend this because [reason]. Instead, consider [alternative]"
 
+## MiMo Subagent — How to Delegate Tasks
+
+**Agents CAN call mimocode (MiMo CLI) as a subagent to delegate research, coding, or summarization tasks.**
+
+### When to use MiMo subagent
+- Web research (documentation, best practices, API references)
+- Code review from a second perspective
+- Summarization of large files or outputs
+- Delegated coding subtasks (isolated from main context)
+- Reproducible CLI-based workflows
+
+### How to call MiMo
+
+**Basic command:**
+```bash
+mimo run -m "mimo/mimo-auto" "Your task description here"
+```
+
+**With PowerShell script (recommended for Windows):**
+```powershell
+.\.agents\skills\mimo-subagent\scripts\run_mimo.ps1 -Prompt "Your task" -TaskSlug "task-name"
+```
+
+**Structured output (JSON):**
+```bash
+mimo run -m "mimo/mimo-auto" --format json "Your task"
+```
+
+### Prompting rules for MiMo delegation
+1. **Be specific** — include the exact task, constraints, and desired output format
+2. **Minimal context** — only the files/subproblem MiMo needs, not the whole repo
+3. **Request citations** — ask for source URLs on web research tasks
+4. **Define output format** — "Return a summary in markdown with bullet points"
+5. **No secrets** — never send credentials, API keys, or confidential code
+
+### Example delegations
+
+**Research:**
+```
+mimo run -m "mimo/mimo-auto" "Find official documentation for Neo4j Python driver async support. Use authoritative sources only. Return a short summary and source URLs."
+```
+
+**Code review:**
+```
+mimo run -m "mimo/mimo-auto" "Review kg_engine/services/materials_kg.py for likely bugs and behavioral regressions. Return findings ordered by severity."
+```
+
+**Summarization:**
+```
+mimo run -m "mimo/mimo-auto" "Summarize the following test output and identify failures: [paste output]"
+```
+
+### Output storage
+MiMo results are saved in: `docs/mimo-runs/YYYYMMDD/<task-slug>/`
+- `00_prompt.txt` — prompt sent
+- `20_summary.md` — cleaned output
+- `sources.md` — URLs (for research tasks)
+
+### Safety
+- Pause before sending proprietary code or secrets to MiMo
+- For public research → proceed
+- For confidential data → warn the human first
+
 ## Research & Planning
 
 Before any coding or changes:
