@@ -30,6 +30,19 @@ from kg_engine.ingestion.adapters import ExperimentCatalogAdapter
 from kg_engine.ingestion.adapters import ReferenceDataAdapter
 from kg_engine.repositories.factory import create_materials_repository
 from kg_engine.services.materials_kg import MaterialsKGService
+from kg_engine.services.metrics import ContextBenchmark
+from kg_engine.services.metrics import CoverageAxis
+from kg_engine.services.metrics import ExpertFeedbackEntry
+from kg_engine.services.metrics import ExpertFeedbackStore
+from kg_engine.services.metrics import ExtractionBenchmark
+from kg_engine.services.metrics import RunMetricsInput
+from kg_engine.services.metrics import automatic_expert_correlation
+from kg_engine.services.metrics import build_repository_coverage_heatmap
+from kg_engine.services.metrics import compare_hypothesis_runs
+from kg_engine.services.metrics import evaluate_context_metrics
+from kg_engine.services.metrics import evaluate_extraction_benchmark
+from kg_engine.services.metrics import evaluate_hypothesis_metrics
+from kg_engine.services.metrics import recalibrate_ranking_weights
 
 if TYPE_CHECKING:
     from kg_engine.config.settings import Settings
@@ -228,7 +241,21 @@ class AnswerQueryRequest(BaseModel):
     session_id: str | None = Field(default=None)
 
 
+class MetricsCoverageRequest(BaseModel):
+    axes: CoverageAxis | None = Field(default=None)
+
+
+class MetricsHypothesesRequest(BaseModel):
+    run: RunMetricsInput
+
+
+class MetricsRunComparisonRequest(BaseModel):
+    left: RunMetricsInput
+    right: RunMetricsInput
+
+
 _UI_PAGE = Path(__file__).resolve().parents[2] / "ui-page.html"
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _notebook_dashboard_html() -> str:
@@ -293,6 +320,9 @@ def create_materials_app(
     )
     app = FastAPI(title=api_title)
     _source_files: list[dict] = []
+    feedback_store = ExpertFeedbackStore(
+        _PROJECT_ROOT / ".scratch" / "metrics" / "expert_feedback.jsonl"
+    )
 
     @app.get("/", response_class=HTMLResponse)
     def dashboard() -> Response:
@@ -653,6 +683,66 @@ def create_materials_app(
         except DeepAgentsResultError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         return result.model_dump(mode="json")
+
+    @app.post("/metrics/extraction")
+    def metrics_extraction(request: ExtractionBenchmark) -> dict:
+        return evaluate_extraction_benchmark(request).model_dump(mode="json")
+
+    @app.post("/metrics/context")
+    def metrics_context(request: ContextBenchmark) -> dict:
+        return evaluate_context_metrics(request).model_dump(mode="json")
+
+    @app.post("/metrics/coverage")
+    def metrics_coverage(request: MetricsCoverageRequest | None = None) -> dict:
+        axes = request.axes if request is not None else None
+        return build_repository_coverage_heatmap(
+            runtime_service.repository,
+            axes=axes,
+        ).model_dump(mode="json")
+
+    @app.post("/metrics/hypotheses")
+    def metrics_hypotheses(request: MetricsHypothesesRequest) -> dict:
+        return evaluate_hypothesis_metrics(
+            hypotheses=request.run.result.hypotheses,
+            context=request.run.context,
+            coverage=request.run.coverage,
+        ).model_dump(mode="json")
+
+    @app.post("/metrics/runs/compare")
+    def metrics_runs_compare(request: MetricsRunComparisonRequest) -> dict:
+        return compare_hypothesis_runs(request.left, request.right).model_dump(
+            mode="json"
+        )
+
+    @app.post("/metrics/feedback")
+    def metrics_feedback(entry: ExpertFeedbackEntry) -> dict:
+        feedback_store.save(entry)
+        entries = feedback_store.load()
+        return {
+            "saved": 1,
+            "sample_size": len(entries),
+            "invalid_feedback_lines": feedback_store.invalid_line_count,
+            "weights": recalibrate_ranking_weights(entries).model_dump(mode="json"),
+            "correlation": automatic_expert_correlation(entries),
+        }
+
+    @app.get("/metrics/feedback/weights")
+    def metrics_feedback_weights() -> dict:
+        entries = feedback_store.load()
+        return {
+            "sample_size": len(entries),
+            "invalid_feedback_lines": feedback_store.invalid_line_count,
+            "weights": recalibrate_ranking_weights(entries).model_dump(mode="json"),
+        }
+
+    @app.get("/metrics/feedback/correlation")
+    def metrics_feedback_correlation() -> dict:
+        entries = feedback_store.load()
+        return {
+            "sample_size": len(entries),
+            "invalid_feedback_lines": feedback_store.invalid_line_count,
+            "correlation": automatic_expert_correlation(entries),
+        }
 
     @app.get("/source/overview")
     def source_overview() -> dict:
