@@ -2,6 +2,28 @@
 
 **Source of truth.** Concise rules. Details live in skills.
 
+## MANDATORY: Pre-Flight Gate (BEFORE ANY WORK)
+
+**Before ANY file edit, commit, or code change — the agent MUST verify ALL of these:**
+
+```
+=== PRE-FLIGHT GATE ===
+
+1. git branch — текущая ветка?
+2. Если master/main/STAGING → СТОП. Создай feature-ветку СРАЗУ.
+3. TEAM_STATUS.md прочитан? Задачи других участников проверены?
+4. Правила из AGENTS.md прочитаны? (ты сейчас их читаешь)
+5. Никаких коммитов без запроса человека.
+6. Никаких push без явного согласия.
+
+ВСЕ 6 пунктов = OK → продолжай.
+ЛЮБОЙ пункт = NO → исправь ПЕРЕД работой.
+
+=== GATE PASSED ===
+```
+
+**Нарушение gate = немедленная остановка и исправление.**
+
 ## AUTOMATIC: Rules Display at Conversation Start
 
 **At the START of EVERY conversation, the agent MUST display BEFORE any other output:**
@@ -20,6 +42,9 @@
 9. MiMo доступен? Проверь: mimo --help
 10. Используй Docker для запуска: docker compose up -d
 
+⚠️  ПЕРЕД ЛЮБОЙ РАБОТОЙ: пройди Pre-Flight Gate (выше).
+    Если ты на master/main — создай feature-ветку ПЕРВЫМ ДЕЛОМ.
+
 === КОНЕЦ ПРАВИЛ ===
 ```
 
@@ -33,6 +58,28 @@
 | Test | `python -m pytest kg_engine/tests/ -v` |
 | Docker | `docker compose up -d --build` |
 | MiMo | `mimo run -m "mimo/mimo-auto" "task"` |
+
+## Git Enforcement Flow
+
+```
+ЛЮБАЯ РАБОТА
+    │
+    ├─ Pre-Flight Gate (выше) → FAIL? → СТОП, исправь
+    │
+    ├─ git branch → master/main? → git checkout -b feat/<module>-<desc>
+    │
+    ├─ Работа (edit, code, etc.)
+    │
+    ├─ git add + git commit (только по запросу человека)
+    │
+    ├─ git checkout staging && git merge feat/...
+    │
+    ├─ git push origin staging (только с согласия)
+    │
+    ├─ git checkout master && git merge staging
+    │
+    └─ git push origin master (только с согласия)
+```
 
 ## Mandatory Skills
 
@@ -55,6 +102,7 @@
 - Direct commits to `main`/`master` — NEVER
 - Let MiMo work in project root — NEVER
 - Hardcode secrets — NEVER
+- **Работать без Pre-Flight Gate — NEVER (нарушение = стоп)**
 
 ## Branch Naming
 
