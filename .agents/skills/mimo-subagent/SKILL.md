@@ -317,6 +317,59 @@ cat .agents/skills/mimo-subagent/SKILL.md
 | MiMo | Tool call | `skill({name: "mimo-subagent"})` |
 | Any | Read file | `Read(".agents/skills/mimo-subagent/SKILL.md")` |
 
+## Built-in Slash Commands
+
+MiMoCode has built-in skills invocable via `/` prefix in chat.
+
+### Available Commands
+
+| Command | Description | Example |
+|---------|-------------|---------|
+| `/imagegen` | Generate or edit raster images (photos, illustrations, textures, mockups, sprites) | `/imagegen a 3D isometric server room` |
+| `/impeccable` | Design, redesign, polish frontend UI — websites, dashboards, components, theming, accessibility, UX | `/impeccable redesign the login page` |
+| `/mimo-subagent` | Delegate tasks to MiMo as a subagent for research, coding, or summarization | `/mimo-subagent review this code` |
+| `/openai-docs` | Get help with OpenAI products, APIs, models, Codex itself | `/openai-docs which model for code gen` |
+| `/plugin-creator` | Create and scaffold Codex plugin directories | `/plugin-creator create a plugin` |
+| `/self-extend` | Evolve your own capabilities — new tools, hooks, skills | `/self-extend add a hook` |
+| `/skill-creator` | Guide for creating effective skills | `/skill-creator make a new skill` |
+| `/skill-installer` | Install skills from curated list or GitHub repo | `/skill-installer install web-search` |
+| `/web-search` | Multi-source web research with anti-bot resilience and cited outputs | `/web-search latest GPT-5 benchmarks` |
+
+### How Commands Work
+
+1. User types `/command-name arguments` in chat
+2. MiMoCode loads the skill's `SKILL.md` into context
+3. Skill body becomes additional instructions for that scope
+4. Skill does NOT change the tool set — only behavior and guidance
+
+### Built-in Workflows (via agent tool)
+
+These are invoked programmatically by the agent, not as slash commands:
+
+| Workflow | Description | When to use |
+|----------|-------------|-------------|
+| `compose` | Full autonomous pipeline: brainstorm → design → implement → verify → review → report → merge | Feature, bugfix, refactor, or review tasks end-to-end |
+| `deep-research` | Parallel web searches → read sources → cross-check facts → cited report | Thorough multi-source research on any topic |
+
+**Invoke compose:**
+```javascript
+workflow({ operation: "run", name: "compose", args: { task: "implement feature X", type: "feature" } })
+```
+
+**Invoke deep-research:**
+```javascript
+workflow({ operation: "run", name: "deep-research", args: "latest research on quantum computing applications" })
+```
+
+### Skill vs Workflow
+
+| Aspect | Slash Command (`/`) | Workflow (`workflow()`) |
+|--------|---------------------|------------------------|
+| Invocation | User types in chat | Agent calls programmatically |
+| Scope | Single skill loaded as context | Multi-phase orchestration |
+| Subagents | No | Yes — parallel subagents |
+| Use case | Guidance for specific domain | Complex multi-step automation |
+
 ## Checklist
 - [ ] MiMo CLI available (checked at conversation start)
 - [ ] Provider login state verified
