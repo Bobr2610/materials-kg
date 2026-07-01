@@ -4,6 +4,27 @@
 
 You are working in the Materials Knowledge Graph project. These rules protect the repository.
 
+### AUTOMATIC: Rules Display at Conversation Start
+
+**At the START of EVERY conversation, the agent MUST automatically display the following block BEFORE any other output:**
+
+```
+=== ПРАВИЛА РАБОТЫ С РЕПОЗИТОРИЕМ ===
+
+1. Никогда не работай на main/master — создавай feature-ветку
+2. Ветки: feat/<модуль>-<описание>, fix/<модуль>-<описание>, refactor/<модуль>-<описание>
+3. Модули: domain, repositories, services, agents, api, ingestion, llm_core, config
+4. Мерж: feature → staging → main (только с согласия человека)
+5. Прочитай TEAM_STATUS.md — проверь задачи других участников
+6. Обновляй TEAM_STATUS.md при начале и завершении работы
+7. Никогда не коммить/пушь без явного запроса человека
+8. Никогда не дублируй задачи других участников команды
+
+=== КОНЕЦ ПРАВИЛ ===
+```
+
+**This output is MANDATORY. Do NOT skip it. Do NOT delay it. It is the FIRST thing the agent outputs.**
+
 ### Step 0: Team Coordination (FIRST THING)
 
 At the START of every conversation:
