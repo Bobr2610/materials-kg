@@ -51,7 +51,24 @@ feature branch  →  staging  →  main
 - [ ] Explicit human approval (verbal, PR approval, or written)
 - [ ] Review of `git diff staging...main` before merge
 
-### Rule 3: Prohibited actions
+### Rule 3: Branch naming (STRICT)
+
+| Type | Pattern | Example |
+|------|---------|---------|
+| Feature | `feat/<module>-<short-desc>` | `feat/domain-add-crystal-structure` |
+| Fix | `fix/<module>-<short-desc>` | `fix/services-null-check-hypothesis` |
+| Refactor | `refactor/<module>-<short-desc>` | `refactor/repositories-neo4j-to-async` |
+| Docs | `docs/<short-desc>` | `docs/update-api-examples` |
+| Test | `test/<module>-<short-desc>` | `test/services-add-ingestion-coverage` |
+| Hotfix | `hotfix/<short-desc>` | `hotfix/fix-neo4j-connection-crash` |
+
+**Rules:**
+- Module name = `domain`, `repositories`, `services`, `agents`, `api`, `ingestion`, `llm_core`, `config`
+- Use kebab-case: `add-neo4j-connection` NOT `addNeo4jConnection`
+- Max 3 words after module prefix
+- NEVER use random hash suffixes like `feat/xyz-abc-123`
+
+### Rule 4: Prohibited actions
 
 - `git push --force` — PROHIBITED
 - `git reset --hard` — PROHIBITED
@@ -59,11 +76,38 @@ feature branch  →  staging  →  main
 - Auto-committing without user request — PROHIBITED
 - Direct commits to `main`/`master` — PROHIBITED
 
+### Rule 5: Team coordination (MANDATORY)
+
+Before starting ANY work, the agent MUST:
+
+1. **Read `TEAM_STATUS.md`** — see what other team members are working on
+2. **Ask the human** if there are tasks from other teammates that overlap
+3. **Never duplicate** work already assigned to someone else
+4. **Update `TEAM_STATUS.md`** when starting and finishing work
+
+**At conversation start, the agent MUST:**
+1. Read `TEAM_STATUS.md`
+2. Show current team status
+3. Ask: "What is your role in the team?" (see roles below)
+4. Ask: "What task would you like to work on?"
+
+### Team roles
+
+| Role | Focus area |
+|------|-----------|
+| ML / NLP / Knowledge Graphs | Embeddings, graph algorithms, entity extraction, vector search |
+| Data Scientist | Data analysis, experiments, benchmarks, metrics |
+| Системный аналитик / архитектор | Architecture, design patterns, API contracts, system design |
+| Исследователь материаловедения | Domain knowledge, material properties, scientific accuracy |
+| Product-менеджер | Requirements, prioritization, user stories, acceptance criteria |
+
 **Agent pre-work checklist:**
-1. Read this file (project-specific rules)
-2. Verify branch — if on `main`/`master`, create a feature branch first
-3. Only commit/push when user explicitly asks
-4. When done: merge to `staging`, run checks, ask human for `main` merge
+1. Read `TEAM_STATUS.md` — check for conflicting tasks
+2. Ask human their role and task
+3. Read this file (project-specific rules)
+4. Verify branch — if on `main`/`master`, create a feature branch first
+5. Only commit/push when user explicitly asks
+6. When done: update `TEAM_STATUS.md`, merge to `staging`, run checks, ask human for `main` merge
 
 ## Research & Planning
 

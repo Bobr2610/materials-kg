@@ -4,6 +4,28 @@
 
 You are working in the Materials Knowledge Graph project. These rules protect the repository.
 
+### Step 0: Team Coordination (FIRST THING)
+
+At the START of every conversation:
+
+1. **Read `TEAM_STATUS.md`** — see who is working on what
+2. **Show the human the current team status**
+3. **Ask the human:**
+   - "What is your role in the team?" (ML/NLP, Data Scientist, Архитектор, Материаловед, Product)
+   - "What task would you like to work on?"
+   - "Are there tasks from other teammates that overlap with yours?"
+4. **NEVER start work** without knowing the human's role and task
+5. **NEVER duplicate** work already assigned to another team member
+
+**When starting work**, update `TEAM_STATUS.md`:
+```markdown
+| ML / NLP | YourName | Task description | в работе | feat/your-branch | 2026-07-01 |
+```
+
+**When finishing work**, update `TEAM_STATUS.md`:
+- Move your row to "История выполненных задач"
+- Set status to `готово`
+
 ### Step 1: Read the Rules
 
 ```
@@ -51,20 +73,31 @@ feature branch  →  staging  →  main
 - [ ] Explicit human approval
 - [ ] Review of `git diff staging...main`
 
-### Branch Naming
+### Branch Naming (STRICT)
 
 | Type | Pattern | Example |
 |------|---------|---------|
-| Feature | `feat/<short-desc>` | `feat/add-neo4j-connection` |
-| Fix | `fix/<short-desc>` | `fix/null-pointer-in-extraction` |
-| Refactor | `refactor/<short-desc>` | `refactor/simplify-repository-layer` |
+| Feature | `feat/<module>-<short-desc>` | `feat/domain-add-crystal-structure` |
+| Fix | `fix/<module>-<short-desc>` | `fix/services-null-check-hypothesis` |
+| Refactor | `refactor/<module>-<short-desc>` | `refactor/repositories-neo4j-to-async` |
 | Docs | `docs/<short-desc>` | `docs/update-api-examples` |
-| Test | `test/<short-desc>` | `test/add-hypothesis-coverage` |
+| Test | `test/<module>-<short-desc>` | `test/services-add-ingestion-coverage` |
+| Hotfix | `hotfix/<short-desc>` | `hotfix/fix-neo4j-connection-crash` |
+
+**Module names:** `domain`, `repositories`, `services`, `agents`, `api`, `ingestion`, `llm_core`, `config`
+
+**Rules:**
+- Use kebab-case: `add-neo4j-connection` NOT `addNeo4jConnection`
+- Max 3 words after module prefix
+- NEVER use random hash suffixes
 
 ### What You MUST Do
 
+- [ ] Read `TEAM_STATUS.md` first — check for conflicting tasks
+- [ ] Ask human their role and task
 - [ ] Read `AGENTS.md` before starting
 - [ ] Verify you are on a feature branch (not main/master)
+- [ ] Update `TEAM_STATUS.md` when starting and finishing work
 - [ ] When done: merge to `staging`, run checks, ask human for `main` merge
 - [ ] Keep changes minimal and focused on the task
 
@@ -74,6 +107,8 @@ feature branch  →  staging  →  main
 - [ ] NEVER force push (`git push --force`)
 - [ ] NEVER `git reset --hard`
 - [ ] NEVER merge into `main` without human approval
+- [ ] NEVER duplicate work from other team members
+- [ ] NEVER start work without reading `TEAM_STATUS.md`
 - [ ] NEVER delete files unless explicitly told
 - [ ] NEVER modify `.gitignore`, `.env`, secrets, or CI config
 - [ ] NEVER commit or push unless a human explicitly asks
