@@ -16,13 +16,14 @@ LLM extraction -> graph ingestion -> Deep Agent hypotheses.
 - Гипотезы нельзя ослаблять: каждая должна ссылаться на конкретные graph IDs
   через `supporting_evidence_ids`, `supporting_observation_ids`,
   `supporting_text_unit_ids` или `data_gap_ids`.
-- В проект добавлена папка `Задача 1/` с реальными материалами для задания:
-  PDF, DOCX, XLSX, PNG и сопутствующие доменные документы.
+- Endpoint Agent 2 ищет реальный corpus в `Задача 1/`, `task-1/`,
+  `task1/`, `task_1/` или `data/task1/`. Если этих папок нет в worktree, он
+  загружает packaged fallback `sample_sources/` и возвращает warning в API/UI.
 - Папка `data/` пока legacy seed для `/demo/load-sample`; не удалять, пока
   новый demo-flow на материалах `Задача 1/` не готов и не покрыт тестами.
-- Папка `sample_sources/` удалена в рабочем дереве. Не восстанавливать ее
-  автоматически: вместо нее нужно переводить документацию и demo на
-  `Задача 1/` или новый fixtures-пакет.
+- Папка `sample_sources/` остается временным fallback-корпусом для Agent 2
+  smoke/demo flow. Не расширять ее вместо реального ingestion: PDF/DOCX/XLSX/PNG
+  readers остаются зоной Agent 1.
 
 ## Ownership
 
@@ -144,4 +145,3 @@ or grounding bugs.
 - Manual flow: ingest `Задача 1/` -> inspect graph -> generate hypotheses ->
   verify evidence IDs -> export results.
 - Documentation no longer points users only to obsolete sample inputs.
-
