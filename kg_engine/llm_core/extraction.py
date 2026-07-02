@@ -650,10 +650,11 @@ def _merge_chunk_results(
 
         for exp in result.experiments:
             exp_id = exp.experiment_id
+            merged_exp = exp
             if exp_id in seen_exp_ids:
                 exp_counter += 1
                 exp_id = f"{exp_id}_chunk{exp_counter}"
-                exp = ExtractedExperiment(
+                merged_exp = ExtractedExperiment(
                     experiment_id=exp_id,
                     title=exp.title,
                     material_name=exp.material_name,
@@ -662,7 +663,7 @@ def _merge_chunk_results(
                     findings=exp.findings,
                 )
             seen_exp_ids.add(exp_id)
-            all_experiments.append(exp)
+            all_experiments.append(merged_exp)
 
     entities = _deduplicate_entities(all_entities)
     relationships = _deduplicate_relationships(all_relationships)

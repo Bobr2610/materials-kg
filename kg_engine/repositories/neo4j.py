@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime
 from typing import TYPE_CHECKING
 from typing import Any
@@ -21,6 +22,9 @@ from kg_engine.domain.resolution import normalize_name
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+
+logger = logging.getLogger(__name__)
 
 
 def _jsonable(value: Any) -> Any:
@@ -359,10 +363,9 @@ class Neo4jMaterialsKGRepository:
         """Upsert multiple observations in a single transaction."""
         if not observations:
             return []
-        with self._session() as session:
-            with session.begin_transaction() as tx:
-                for obs in observations:
-                    tx.run(
+        with self._session() as session, session.begin_transaction() as tx:
+            for obs in observations:
+                tx.run(
                         """
                         MERGE (n:Observation {id: $id})
                         SET n += $payload
@@ -388,54 +391,51 @@ class Neo4jMaterialsKGRepository:
                             "mode_id": obs.mode_id,
                             "evidence_id": obs.evidence_id,
                         },
-                    )
-                tx.commit()
+                )
+            tx.commit()
         return observations
 
     def batch_upsert_traces(self, traces: list[DecisionTrace]) -> list[DecisionTrace]:
         """Upsert multiple decision traces in a single transaction."""
         if not traces:
             return []
-        with self._session() as session:
-            with session.begin_transaction() as tx:
-                for trace in traces:
-                    tx.run(
+        with self._session() as session, session.begin_transaction() as tx:
+            for trace in traces:
+                tx.run(
                         """
                         MERGE (n:DecisionTrace {id: $id})
                         SET n += $payload
                         RETURN n
                         """,
                         {"id": trace.id, "payload": self._trace_to_properties(trace)},
-                    )
-                tx.commit()
+                )
+            tx.commit()
         return traces
 
     def batch_upsert_evidence(self, evidence_list: list[Evidence]) -> list[Evidence]:
         """Upsert multiple evidence records in a single transaction."""
         if not evidence_list:
             return []
-        with self._session() as session:
-            with session.begin_transaction() as tx:
-                for evidence in evidence_list:
-                    tx.run(
+        with self._session() as session, session.begin_transaction() as tx:
+            for evidence in evidence_list:
+                tx.run(
                         """
                         MERGE (n:Evidence {id: $id})
                         SET n += $payload
                         RETURN n
                         """,
                         {"id": evidence.id, "payload": self._evidence_to_properties(evidence)},
-                    )
-                tx.commit()
+                )
+            tx.commit()
         return evidence_list
 
     def batch_upsert_relations(self, relations: list[Relation]) -> list[Relation]:
         """Upsert multiple relations in a single transaction."""
         if not relations:
             return []
-        with self._session() as session:
-            with session.begin_transaction() as tx:
-                for relation in relations:
-                    tx.run(
+        with self._session() as session, session.begin_transaction() as tx:
+            for relation in relations:
+                tx.run(
                         """
                         MATCH (source:Entity {id: $source_id})
                         MATCH (target:Entity {id: $target_id})
@@ -458,26 +458,25 @@ class Neo4jMaterialsKGRepository:
                             "payload": self._relation_to_properties(relation),
                             "new_evidence_ids": relation.evidence_ids,
                         },
-                    )
-                tx.commit()
+                )
+            tx.commit()
         return relations
 
     def batch_upsert_text_units(self, text_units: list[SearchTextUnit]) -> list[SearchTextUnit]:
         """Upsert multiple text units in a single transaction."""
         if not text_units:
             return []
-        with self._session() as session:
-            with session.begin_transaction() as tx:
-                for text_unit in text_units:
-                    tx.run(
+        with self._session() as session, session.begin_transaction() as tx:
+            for text_unit in text_units:
+                tx.run(
                         """
                         MERGE (n:TextUnit {id: $id})
                         SET n += $payload
                         RETURN n
                         """,
                         {"id": text_unit.id, "payload": self._text_unit_to_properties(text_unit)},
-                    )
-                tx.commit()
+                )
+            tx.commit()
         return text_units
 
     def search_text_units(self, query: str, *, limit: int = 5) -> list[SearchTextUnit]:
@@ -498,7 +497,7 @@ class Neo4jMaterialsKGRepository:
             if rows:
                 return [self._node_to_text_unit(row["n"]) for row in rows]
         except Exception:
-            pass
+            logger.debug("Neo4j fulltext text-unit search failed", exc_info=True)
         rows = self._run(
             """
             MATCH (n:TextUnit)
@@ -529,14 +528,13 @@ class Neo4jMaterialsKGRepository:
         """Execute multiple Cypher operations in a single transaction."""
         if not operations:
             return []
-        with self._session() as session:
-            with session.begin_transaction() as tx:
-                results: list[list[Any]] = []
-                for query, params in operations:
-                    result = tx.run(query, **params)
-                    results.append(list(result))
-                tx.commit()
-                return results
+        with self._session() as session, session.begin_transaction() as tx:
+            results: list[list[Any]] = []
+            for query, params in operations:
+                result = tx.run(query, **params)
+                results.append(list(result))
+            tx.commit()
+            return results
 
     def _entity_to_properties(self, entity: Entity) -> dict[str, Any]:
         return _neo4j_properties(
