@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from fastapi import FastAPI
+from fastapi import Header
 from fastapi import HTTPException
 from fastapi import Query
 from fastapi import UploadFile
@@ -26,6 +27,10 @@ from kg_engine.domain.models import PropertyFilters
 from kg_engine.domain.models import QueryFilters
 from kg_engine.domain.models import ReferenceDataBatch
 from kg_engine.domain.models import RelationType
+from kg_engine.domain.product import Constraint
+from kg_engine.domain.product import HypothesisRun
+from kg_engine.domain.product import ExpertReview
+from kg_engine.domain.product import ResearchProjectCreate
 from kg_engine.ingestion.adapters import DocumentCorpusAdapter
 from kg_engine.ingestion.adapters import ExperimentCatalogAdapter
 from kg_engine.ingestion.adapters import ReferenceDataAdapter
@@ -44,6 +49,9 @@ from kg_engine.services.metrics import evaluate_context_metrics
 from kg_engine.services.metrics import evaluate_extraction_benchmark
 from kg_engine.services.metrics import evaluate_hypothesis_metrics
 from kg_engine.services.metrics import recalibrate_ranking_weights
+from kg_engine.services.research_projects import ProjectNotFoundError
+from kg_engine.services.research_projects import ResearchProjectService
+from kg_engine.services.reports import render_hypothesis_report
 
 if TYPE_CHECKING:
     from kg_engine.config.settings import Settings
@@ -472,6 +480,7 @@ def create_materials_app(
     *,
     settings: Settings | None = None,
     service: MaterialsKGService | None = None,
+    product_service: ResearchProjectService | None = None,
     ensure_schema: bool = False,
     title: str | None = None,
 ) -> FastAPI:
@@ -497,11 +506,138 @@ def create_materials_app(
         llm_provider=_create_llm_provider(runtime_settings),
         session_store=_create_session_store(),
     )
+    runtime_product_service = product_service or ResearchProjectService(
+        _PROJECT_ROOT / ".scratch" / "product" / "research.sqlite3"
+    )
     app = FastAPI(title=api_title)
     _source_files: list[dict] = []
     feedback_store = ExpertFeedbackStore(
         _PROJECT_ROOT / ".scratch" / "metrics" / "expert_feedback.jsonl"
     )
+
+    def require_writer(role: str | None) -> None:
+        if role not in {"admin", "researcher", "expert"}:
+            raise HTTPException(status_code=403, detail="Write access is required")
+
+    def find_project(project_id: str):
+        try:
+            return runtime_product_service.get_project(project_id)
+        except ProjectNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Project not found") from exc
+
+    @app.post("/projects", status_code=201)
+    def create_project(
+        request: ResearchProjectCreate,
+        user: str = Header(default="anonymous", alias="X-User"),
+        role: str | None = Header(default=None, alias="X-Role"),
+    ):
+        require_writer(role)
+        return runtime_product_service.create_project(request, actor=user)
+
+    @app.get("/projects")
+    def list_projects():
+        return runtime_product_service.list_projects()
+
+    @app.get("/projects/{project_id}")
+    def get_project(project_id: str):
+        return find_project(project_id)
+
+    @app.patch("/projects/{project_id}")
+    def update_project(
+        project_id: str,
+        changes: dict,
+        user: str = Header(default="anonymous", alias="X-User"),
+        role: str | None = Header(default=None, alias="X-Role"),
+    ):
+        require_writer(role)
+        find_project(project_id)
+        return runtime_product_service.update_project(project_id, changes, actor=user)
+
+    @app.delete("/projects/{project_id}", status_code=204)
+    def delete_project(
+        project_id: str,
+        user: str = Header(default="anonymous", alias="X-User"),
+        role: str | None = Header(default=None, alias="X-Role"),
+    ) -> Response:
+        require_writer(role)
+        find_project(project_id)
+        runtime_product_service.delete_project(project_id, actor=user)
+        return Response(status_code=204)
+
+    @app.post("/projects/{project_id}/constraints", status_code=201)
+    def add_project_constraint(
+        project_id: str,
+        constraint: Constraint,
+        user: str = Header(default="anonymous", alias="X-User"),
+        role: str | None = Header(default=None, alias="X-Role"),
+    ):
+        require_writer(role)
+        find_project(project_id)
+        return runtime_product_service.add_constraint(project_id, constraint, actor=user)
+
+    @app.get("/projects/{project_id}/validation")
+    def validate_project(project_id: str):
+        find_project(project_id)
+        return runtime_product_service.validate_project(project_id)
+
+    @app.post("/projects/{project_id}/hypothesis-runs", status_code=201)
+    def create_project_hypothesis_run(
+        project_id: str,
+        user: str = Header(default="anonymous", alias="X-User"),
+        role: str | None = Header(default=None, alias="X-Role"),
+    ):
+        require_writer(role)
+        project = find_project(project_id)
+        validation = runtime_product_service.validate_project(project_id)
+        if not validation.valid:
+            raise HTTPException(
+                status_code=409,
+                detail="Project has unresolved hard constraints",
+            )
+        request = HypothesisInput(
+            target_kpi=project.target_kpi,
+            material=project.materials[0] if project.materials else None,
+            source_ids=project.source_ids or None,
+            expert_adjustments={"ranking_weights": project.ranking_weights},
+        )
+        result = runtime_service.generate_hypotheses(request)
+        run = HypothesisRun(
+            project_id=project.id,
+            generation_engine=result.generation_engine,
+            ranking_weights=project.ranking_weights,
+            result=result.model_dump(mode="json"),
+            actor=user,
+        )
+        return runtime_product_service.save_hypothesis_run(run, actor=user)
+
+    @app.get("/hypothesis-runs/{run_id}")
+    def get_hypothesis_run(run_id: str):
+        try:
+            return runtime_product_service.get_hypothesis_run(run_id)
+        except ProjectNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Hypothesis run not found") from exc
+
+    @app.post("/hypothesis-runs/{run_id}/reviews", status_code=201)
+    def create_expert_review(
+        run_id: str,
+        review: ExpertReview,
+        user: str = Header(default="anonymous", alias="X-User"),
+        role: str | None = Header(default=None, alias="X-Role"),
+    ):
+        require_writer(role)
+        if review.run_id != run_id or review.expert_id != user:
+            raise HTTPException(status_code=422, detail="Review identity mismatch")
+        try:
+            return runtime_product_service.save_expert_review(review)
+        except ProjectNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Hypothesis run not found") from exc
+
+    @app.get("/hypothesis-runs/{run_id}/reviews")
+    def list_expert_reviews(run_id: str):
+        try:
+            return runtime_product_service.list_expert_reviews(run_id=run_id)
+        except ProjectNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Hypothesis run not found") from exc
 
     @app.get("/", response_class=HTMLResponse)
     def dashboard() -> Response:
@@ -943,7 +1079,7 @@ def create_materials_app(
         request: HypothesisExportRequest,
         export_format: str = Query(
             default="json",
-            pattern="^(json|csv)$",
+            pattern="^(json|csv|xlsx|docx|pdf|markdown)$",
             alias="format",
         ),
     ) -> Response:
@@ -955,6 +1091,24 @@ def create_materials_app(
                 headers={
                     "Content-Disposition": (
                         'attachment; filename="materials-hypotheses.csv"'
+                    )
+                },
+            )
+        if export_format in {"xlsx", "docx", "pdf", "markdown"}:
+            media_types = {
+                "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "pdf": "application/pdf",
+                "markdown": "text/markdown; charset=utf-8",
+            }
+            extensions = {"markdown": "md"}
+            extension = extensions.get(export_format, export_format)
+            return Response(
+                content=render_hypothesis_report(result, export_format),
+                media_type=media_types[export_format],
+                headers={
+                    "Content-Disposition": (
+                        f'attachment; filename="materials-hypotheses.{extension}"'
                     )
                 },
             )

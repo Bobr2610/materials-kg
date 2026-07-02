@@ -105,6 +105,29 @@ These entrypoints support three complementary flows:
   and unknown rows/files are preserved as source documents instead of being guessed
   from filenames.
 
+The product ingestion API also accepts TXT, Markdown, PDF, DOCX, XLSX, PNG,
+JPEG, and TIFF through `POST /ingestion/jobs`. Each file is isolated from other
+batch failures, deduplicated by SHA-256, and stored as a `ParsedSource` with
+page, paragraph, sheet, row, table, or OCR provenance. Use
+`GET /ingestion/jobs/{id}` for status and
+`GET /sources/{checksum}/fragments` to inspect extracted fragments.
+
+## Research Projects
+
+Research work can be organized through persistent project APIs:
+
+- `POST /projects`, `GET /projects`, `GET/PATCH/DELETE /projects/{id}`
+- `POST /projects/{id}/constraints` and `GET /projects/{id}/validation`
+- `POST /projects/{id}/hypothesis-runs`
+- `GET /hypothesis-runs/{id}` and review endpoints under
+  `/hypothesis-runs/{id}/reviews`
+
+Project state, immutable hypothesis runs, expert reviews, and audit events use a
+local SQLite product store. Scientific entities, evidence, observations, and
+relations remain in Neo4j. Product writes require `X-User` and an `X-Role` of
+`admin`, `researcher`, or `expert`; deployments should terminate these trusted
+identity headers at an authenticated reverse proxy.
+
 ## Query API
 
 `MaterialsKGService` exposes graph-first read paths:
@@ -208,6 +231,10 @@ The `data/` directory contains fixture data for sample materials covering:
 python -m pytest -q
 ruff check kg_engine
 ```
+
+Hypothesis exports support JSON, CSV, XLSX, Markdown, DOCX, and PDF. DOCX/PDF
+reports include mechanism, scoring, verification instructions, and provenance
+IDs for expert review.
 
 ### Destructive API
 

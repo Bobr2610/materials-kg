@@ -1,5 +1,0 @@
-experiment_id,title,material,mode,equipment,team,property,value,unit,row_reference,finding,confidence,source_version
-SAMPLE-CUCRZR-001,CuCrZr LPBF as-built conductivity,CuCrZr,As-Built,Renishaw AM500Q;SigmaScope SMP350,Thermal Processing Group,Electrical Conductivity,42,%IACS,row-001,As-built CuCrZr retained moderate conductivity but requires aging for target values,0.88,sample-v1
-SAMPLE-CUCRZR-002,CuCrZr solution treated conductivity,CuCrZr,Solution Treated,SigmaScope SMP350,Thermal Processing Group,Electrical Conductivity,58,%IACS,row-002,Solution treatment improved conductivity but aging coverage is still missing,0.9,sample-v1
-SAMPLE-316L-001,316L LPBF density after HIP,316L Stainless Steel,HIP,Renishaw AM500Q,Thermal Processing Group,Density,99.8,%,row-003,HIP closed residual porosity and raised density above 99 percent,0.92,sample-v1
-SAMPLE-316L-002,316L surface finish after HIP,316L Stainless Steel,HIP,Renishaw AM500Q,Thermal Processing Group,Surface Roughness,11.5,um,row-004,HIP did not solve surface roughness without machining or blasting,0.84,sample-v1
