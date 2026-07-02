@@ -239,6 +239,40 @@ class InMemoryMaterialsKGRepository:
         self._coverage_rules.clear()
         self._text_units.clear()
 
+    def batch_run(
+        self, operations: list[tuple[str, dict[str, Any]]]
+    ) -> list[list[object]]:
+        """Execute multiple operations sequentially (in-memory has no transactions)."""
+        results: list[list[object]] = []
+        for _query, _params in operations:
+            results.append([])
+        return results
+
+    def batch_upsert_observations(self, observations: list[Observation]) -> list[Observation]:
+        for obs in observations:
+            self.upsert_observation(obs)
+        return observations
+
+    def batch_upsert_traces(self, traces: list[DecisionTrace]) -> list[DecisionTrace]:
+        for trace in traces:
+            self.upsert_decision_trace(trace)
+        return traces
+
+    def batch_upsert_evidence(self, evidence_list: list[Evidence]) -> list[Evidence]:
+        for evidence in evidence_list:
+            self.upsert_evidence(evidence)
+        return evidence_list
+
+    def batch_upsert_relations(self, relations: list[Relation]) -> list[Relation]:
+        for relation in relations:
+            self.upsert_relation(relation)
+        return relations
+
+    def batch_upsert_text_units(self, text_units: list[SearchTextUnit]) -> list[SearchTextUnit]:
+        for tu in text_units:
+            self.upsert_text_unit(tu)
+        return text_units
+
     def delete_source(self, source_id: str) -> int:
         removed = 0
         entity_ids_to_remove: list[str] = []

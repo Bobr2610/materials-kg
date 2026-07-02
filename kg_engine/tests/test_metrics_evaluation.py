@@ -142,6 +142,49 @@ def test_hypothesis_metrics_are_grounded_and_novel_offline() -> None:
     assert result.items[0].coverage_status == "measured"
 
 
+def test_novelty_mixed_coverage_returns_weighted_ratio() -> None:
+    hypothesis = ResearchHypothesis(
+        id="hyp-mixed",
+        target_kpi="Hardness",
+        statement="Test CuCrZr under multiple modes for hardness",
+        rationale="Grounded in obs-1",
+        test_plan="Measure hardness under aging and HIP",
+        score=HypothesisScore(
+            novelty=0.5,
+            risk=0.2,
+            value=0.7,
+            evidence_strength=0.6,
+            final_score=0.65,
+        ),
+        supporting_entity_ids=["mat-cucrzr", "mode-aging", "mode-hip", "prop-hardness"],
+        supporting_observation_ids=["obs-1"],
+    )
+    coverage = build_coverage_heatmap(
+        axes=CoverageAxis(
+            material_ids=["mat-cucrzr"],
+            mode_ids=["mode-aging", "mode-hip"],
+            property_ids=["prop-hardness"],
+        ),
+        observations=[
+            Observation(
+                id="obs-1",
+                material_id="mat-cucrzr",
+                mode_id="mode-aging",
+                property_id="prop-hardness",
+                evidence_id="ev-1",
+            )
+        ],
+    )
+
+    result = evaluate_hypothesis_metrics(
+        hypotheses=[hypothesis],
+        coverage=coverage,
+    )
+
+    assert result.average_novelty == 0.5
+    assert result.items[0].coverage_status == "mixed"
+
+
 def test_coverage_heatmap_marks_measured_and_missing_triplets() -> None:
     heatmap = build_coverage_heatmap(
         axes=CoverageAxis(
@@ -238,7 +281,7 @@ def test_expert_feedback_store_and_weight_recalibration(tmp_path: Path) -> None:
     store = ExpertFeedbackStore(tmp_path / "feedback.jsonl")
     store.save(
         ExpertFeedbackEntry(
-            hypothesis_id="h-low",
+            hypothesis_id="h-low-1",
             rating=1,
             score=HypothesisScore(
                 novelty=0.1,
@@ -251,7 +294,33 @@ def test_expert_feedback_store_and_weight_recalibration(tmp_path: Path) -> None:
     )
     store.save(
         ExpertFeedbackEntry(
-            hypothesis_id="h-high",
+            hypothesis_id="h-low-2",
+            rating=1,
+            score=HypothesisScore(
+                novelty=0.15,
+                risk=0.85,
+                value=0.25,
+                evidence_strength=0.15,
+                final_score=0.22,
+            ),
+        )
+    )
+    store.save(
+        ExpertFeedbackEntry(
+            hypothesis_id="h-mid",
+            rating=3,
+            score=HypothesisScore(
+                novelty=0.5,
+                risk=0.5,
+                value=0.55,
+                evidence_strength=0.5,
+                final_score=0.55,
+            ),
+        )
+    )
+    store.save(
+        ExpertFeedbackEntry(
+            hypothesis_id="h-high-1",
             rating=5,
             score=HypothesisScore(
                 novelty=0.8,
@@ -262,12 +331,31 @@ def test_expert_feedback_store_and_weight_recalibration(tmp_path: Path) -> None:
             ),
         )
     )
+    store.save(
+        ExpertFeedbackEntry(
+            hypothesis_id="h-high-2",
+            rating=5,
+            score=HypothesisScore(
+                novelty=0.85,
+                risk=0.1,
+                value=0.92,
+                evidence_strength=0.85,
+                final_score=0.88,
+            ),
+        )
+    )
 
     entries = store.load()
     weights = recalibrate_ranking_weights(entries)
     correlation = automatic_expert_correlation(entries)
 
-    assert [entry.hypothesis_id for entry in entries] == ["h-low", "h-high"]
+    assert [entry.hypothesis_id for entry in entries] == [
+        "h-low-1",
+        "h-low-2",
+        "h-mid",
+        "h-high-1",
+        "h-high-2",
+    ]
     assert weights.value > 0
     assert weights.evidence_strength > 0
     assert weights.inverse_risk > 0
@@ -344,6 +432,215 @@ def test_expert_correlation_and_weights_handle_sparse_or_constant_data() -> None
             inverse_risk=0.0,
         ),
     ) == 0.0
+
+
+def test_faithfulness_with_text_unit_ids() -> None:
+    hyp_no_match = ResearchHypothesis(
+        id="hyp-tu-no-match",
+        target_kpi="Conductivity",
+        statement="Hypothesis referencing a text unit not in context",
+        rationale="Text unit support missing",
+        test_plan="Check faithfulness drops",
+        score=HypothesisScore(
+            novelty=0.5, risk=0.2, value=0.6, evidence_strength=0.6, final_score=0.6,
+        ),
+        supporting_text_unit_ids=["tu-missing"],
+    )
+    hyp_with_match = ResearchHypothesis(
+        id="hyp-tu-match",
+        target_kpi="Conductivity",
+        statement="Hypothesis referencing a text unit present in context",
+        rationale="Text unit support present",
+        test_plan="Check faithfulness rises",
+        score=HypothesisScore(
+            novelty=0.5, risk=0.2, value=0.6, evidence_strength=0.6, final_score=0.6,
+        ),
+        supporting_text_unit_ids=["tu-1"],
+    )
+    context = MetricContext(text_unit_ids=["tu-1"])
+
+    result = evaluate_hypothesis_metrics(
+        hypotheses=[hyp_no_match, hyp_with_match],
+        context=context,
+    )
+
+    assert result.items[0].faithfulness == 0.0
+    assert result.items[1].faithfulness > 0.0
+
+
+def test_groundedness_with_supporting_entity_ids() -> None:
+    hyp_with_entity = ResearchHypothesis(
+        id="hyp-ent-match",
+        target_kpi="Conductivity",
+        statement="Hypothesis supported by an entity in context",
+        rationale="Entity present",
+        test_plan="Check groundedness",
+        score=HypothesisScore(
+            novelty=0.5, risk=0.2, value=0.6, evidence_strength=0.6, final_score=0.6,
+        ),
+        supporting_entity_ids=["entity-1"],
+    )
+    hyp_without_entity = ResearchHypothesis(
+        id="hyp-ent-missing",
+        target_kpi="Conductivity",
+        statement="Hypothesis supported by an entity not in context",
+        rationale="Entity absent",
+        test_plan="Check groundedness drops",
+        score=HypothesisScore(
+            novelty=0.5, risk=0.2, value=0.6, evidence_strength=0.6, final_score=0.6,
+        ),
+        supporting_entity_ids=["entity-missing"],
+    )
+    context = MetricContext(entity_ids=["entity-1"])
+
+    result = evaluate_hypothesis_metrics(
+        hypotheses=[hyp_with_entity, hyp_without_entity],
+        context=context,
+        coverage=None,
+    )
+
+    assert result.items[0].groundedness == 1.0
+    assert result.items[1].groundedness == 0.0
+
+
+def test_empty_support_sets_yield_zero_faithfulness_and_groundedness() -> None:
+    hypothesis = ResearchHypothesis(
+        id="hyp-empty-support",
+        target_kpi="Conductivity",
+        statement="Hypothesis with no supporting evidence at all",
+        rationale="No support",
+        test_plan="Verify zero metrics",
+        score=HypothesisScore(
+            novelty=0.5, risk=0.2, value=0.6, evidence_strength=0.6, final_score=0.6,
+        ),
+    )
+
+    result = evaluate_hypothesis_metrics(hypotheses=[hypothesis])
+
+    assert result.items[0].faithfulness == 0.0
+    assert result.items[0].groundedness == 0.0
+
+
+def test_mixed_novelty_one_measured_one_missing_returns_weighted_ratio() -> None:
+    """Mixed measured/missing cells return weighted novelty ratio."""
+    hypothesis = ResearchHypothesis(
+        id="hyp-mixed",
+        target_kpi="Conductivity",
+        statement="Hypothesis covering both measured and missing cells",
+        rationale="Mixed coverage",
+        test_plan="Check novelty",
+        score=HypothesisScore(
+            novelty=0.5, risk=0.2, value=0.6, evidence_strength=0.6, final_score=0.6,
+        ),
+        supporting_entity_ids=["mat-a", "mode-aging", "prop-hardness", "mode-hip"],
+    )
+    coverage = build_coverage_heatmap(
+        axes=CoverageAxis(
+            material_ids=["mat-a"],
+            mode_ids=["mode-aging", "mode-hip"],
+            property_ids=["prop-hardness"],
+        ),
+        observations=[
+            Observation(
+                id="obs-1",
+                material_id="mat-a",
+                mode_id="mode-aging",
+                property_id="prop-hardness",
+                evidence_id="ev-1",
+            )
+        ],
+    )
+
+    result = evaluate_hypothesis_metrics(
+        hypotheses=[hypothesis],
+        coverage=coverage,
+    )
+
+    assert result.items[0].novelty == 0.5
+    assert result.items[0].coverage_status == "mixed"
+
+
+def test_score_with_weights_edge_cases() -> None:
+    score = HypothesisScore(
+        novelty=0.8, risk=1.0, value=0.9, evidence_strength=0.7, final_score=0.5,
+    )
+
+    zero_result = score_with_weights(
+        score,
+        RankingWeights(value=0.0, evidence_strength=0.0, novelty=0.0, inverse_risk=0.0),
+    )
+    assert zero_result == 0.0
+
+    perfect_score = HypothesisScore(
+        novelty=1.0, risk=0.0, value=1.0, evidence_strength=1.0, final_score=1.0,
+    )
+    default_result = score_with_weights(perfect_score, RankingWeights(
+        value=0.35, evidence_strength=0.25, novelty=0.20, inverse_risk=0.20,
+    ))
+    assert default_result == 1.0
+
+    max_risk_score = HypothesisScore(
+        novelty=0.5, risk=1.0, value=0.5, evidence_strength=0.5, final_score=0.5,
+    )
+    weights = RankingWeights(
+        value=0.0, evidence_strength=0.0, novelty=0.0, inverse_risk=1.0,
+    )
+    result = score_with_weights(max_risk_score, weights)
+    assert result == 0.0
+
+
+def test_compare_hypothesis_runs_identical_produces_zero_deltas() -> None:
+    run_input = RunMetricsInput(
+        name="run-a",
+        result=HypothesisGenerationResult(
+            target_kpi="Conductivity",
+            hypotheses=[
+                _hypothesis("hyp-1", final_score=0.5, evidence_ids=["ev-1"]),
+            ],
+        ),
+        context=MetricContext(evidence_ids=["ev-1"]),
+        extraction_benchmark=ExtractionBenchmark(
+            samples=[
+                ExtractionBenchmarkSample(
+                    sample_id="doc-1",
+                    expected_entities=[EntityMatch(kind=EntityKind.MATERIAL, name="CuCrZr")],
+                    extracted_entities=[EntityMatch(kind=EntityKind.MATERIAL, name="CuCrZr")],
+                    expected_relations=[],
+                    extracted_relations=[],
+                )
+            ]
+        ),
+        context_benchmark=ContextBenchmark(
+            expected_context_ids=["ev-1"],
+            retrieved_context_ids=["ev-1"],
+            expected_entity_ids=["mat-1"],
+            retrieved_entity_ids=["mat-1"],
+        ),
+    )
+    run_clone = run_input.model_copy(deep=True)
+    run_clone.name = "run-b"
+
+    comparison = compare_hypothesis_runs(run_input, run_clone)
+
+    assert all(delta == 0.0 for delta in comparison.deltas.values())
+
+
+def test_evaluate_extraction_benchmark_empty_returns_zero_f1() -> None:
+    benchmark = ExtractionBenchmark(samples=[])
+
+    result = evaluate_extraction_benchmark(benchmark)
+
+    assert result.entity.f1 == 0.0
+    assert result.relation.f1 == 0.0
+
+
+def test_evaluate_context_metrics_empty_returns_zero_recall() -> None:
+    benchmark = ContextBenchmark()
+
+    result = evaluate_context_metrics(benchmark)
+
+    assert result.context_recall == 0.0
+    assert result.context_entities_recall == 0.0
 
 
 def test_hypothesis_metrics_empty_input_returns_zero_summary() -> None:

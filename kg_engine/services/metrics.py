@@ -487,9 +487,16 @@ def apply_calibrated_ranking(
 
 def recalibrate_ranking_weights(
     feedback: list[ExpertFeedbackEntry],
+    *,
+    min_entries: int = 5,
 ) -> RankingWeights:
     """Derive ranking weights from expert ratings using positive correlations."""
-    if len(feedback) < 2:
+    if len(feedback) < min_entries:
+        logger.warning(
+            "Not enough feedback entries (%d < %d) for calibration, using default weights",
+            len(feedback),
+            min_entries,
+        )
         return _default_weights()
 
     ratings = [float(entry.rating) for entry in feedback]
@@ -609,9 +616,13 @@ def _novelty_from_coverage(
     ]
     if not matching_cells:
         return hypothesis.score.novelty, "unknown"
-    if any(cell.measured for cell in matching_cells):
+    measured_count = sum(1 for cell in matching_cells if cell.measured)
+    missing_count = len(matching_cells) - measured_count
+    if missing_count == 0:
         return 0.0, "measured"
-    return 1.0, "missing"
+    if measured_count == 0:
+        return 1.0, "missing"
+    return missing_count / len(matching_cells), "mixed"
 
 
 def _precision_recall_f1(

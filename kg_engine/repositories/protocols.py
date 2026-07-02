@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Any
 from typing import Protocol
 
 from kg_engine.domain.models import CoverageRuleInput
@@ -84,4 +85,10 @@ class MaterialsKGRepository(Protocol):
 
     def delete_source(self, source_id: str) -> int:
         """Delete all entities/traces/etc originating from source_id. Returns count removed."""
+        ...
+
+    def batch_run(
+        self, operations: list[tuple[str, dict[str, Any]]]
+    ) -> list[list[object]]:
+        """Execute multiple Cypher operations in a single transaction."""
         ...

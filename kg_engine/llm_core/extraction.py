@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any
 
 from kg_engine.domain.models import DocumentExtractionResult
@@ -159,8 +160,9 @@ def build_answer_messages(
 # ── Extraction prompts ──────────────────────────────────────────────
 
 
-_EXTRACT_PROMPT = """You are a materials science knowledge graph extractor.
-Analyze the following document and extract entities, experiments, and relationships.
+_ENTITY_PROMPT = """You are a materials science knowledge graph entity extractor.
+Extract only canonical entities from the document. Do not extract relationships
+or measurements in this step.
 
 Document title: {title}
 Document text:
@@ -169,8 +171,59 @@ Document text:
 Return a JSON object with:
 {{
   "entities": [
-    {{"kind": "material|property|mode|equipment|team|tag", "name": "...", "aliases": [...], "properties": {{}}}}
-  ],
+    {{"kind": "material|property|mode|equipment|team|document|tag", "name": "...", "aliases": [...], "properties": {{}}}}
+  ]
+}}
+
+Rules:
+- Extract at most {max_entities} entities.
+- Every entity MUST have a non-empty "name" field.
+- Prefer canonical material names, alloy names, process/mode names, measured properties, equipment, teams, documents, and tags.
+- Preserve aliases exactly when the document gives abbreviations or alternate spellings.
+- If no entities are found, return {{"entities": []}}.
+- Return ONLY valid JSON, no markdown."""
+
+
+_RELATIONSHIP_PROMPT = """You are a materials science knowledge graph relationship extractor.
+Use the provided entity list as the only allowed node set. Extract only explicit
+or strongly implied relationships between those entities.
+
+Document title: {title}
+Known entities:
+{entities_json}
+
+Document text:
+{content}
+
+Return a JSON object with:
+{{
+  "relationships": [
+    {{"source": "entity_name", "target": "entity_name", "type": "evaluates_material|uses_mode|measures_property|uses_equipment|performed_by|documented_in|tagged_with|references|related_to"}}
+  ]
+}}
+
+Rules:
+- Extract at most {max_relationships} relationships.
+- Every relationship source and target MUST match an entity name from Known entities.
+- Do not create new entities in this step.
+- Use "related_to" when the relation is useful but does not fit a stricter type.
+- If no relationships are found, return {{"relationships": []}}.
+- Return ONLY valid JSON, no markdown."""
+
+
+_MEASUREMENT_PROMPT = """You are a materials science measurement and experiment extractor.
+Use the provided entity list as the vocabulary. Extract experiments, numerical
+observations, units, and concise findings. Do not invent values.
+
+Document title: {title}
+Known entities:
+{entities_json}
+
+Document text:
+{content}
+
+Return a JSON object with:
+{{
   "experiments": [
     {{
       "experiment_id": "...",
@@ -178,29 +231,35 @@ Return a JSON object with:
       "material_name": "...",
       "mode_name": "...",
       "observations": [
-        {{"property_name": "...", "value": number, "unit": "...", "confidence": 0.95}}
+        {{"property_name": "...", "value": number, "unit": "...", "comparator": null, "fragment": "...", "row_reference": null, "confidence": 0.95}}
       ],
-      "findings": [{{"summary": "...", "confidence": 0.9}}]
+      "findings": [{{"summary": "...", "fragment": "...", "confidence": 0.9}}]
     }}
-  ],
-  "relationships": [
-    {{"source": "entity_name", "target": "entity_name", "type": "evaluates_material|uses_mode|measures_property|uses_equipment|performed_by|documented_in|references|related_to"}}
   ]
 }}
 
 Rules:
-- Extract at most {max_entities} entities, {max_experiments} experiments, {max_relationships} relationships.
-- Every entity MUST have a non-empty "name" field.
-- Every experiment MUST have a non-empty "material_name" field.
-- Every relationship MUST reference entity names that appear in the "entities" array.
+- Extract at most {max_experiments} experiments.
+- Every experiment MUST have a non-empty material_name.
+- Prefer material_name, mode_name, and property_name values from Known entities.
 - Extract materials (alloys, steels, titanium, composites, etc.)
 - Extract properties (tensile strength, hardness, fatigue, conductivity, etc.)
 - Extract processing modes (annealing, aging, welding, sintering, etc.)
-- Extract equipment and team names if mentioned
-- For experiments, extract actual numerical measurements with units
-- Be precise with values and units
-- If no structured data found, return empty arrays
-- Return ONLY valid JSON, no markdown"""
+- Extract actual numerical measurements with units, including MPa, HRC, HV, %IACS, %, degC/C, min, h, and mm/s.
+- Preserve comparator signs such as >, <, >=, <= when present.
+- If no structured measurements are found, return {{"experiments": []}}.
+- Return ONLY valid JSON, no markdown."""
+
+
+_MONOLITHIC_FALLBACK_PROMPT = """You are a materials science knowledge graph extractor.
+Analyze the document and return entities, relationships, and experiments in one
+JSON object matching the same schemas used by the phased extraction pipeline.
+
+Document title: {title}
+Document text:
+{content}
+
+Return ONLY valid JSON with keys: entities, relationships, experiments, warnings."""
 
 
 _UPLOAD_STRUCTURE_PROMPT = """You are a materials science ingestion agent.
@@ -309,6 +368,9 @@ def _validate_experiment(raw: dict[str, Any], index: int) -> ExtractedExperiment
                 property_name=prop_name,
                 value=obs.get("value") if isinstance(obs.get("value"), int | float) else None,
                 unit=(obs.get("unit") or "").strip() or None,
+                comparator=(obs.get("comparator") or "").strip() or None,
+                fragment=(obs.get("fragment") or "").strip() or None,
+                row_reference=(obs.get("row_reference") or "").strip() or None,
                 confidence=_safe_float(obs.get("confidence"), 0.85),
                 extraction_method="llm_extraction",
             )
@@ -322,6 +384,7 @@ def _validate_experiment(raw: dict[str, Any], index: int) -> ExtractedExperiment
         findings.append(
             FindingInput(
                 summary=summary,
+                fragment=(f.get("fragment") or "").strip() or None,
                 confidence=_safe_float(f.get("confidence"), 0.85),
                 extraction_method="llm_extraction",
             )
@@ -451,6 +514,302 @@ def _validate_extraction(raw: dict[str, Any]) -> DocumentExtractionResult:
     )
 
 
+def select_extraction_strategy(title: str, text: str) -> str:
+    """Choose a document processing strategy from cheap document signals."""
+    _ = title
+    stripped = text.strip()
+    if not stripped:
+        return "empty"
+    if len(stripped) > 12000:
+        return "chunked_phased"
+    has_numeric_signal = bool(
+        re.search(
+            r"\d+(?:[.,]\d+)?\s*(MPa|GPa|HRC|HV|%IACS|%)\b",
+            stripped,
+            re.IGNORECASE,
+        )
+    )
+    has_table_signal = "\t" in stripped or stripped.count("|") >= 4
+    has_relation_signal = bool(
+        re.search(
+            r"\b(anneal|aging|aged|weld|sinter|measured|evaluated|uses|performed|documented)\b",
+            stripped,
+            re.IGNORECASE,
+        )
+    )
+    if has_numeric_signal or has_table_signal or has_relation_signal:
+        return "phased"
+    return "entity_first"
+
+
+def _json_messages(role: str, prompt: str) -> list[dict[str, str]]:
+    return [
+        {
+            "role": "system",
+            "content": (
+                f"You are {role}. Return one valid JSON object only. "
+                "Do not include markdown or prose outside JSON."
+            ),
+        },
+        {"role": "user", "content": prompt},
+    ]
+
+
+def _call_json_phase(
+    provider: LLMProvider,
+    *,
+    role: str,
+    prompt: str,
+    max_tokens: int,
+) -> dict[str, Any]:
+    raw = provider.chat_json(
+        _json_messages(role, prompt),
+        temperature=0.1,
+        max_tokens=max_tokens,
+    )
+    return raw if isinstance(raw, dict) else {}
+
+
+def _entities_json(entities: list[ExtractedEntity]) -> str:
+    return json.dumps(
+        [
+            {
+                "kind": entity.kind.value,
+                "name": entity.name,
+                "aliases": entity.aliases,
+            }
+            for entity in entities
+        ],
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
+_CHUNK_SIZE = 3000
+_CHUNK_OVERLAP = 500
+
+
+def _chunk_text(text: str, chunk_size: int = _CHUNK_SIZE, overlap: int = _CHUNK_OVERLAP) -> list[str]:
+    """Split text into overlapping chunks of approximately chunk_size characters."""
+    if len(text) <= chunk_size:
+        return [text]
+    chunks: list[str] = []
+    start = 0
+    while start < len(text):
+        end = min(start + chunk_size, len(text))
+        chunks.append(text[start:end])
+        if end == len(text):
+            break
+        start += chunk_size - overlap
+    return chunks
+
+
+def _deduplicate_entities(entities: list[ExtractedEntity]) -> list[ExtractedEntity]:
+    """Deduplicate entities by normalized (lowered) name, keeping first occurrence."""
+    seen: set[str] = set()
+    result: list[ExtractedEntity] = []
+    for e in entities:
+        key = e.name.strip().lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(e)
+    return result
+
+
+def _deduplicate_relationships(relationships: list[ExtractedRelationship]) -> list[ExtractedRelationship]:
+    """Deduplicate relationships by (source, target, type) tuple."""
+    seen: set[tuple[str, str, str]] = set()
+    result: list[ExtractedRelationship] = []
+    for r in relationships:
+        key = (r.source.strip().lower(), r.target.strip().lower(), r.type.strip().lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(r)
+    return result
+
+
+def _merge_chunk_results(
+    chunk_results: list[DocumentExtractionResult],
+) -> DocumentExtractionResult:
+    """Merge extraction results from multiple chunks into one."""
+    all_entities: list[ExtractedEntity] = []
+    all_experiments: list[ExtractedExperiment] = []
+    all_relationships: list[ExtractedRelationship] = []
+    all_warnings: list[str] = []
+    all_trace: list[dict[str, Any]] = []
+    seen_exp_ids: set[str] = set()
+    exp_counter = 0
+
+    for result in chunk_results:
+        all_entities.extend(result.entities)
+        all_relationships.extend(result.relationships)
+        all_warnings.extend(result.warnings or [])
+        all_trace.extend(result.agent_trace or [])
+
+        for exp in result.experiments:
+            exp_id = exp.experiment_id
+            if exp_id in seen_exp_ids:
+                exp_counter += 1
+                exp_id = f"{exp_id}_chunk{exp_counter}"
+                exp = ExtractedExperiment(
+                    experiment_id=exp_id,
+                    title=exp.title,
+                    material_name=exp.material_name,
+                    mode_name=exp.mode_name,
+                    observations=exp.observations,
+                    findings=exp.findings,
+                )
+            seen_exp_ids.add(exp_id)
+            all_experiments.append(exp)
+
+    entities = _deduplicate_entities(all_entities)
+    relationships = _deduplicate_relationships(all_relationships)
+
+    return DocumentExtractionResult(
+        entities=entities,
+        experiments=all_experiments[:_MAX_EXTRACTED_EXPERIMENTS],
+        relationships=relationships[:_MAX_EXTRACTED_RELATIONSHIPS],
+        warnings=all_warnings,
+        extraction_engine="llm_chunked_phased",
+        agent_trace=all_trace,
+    )
+
+
+def _merge_phase_results(
+    *,
+    entities_raw: dict[str, Any],
+    relationships_raw: dict[str, Any],
+    measurements_raw: dict[str, Any],
+    strategy: str,
+    trace: list[dict[str, Any]],
+) -> DocumentExtractionResult:
+    entity_result = _validate_extraction({"entities": entities_raw.get("entities") or []})
+    known_names = {entity.name for entity in entity_result.entities}
+    name_index: dict[str, str] = {}
+    for entity in entity_result.entities:
+        name_index[entity.name] = entity.name
+        name_index[entity.name.lower()] = entity.name
+        for alias in entity.aliases:
+            name_index[alias] = entity.name
+            name_index[alias.lower()] = entity.name
+
+    relationships: list[ExtractedRelationship] = []
+    raw_relationships = relationships_raw.get("relationships") or []
+    if isinstance(raw_relationships, list):
+        for item in raw_relationships:
+            if not isinstance(item, dict):
+                continue
+            rel = _validate_relationship(item, known_names, name_index)
+            if rel is not None:
+                relationships.append(rel)
+    relationships = relationships[:_MAX_EXTRACTED_RELATIONSHIPS]
+
+    experiments_result = _validate_extraction(
+        {"experiments": measurements_raw.get("experiments") or []}
+    )
+    warnings = [
+        *entity_result.warnings,
+        *experiments_result.warnings,
+    ]
+    result = DocumentExtractionResult(
+        entities=entity_result.entities,
+        experiments=experiments_result.experiments[:_MAX_EXTRACTED_EXPERIMENTS],
+        relationships=relationships,
+        warnings=warnings,
+        extraction_engine=f"llm_{strategy}",
+        agent_trace=trace,
+    )
+    if not result.entities and not result.experiments and not result.relationships:
+        result.warnings.append("No structured graph data extracted")
+    return result
+
+
+def _extract_chunked_phased(
+    provider: LLMProvider,
+    title: str,
+    full_text: str,
+    budget: int,
+    parent_trace: list[dict[str, Any]],
+) -> DocumentExtractionResult:
+    """Chunk a long document and run phased extraction on each chunk."""
+    chunks = _chunk_text(full_text, chunk_size=_CHUNK_SIZE, overlap=_CHUNK_OVERLAP)
+    logger.info(
+        "Document '%s' chunked into %d segments (size=%d, overlap=%d) for extraction",
+        title, len(chunks), _CHUNK_SIZE, _CHUNK_OVERLAP,
+    )
+    chunk_results: list[DocumentExtractionResult] = []
+    for idx, chunk in enumerate(chunks):
+        chunk_budget = min(budget, len(chunk))
+        truncated_chunk = chunk[:chunk_budget] if len(chunk) > chunk_budget else chunk
+        chunk_trace: list[dict[str, Any]] = [
+            *parent_trace,
+            {"event": "chunk_start", "chunk_index": idx, "chunk_chars": len(chunk)},
+        ]
+
+        entities_raw = _call_json_phase(
+            provider,
+            role="a materials science entity extractor",
+            prompt=_ENTITY_PROMPT.format(
+                title=f"{title} (chunk {idx + 1}/{len(chunks)})",
+                content=truncated_chunk,
+                max_entities=_MAX_EXTRACTED_ENTITIES,
+            ),
+            max_tokens=2048,
+        )
+        chunk_trace.append(
+            {"event": "entities_extracted", "count": len(entities_raw.get("entities") or [])}
+        )
+        entity_result = _validate_extraction({"entities": entities_raw.get("entities") or []})
+        entities_payload = _entities_json(entity_result.entities)
+
+        relationships_raw: dict[str, Any] = {"relationships": []}
+        if entity_result.entities:
+            relationships_raw = _call_json_phase(
+                provider,
+                role="a materials science relationship extractor",
+                prompt=_RELATIONSHIP_PROMPT.format(
+                    title=f"{title} (chunk {idx + 1}/{len(chunks)})",
+                    entities_json=entities_payload,
+                    content=truncated_chunk,
+                    max_relationships=_MAX_EXTRACTED_RELATIONSHIPS,
+                ),
+                max_tokens=2048,
+            )
+        chunk_trace.append(
+            {"event": "relationships_extracted", "count": len(relationships_raw.get("relationships") or [])}
+        )
+
+        measurements_raw: dict[str, Any] = {"experiments": []}
+        if re.search(r"\d", truncated_chunk):
+            measurements_raw = _call_json_phase(
+                provider,
+                role="a materials science measurement extractor",
+                prompt=_MEASUREMENT_PROMPT.format(
+                    title=f"{title} (chunk {idx + 1}/{len(chunks)})",
+                    entities_json=entities_payload,
+                    content=truncated_chunk,
+                    max_experiments=_MAX_EXTRACTED_EXPERIMENTS,
+                ),
+                max_tokens=4096,
+            )
+        chunk_trace.append(
+            {"event": "measurements_extracted", "count": len(measurements_raw.get("experiments") or [])}
+        )
+
+        chunk_result = _merge_phase_results(
+            entities_raw=entities_raw,
+            relationships_raw=relationships_raw,
+            measurements_raw=measurements_raw,
+            strategy="chunked_phased",
+            trace=chunk_trace,
+        )
+        chunk_results.append(chunk_result)
+
+    return _merge_chunk_results(chunk_results)
+
+
 # ── Public extraction functions ─────────────────────────────────────
 
 
@@ -475,28 +834,110 @@ def extract_entities_from_document(
             title, len(text), budget,
         )
 
-    messages = [
+    strategy = select_extraction_strategy(title, text)
+    trace: list[dict[str, Any]] = [
         {
-            "role": "system",
-            "content": "You are a materials science knowledge graph extractor. Return only valid JSON.",
-        },
+            "event": "strategy_selected",
+            "strategy": strategy,
+            "title": title,
+            "chars": len(text),
+        }
+    ]
+    if strategy == "empty":
+        return DocumentExtractionResult(
+            warnings=["Document text is empty"],
+            extraction_engine="llm_empty",
+            agent_trace=trace,
+        )
+
+    if strategy == "chunked_phased":
+        return _extract_chunked_phased(provider, title, text, budget, trace)
+
+    entities_raw = _call_json_phase(
+        provider,
+        role="a materials science entity extractor",
+        prompt=_ENTITY_PROMPT.format(
+            title=title,
+            content=truncated,
+            max_entities=_MAX_EXTRACTED_ENTITIES,
+        ),
+        max_tokens=2048,
+    )
+    trace.append(
         {
-            "role": "user",
-            "content": _EXTRACT_PROMPT.format(
+            "event": "entities_extracted",
+            "count": len(entities_raw.get("entities") or []),
+        }
+    )
+    entity_result = _validate_extraction({"entities": entities_raw.get("entities") or []})
+
+    if strategy == "entity_first" and not entity_result.entities:
+        return DocumentExtractionResult(
+            warnings=["LLM returned no entities"],
+            extraction_engine="llm_entity_first",
+            agent_trace=trace,
+        )
+
+    entities_payload = _entities_json(entity_result.entities)
+    relationships_raw: dict[str, Any] = {"relationships": []}
+    if entity_result.entities:
+        relationships_raw = _call_json_phase(
+            provider,
+            role="a materials science relationship extractor",
+            prompt=_RELATIONSHIP_PROMPT.format(
                 title=title,
+                entities_json=entities_payload,
                 content=truncated,
-                max_entities=_MAX_EXTRACTED_ENTITIES,
-                max_experiments=_MAX_EXTRACTED_EXPERIMENTS,
                 max_relationships=_MAX_EXTRACTED_RELATIONSHIPS,
             ),
-        },
-    ]
-    raw = provider.chat_json(messages, temperature=0.1, max_tokens=4096)
-    if not raw:
-        return DocumentExtractionResult(
-            warnings=["LLM returned empty response"],
+            max_tokens=2048,
         )
-    return _validate_extraction(raw)
+    trace.append(
+        {
+            "event": "relationships_extracted",
+            "count": len(relationships_raw.get("relationships") or []),
+        }
+    )
+
+    measurements_raw: dict[str, Any] = {"experiments": []}
+    if strategy in {"phased", "chunked_phased"} or re.search(r"\d", truncated):
+        measurements_raw = _call_json_phase(
+            provider,
+            role="a materials science measurement extractor",
+            prompt=_MEASUREMENT_PROMPT.format(
+                title=title,
+                entities_json=entities_payload,
+                content=truncated,
+                max_experiments=_MAX_EXTRACTED_EXPERIMENTS,
+            ),
+            max_tokens=4096,
+        )
+    trace.append(
+        {
+            "event": "measurements_extracted",
+            "count": len(measurements_raw.get("experiments") or []),
+        }
+    )
+
+    result = _merge_phase_results(
+        entities_raw=entities_raw,
+        relationships_raw=relationships_raw,
+        measurements_raw=measurements_raw,
+        strategy=strategy,
+        trace=trace,
+    )
+    if not result.entities and not result.experiments and not result.relationships:
+        raw = _call_json_phase(
+            provider,
+            role="a materials science knowledge graph extractor",
+            prompt=_MONOLITHIC_FALLBACK_PROMPT.format(title=title, content=truncated),
+            max_tokens=4096,
+        )
+        if raw:
+            result = _validate_extraction(raw)
+            result.extraction_engine = "llm_monolithic_fallback"
+            result.agent_trace = [*trace, {"event": "monolithic_fallback_used"}]
+    return result
 
 
 def structure_upload_with_llm(
