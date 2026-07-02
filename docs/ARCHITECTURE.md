@@ -198,6 +198,7 @@ Full 30-line deps: deepagents, langchain, neo4j, networkx, openai, tiktoken, fas
 | File | Purpose |
 |------|---------|
 | `ARCHITECTURE.md` | **This file.** Full architecture, file structure, deployment, development |
+| `TASK1_AGENT_COORDINATION.md` | Coordination contract for parallel Task 1 agents: ownership, conflict rules, shared acceptance checklist |
 | `mimo-runs/` | MiMo delegation reports and prompts. Runs are stored by date/task and may include failure summaries when MiMo cannot start |
 
 ---
