@@ -75,7 +75,7 @@ class Settings(BaseSettings):
     # LLM context management
     llm_context_window: int = 128000
     llm_safety_margin_tokens: int = 500
-    llm_embedding_truncation_chars: int = 2000
+    llm_embedding_truncation_chars: int = 8000
     llm_max_retries: int = 3
     llm_retry_base_delay: float = 1.0
 

@@ -75,6 +75,7 @@ class Neo4jMaterialsKGRepository:
             "CREATE CONSTRAINT text_unit_id IF NOT EXISTS FOR (n:TextUnit) REQUIRE n.id IS UNIQUE",
             "CREATE CONSTRAINT coverage_rule_id IF NOT EXISTS FOR (n:CoverageRule) REQUIRE n.rule_id IS UNIQUE",
             "CREATE CONSTRAINT kg_relation_id IF NOT EXISTS FOR ()-[r:KG_RELATION]-() REQUIRE r.id IS UNIQUE",
+            "CREATE FULLTEXT INDEX text_unit_fulltext IF NOT EXISTS FOR (n:TextUnit) ON EACH [n.content]",
         ]
         with self._session() as session:
             for statement in statements:
@@ -354,7 +355,150 @@ class Neo4jMaterialsKGRepository:
         )
         return text_unit
 
+    def batch_upsert_observations(self, observations: list[Observation]) -> list[Observation]:
+        """Upsert multiple observations in a single transaction."""
+        if not observations:
+            return []
+        with self._session() as session:
+            with session.begin_transaction() as tx:
+                for obs in observations:
+                    tx.run(
+                        """
+                        MERGE (n:Observation {id: $id})
+                        SET n += $payload
+                        WITH n
+                        OPTIONAL MATCH (m:Entity {id: $material_id})
+                        OPTIONAL MATCH (p:Entity {id: $property_id})
+                        OPTIONAL MATCH (e:Entity {id: $experiment_id})
+                        OPTIONAL MATCH (mode:Entity {id: $mode_id})
+                        OPTIONAL MATCH (ev:Evidence {id: $evidence_id})
+                        FOREACH (_ IN CASE WHEN m IS NULL THEN [] ELSE [1] END | MERGE (n)-[:OBSERVED_MATERIAL]->(m))
+                        FOREACH (_ IN CASE WHEN p IS NULL THEN [] ELSE [1] END | MERGE (n)-[:OBSERVED_PROPERTY]->(p))
+                        FOREACH (_ IN CASE WHEN e IS NULL THEN [] ELSE [1] END | MERGE (n)-[:OBSERVED_IN]->(e))
+                        FOREACH (_ IN CASE WHEN mode IS NULL THEN [] ELSE [1] END | MERGE (n)-[:OBSERVED_MODE]->(mode))
+                        FOREACH (_ IN CASE WHEN ev IS NULL THEN [] ELSE [1] END | MERGE (n)-[:SUPPORTED_BY]->(ev))
+                        RETURN n
+                        """,
+                        {
+                            "id": obs.id,
+                            "payload": self._observation_to_properties(obs),
+                            "material_id": obs.material_id,
+                            "property_id": obs.property_id,
+                            "experiment_id": obs.experiment_id,
+                            "mode_id": obs.mode_id,
+                            "evidence_id": obs.evidence_id,
+                        },
+                    )
+                tx.commit()
+        return observations
+
+    def batch_upsert_traces(self, traces: list[DecisionTrace]) -> list[DecisionTrace]:
+        """Upsert multiple decision traces in a single transaction."""
+        if not traces:
+            return []
+        with self._session() as session:
+            with session.begin_transaction() as tx:
+                for trace in traces:
+                    tx.run(
+                        """
+                        MERGE (n:DecisionTrace {id: $id})
+                        SET n += $payload
+                        RETURN n
+                        """,
+                        {"id": trace.id, "payload": self._trace_to_properties(trace)},
+                    )
+                tx.commit()
+        return traces
+
+    def batch_upsert_evidence(self, evidence_list: list[Evidence]) -> list[Evidence]:
+        """Upsert multiple evidence records in a single transaction."""
+        if not evidence_list:
+            return []
+        with self._session() as session:
+            with session.begin_transaction() as tx:
+                for evidence in evidence_list:
+                    tx.run(
+                        """
+                        MERGE (n:Evidence {id: $id})
+                        SET n += $payload
+                        RETURN n
+                        """,
+                        {"id": evidence.id, "payload": self._evidence_to_properties(evidence)},
+                    )
+                tx.commit()
+        return evidence_list
+
+    def batch_upsert_relations(self, relations: list[Relation]) -> list[Relation]:
+        """Upsert multiple relations in a single transaction."""
+        if not relations:
+            return []
+        with self._session() as session:
+            with session.begin_transaction() as tx:
+                for relation in relations:
+                    tx.run(
+                        """
+                        MATCH (source:Entity {id: $source_id})
+                        MATCH (target:Entity {id: $target_id})
+                        MERGE (source)-[r:KG_RELATION {id: $id}]->(target)
+                        SET r += $payload
+                        WITH r, source, target
+                        OPTIONAL MATCH (source)-[old:KG_RELATION {id: $id}]->(target)
+                        WITH r, source, target,
+                             CASE WHEN old IS NOT NULL
+                                  THEN coalesce(old.evidence_ids, []) + $new_evidence_ids
+                                  ELSE $new_evidence_ids
+                             END AS merged_evidence
+                        SET r.evidence_ids = merged_evidence
+                        RETURN r, source.id AS source_id, target.id AS target_id
+                        """,
+                        {
+                            "id": relation.id,
+                            "source_id": relation.source_entity_id,
+                            "target_id": relation.target_entity_id,
+                            "payload": self._relation_to_properties(relation),
+                            "new_evidence_ids": relation.evidence_ids,
+                        },
+                    )
+                tx.commit()
+        return relations
+
+    def batch_upsert_text_units(self, text_units: list[SearchTextUnit]) -> list[SearchTextUnit]:
+        """Upsert multiple text units in a single transaction."""
+        if not text_units:
+            return []
+        with self._session() as session:
+            with session.begin_transaction() as tx:
+                for text_unit in text_units:
+                    tx.run(
+                        """
+                        MERGE (n:TextUnit {id: $id})
+                        SET n += $payload
+                        RETURN n
+                        """,
+                        {"id": text_unit.id, "payload": self._text_unit_to_properties(text_unit)},
+                    )
+                tx.commit()
+        return text_units
+
     def search_text_units(self, query: str, *, limit: int = 5) -> list[SearchTextUnit]:
+        terms = [term.lower() for term in query.split() if len(term) > 2]
+        if not terms:
+            terms = [query.lower()]
+        fulltext_query = " OR ".join(terms)
+        try:
+            rows = self._run(
+                """
+                CALL db.index.fulltext.queryNodes('text_unit_fulltext', $fulltext_query)
+                YIELD node AS n, score
+                RETURN n
+                LIMIT $limit
+                """,
+                {"fulltext_query": fulltext_query, "limit": limit},
+            )
+            if rows:
+                return [self._node_to_text_unit(row["n"]) for row in rows]
+        except Exception:
+            pass
         rows = self._run(
             """
             MATCH (n:TextUnit)
@@ -365,7 +509,7 @@ class Neo4jMaterialsKGRepository:
             """,
             {
                 "text_query": query,
-                "terms": [term.lower() for term in query.split() if len(term) > 2],
+                "terms": terms,
                 "limit": limit,
             },
         )
@@ -380,6 +524,19 @@ class Neo4jMaterialsKGRepository:
         with self._session() as session:
             result = session.run(query, **params)
             return list(result)
+
+    def batch_run(self, operations: list[tuple[str, dict[str, Any]]]) -> list[list[Any]]:
+        """Execute multiple Cypher operations in a single transaction."""
+        if not operations:
+            return []
+        with self._session() as session:
+            with session.begin_transaction() as tx:
+                results: list[list[Any]] = []
+                for query, params in operations:
+                    result = tx.run(query, **params)
+                    results.append(list(result))
+                tx.commit()
+                return results
 
     def _entity_to_properties(self, entity: Entity) -> dict[str, Any]:
         return _neo4j_properties(

@@ -91,23 +91,50 @@ def _subagents() -> list[dict[str, Any]]:
     ]
 
 
-def _system_prompt() -> str:
-    return """
+def _system_prompt(request: HypothesisInput, source_overview: dict[str, Any]) -> str:
+    source_count = len(source_overview.get("source_files") or [])
+    by_kind = source_overview.get("by_kind") or {}
+    request_focus = {
+        "target_kpi": request.target_kpi,
+        "question": request.question,
+        "material": request.material,
+        "mode": request.mode,
+        "property_name": request.property_name,
+        "source_ids": request.source_ids,
+        "max_hypotheses": request.max_hypotheses,
+    }
+    return f"""
 You are the Materials Hypothesis Factory coordinator.
 
 Goal:
 Generate interpretable, testable R&D hypotheses for materials science and
 technology projects from the graph knowledge base.
 
+Current request focus:
+{json.dumps(request_focus, ensure_ascii=False)}
+
+Loaded graph profile:
+- source_count: {source_count}
+- entity_counts_by_kind: {json.dumps(by_kind, ensure_ascii=False)}
+- observations: {source_overview.get("total_observations", 0)}
+- relations: {source_overview.get("total_relations", 0)}
+- evidence: {source_overview.get("total_evidence", 0)}
+
 Rules:
 - Use the KG tools before producing the final answer.
 - Treat kg_generate_baseline_hypotheses as the deterministic baseline, not as a
   final answer to copy blindly.
+- Choose tools based on the request: material/mode/property slices, property
+  ranges, graph traversal, decision history, text evidence, and gaps are all
+  available.
 - Use subagents for evidence, novelty, risk, and ranking review on non-trivial
   tasks.
 - Do not invent entities, observations, evidence ids, source ids, or scores.
 - Keep all hypotheses grounded in returned observations, evidence, text units,
   or data gaps.
+- Every hypothesis must include at least one concrete graph support id in
+  supporting_evidence_ids, supporting_observation_ids, supporting_text_unit_ids,
+  or data_gap_ids. Unsupported hypotheses will be discarded.
 - Return only strict JSON matching HypothesisGenerationResult. No markdown,
   no prose wrapper, no fenced code block.
 - Set generation_engine to "deepagents".
@@ -171,6 +198,76 @@ def _parse_agent_result(agent_result: Any) -> HypothesisGenerationResult:
         raise DeepAgentsResultError(msg) from exc
 
 
+def _filter_ungrounded_hypotheses(
+    result: HypothesisGenerationResult,
+) -> HypothesisGenerationResult:
+    evidence_ids = {item.id for item in result.evidence}
+    observation_ids = {item.id for item in result.observations}
+    text_unit_ids = {item.id for item in result.search_hits}
+    data_gap_ids = {item.id for item in result.data_gaps}
+    entity_ids = {item.id for item in result.matched_entities}
+
+    # Collect IDs from agent_trace tool_call results
+    trace_ids: set[str] = set()
+    for entry in result.agent_trace:
+        if not isinstance(entry, dict):
+            continue
+        for key in (
+            "entity_ids",
+            "observation_ids",
+            "evidence_ids",
+            "matched_ids",
+            "text_unit_ids",
+        ):
+            val = entry.get(key)
+            if isinstance(val, list):
+                trace_ids.update(str(v) for v in val if v)
+
+    all_known_ids = (
+        evidence_ids | observation_ids | text_unit_ids | data_gap_ids
+        | entity_ids | trace_ids
+    )
+
+    kept = []
+    rejected: list[str] = []
+    for hypothesis in result.hypotheses:
+        has_graph_support = any(
+            [
+                set(hypothesis.supporting_evidence_ids) & evidence_ids,
+                set(hypothesis.supporting_observation_ids) & observation_ids,
+                set(hypothesis.supporting_text_unit_ids) & text_unit_ids,
+                set(hypothesis.data_gap_ids) & data_gap_ids,
+                set(hypothesis.supporting_entity_ids) & entity_ids,
+            ]
+        )
+        if not has_graph_support:
+            all_hypothesis_refs = (
+                set(hypothesis.supporting_evidence_ids)
+                | set(hypothesis.supporting_observation_ids)
+                | set(hypothesis.supporting_text_unit_ids)
+                | set(hypothesis.data_gap_ids)
+                | set(hypothesis.supporting_entity_ids)
+            )
+            has_graph_support = bool(all_hypothesis_refs & all_known_ids)
+        if has_graph_support:
+            kept.append(hypothesis)
+            continue
+        rejected.append(hypothesis.id)
+    if rejected:
+        result.warnings.append(
+            "Discarded ungrounded hypotheses without concrete graph support: "
+            + ", ".join(rejected)
+        )
+        result.agent_trace.append(
+            {
+                "event": "ungrounded_hypotheses_discarded",
+                "hypothesis_ids": rejected,
+            }
+        )
+    result.hypotheses = kept
+    return result
+
+
 def generate_hypotheses_with_deep_agent(
     service: MaterialsKGService,
     request: HypothesisInput,
@@ -199,6 +296,15 @@ def generate_hypotheses_with_deep_agent(
     create_agent = agent_factory or _load_create_deep_agent()
     create_model = model_factory or create_langchain_chat_model
     model, llm_used = create_model(settings_obj)
+    source_overview = service.get_source_overview()
+    trace.append(
+        {
+            "event": "graph_profile_loaded",
+            "total_entities": source_overview.get("total_entities", 0),
+            "total_observations": source_overview.get("total_observations", 0),
+            "total_relations": source_overview.get("total_relations", 0),
+        }
+    )
     subagents = _subagents()
     trace.append(
         {
@@ -215,7 +321,7 @@ def generate_hypotheses_with_deep_agent(
             max_tool_steps=max_tool_steps,
         ),
         subagents=subagents,
-        system_prompt=_system_prompt(),
+        system_prompt=_system_prompt(request, source_overview),
         name="materials-hypothesis-factory",
     )
     trace.append({"event": "agent_invoke", "llm_used": llm_used})
@@ -237,6 +343,7 @@ def generate_hypotheses_with_deep_agent(
     result.llm_used = llm_used
     result.expert_adjustment_schema = EXPERT_ADJUSTMENT_SCHEMA
     result.agent_trace = [*trace, *result.agent_trace, {"event": "result_validated"}]
+    result = _filter_ungrounded_hypotheses(result)
     apply_expert_adjustments(result.hypotheses, request.expert_adjustments)
     result.hypotheses.sort(key=lambda item: item.score.final_score, reverse=True)
     result.hypotheses = result.hypotheses[: request.max_hypotheses]

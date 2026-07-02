@@ -11,24 +11,24 @@
 
 | # | Задача | Статус | Участник | Ветка |
 |---|--------|--------|----------|-------|
-| 1 | Разбить extraction на последовательные шаги: сущности → связи → числовые значения | открыта | — | — |
-| 2 | Промпты extraction должны работать с любым LLM-провайдером | открыта | — | — |
-| 3 | Добавить агенту больше tools для чтения из графа (сейчас 5, сервис умеет ещё 4) | открыта | — | — |
-| 4 | System prompt агента адаптируется под входные данные (не статичный) | открыта | — | — |
-| 5 | После генерации гипотез — проверять привязку к конкретным данным из графа (антигаллюцинация) | открыта | — | — |
-| 6 | Расширить extraction agent — выбор стратегии обработки документа | открыта | — | — |
+| 1 | Разбить extraction на последовательные шаги: сущности → связи → числовые значения | готово | Codex | feat/agents-grounded-extraction |
+| 2 | Промпты extraction должны работать с любым LLM-провайдером | готово | Codex | feat/agents-grounded-extraction |
+| 3 | Добавить агенту больше tools для чтения из графа (сейчас 5, сервис умеет ещё 4) | готово | Codex | feat/agents-grounded-extraction |
+| 4 | System prompt агента адаптируется под входные данные (не статичный) | готово | Codex | feat/agents-grounded-extraction |
+| 5 | После генерации гипотез — проверять привязку к конкретным данным из графа (антигаллюцинация) | готово | Codex | feat/agents-grounded-extraction |
+| 6 | Расширить extraction agent — выбор стратегии обработки документа | готово | Codex | feat/agents-grounded-extraction |
 
 ### Data Scientist
 **Направление:** Метрики и оценка качества
 
 | # | Задача | Статус | Участник | Ветка |
 |---|--------|--------|----------|-------|
-| 1 | Создать модуль метрик: точность извлечения, полнота контекста, покрытие сущностей, достоверность, новизна | открыта | — | — |
-| 2 | Всё работает offline без LLM | открыта | — | — |
-| 3 | Heat map покрытия: материалы × режимы × свойства | открыта | — | — |
-| 4 | Сравнение двух запусков (deterministic vs agent) по всем метрикам | открыта | — | — |
-| 5 | Обратная связь эксперта: оценка гипотез 1-5, сохранение, перекалибровка весов | открыта | — | — |
-| 6 | Корреляция между автоматическими оценками и экспертными (когда будет датасет) | открыта | — | — |
+| 1 | Создать модуль метрик: точность извлечения, полнота контекста, покрытие сущностей, достоверность, новизна | готово | Codex | feat/agents-grounded-extraction |
+| 2 | Всё работает offline без LLM | готово | Codex | feat/agents-grounded-extraction |
+| 3 | Heat map покрытия: материалы × режимы × свойства | готово | Codex | feat/agents-grounded-extraction |
+| 4 | Сравнение двух запусков (deterministic vs agent) по всем метрикам | готово | Codex | feat/agents-grounded-extraction |
+| 5 | Обратная связь эксперта: оценка гипотез 1-5, сохранение, перекалибровка весов | готово | Codex | feat/agents-grounded-extraction |
+| 6 | Корреляция между автоматическими оценками и экспертными (когда будет датасет) | готово | Codex | feat/agents-grounded-extraction |
 
 ### Системный аналитик / архитектор
 **Направление:** Расширить входные форматы и API
@@ -61,8 +61,7 @@
 | # | Задача | Статус | Участник | Ветка |
 |---|--------|--------|----------|-------|
 | 1 | Переписать UI на Gradio — три вкладки: загрузка файлов, запросы к графу, генерация гипотез | открыта | — | — |
-| 2 | Визуализация графа (интерактивная карта связей) | открыта | — | — |
-| 3 | Карточки гипотез с разбивкой score и привязкой к источникам | открыта | — | — |
+| 2 | Карточки гипотез с разбивкой score и привязкой к источникам | открыта | — | — |
 | 4 | Dashboard метрик | открыта | — | — |
 | 5 | API documentation с примерами запросов | открыта | — | — |
 
@@ -104,7 +103,10 @@
 
 | Роль | Участник | Задача | Результат | Дата |
 |------|----------|--------|-----------|------|
+| ML / NLP / Knowledge Graphs | Codex | Deep Agent + graph-grounded extraction | Добавлены phased LLM extraction entities→relationships→measurements, provider-neutral prompts, provenance для LLM relationships/observations, 9 read-only graph tools для Deep Agent, adaptive system prompt, post-generation grounding validation, regression tests; полный suite 89 passed | 2026-07-02 |
+| ML / NLP / Knowledge Graphs | Codex | Исправление 7 gaps в агентской логике | chunked_phased extraction (чанкинг длинных документов), N+1 fix в query_data_gaps, parallel LLM+explicit extraction, adaptive embedding truncation (8000), Neo4j fulltext index, transaction batching, lenient grounding check (trace+matched_entities IDs); полный suite 89 passed | 2026-07-02 |
 | Data Scientist | Codex | Метрики и оценка качества гипотез offline | Добавлены offline metrics module и API: Entity/Relation F1, Context Recall, Context Entities Recall, Faithfulness/Groundedness, Novelty, repository coverage heatmap, deterministic-vs-agent full comparison, экспертный JSONL feedback, recalibrated ranking weights, auto/expert correlation, regression tests, MiMo review без blockers | 2026-07-01 |
+| Data Scientist | Codex | Аудит метрик — проверка корректности | Полный аудит metrics.py (681 строк): 8 метрик проверены, найдены issues: novelty binary override (0/1), weight recalibration degenerate с 2 entries, coverage ratio misleading для sparse spaces, нет тестов для text_unit_ids不在 context | 2026-07-02 |
 
 ---
 

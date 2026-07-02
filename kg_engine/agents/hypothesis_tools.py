@@ -5,7 +5,9 @@ from __future__ import annotations
 from typing import Any
 
 from kg_engine.domain.models import HypothesisInput
+from kg_engine.domain.models import PropertyFilters
 from kg_engine.domain.models import QueryFilters
+from kg_engine.domain.models import RelationType
 from kg_engine.services.materials_kg import MaterialsKGService
 
 
@@ -126,10 +128,93 @@ def create_hypothesis_tools(
         record_tool("kg_get_source_overview")
         return service.get_source_overview()
 
+    def kg_query_material_mode(
+        material: str,
+        mode: str | None = None,
+        property_name: str | None = None,
+    ) -> dict[str, Any]:
+        """Return experiments, observations, findings, evidence, and text hits for a material/mode/property slice."""
+        record_tool(
+            "kg_query_material_mode",
+            material=material,
+            mode=mode,
+            property_name=property_name,
+        )
+        return service.query_material_mode(
+            material,
+            mode=mode,
+            property_name=property_name,
+        ).model_dump(mode="json")
+
+    def kg_query_property(
+        property_name: str,
+        material_name: str | None = None,
+        mode_name: str | None = None,
+        min_value: float | None = None,
+        max_value: float | None = None,
+    ) -> dict[str, Any]:
+        """Return observations, materials, experiments, and evidence for a property with optional range filters."""
+        record_tool(
+            "kg_query_property",
+            property_name=property_name,
+            material_name=material_name,
+            mode_name=mode_name,
+        )
+        return service.query_property(
+            property_name,
+            PropertyFilters(
+                material_name=material_name,
+                mode_name=mode_name,
+                min_value=min_value,
+                max_value=max_value,
+            ),
+        ).model_dump(mode="json")
+
+    def kg_query_related(
+        entity: str,
+        depth: int = 2,
+        relation_types: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Traverse related entities and evidence paths around a material, experiment, property, mode, team, or document."""
+        record_tool("kg_query_related", entity=entity, depth=depth)
+        filters: list[RelationType] | None = None
+        if relation_types:
+            filters = []
+            for rel_type in relation_types:
+                try:
+                    filters.append(RelationType(rel_type))
+                except ValueError:
+                    trace.append(
+                        {
+                            "event": "tool_warning",
+                            "tool": "kg_query_related",
+                            "warning": f"unknown relation type skipped: {rel_type}",
+                        }
+                    )
+        return service.query_related(
+            entity,
+            depth=max(1, min(depth, 4)),
+            relation_filters=filters,
+        ).model_dump(mode="json")
+
+    def kg_query_decision_history(entity_or_experiment: str) -> dict[str, Any]:
+        """Return decision traces and evidence for a canonical entity or experiment."""
+        record_tool(
+            "kg_query_decision_history",
+            entity_or_experiment=entity_or_experiment,
+        )
+        return service.query_decision_history(entity_or_experiment).model_dump(
+            mode="json"
+        )
+
     return [
         kg_build_context,
         kg_generate_baseline_hypotheses,
         kg_query_data_gaps,
         kg_search_evidence,
         kg_get_source_overview,
+        kg_query_material_mode,
+        kg_query_property,
+        kg_query_related,
+        kg_query_decision_history,
     ]
