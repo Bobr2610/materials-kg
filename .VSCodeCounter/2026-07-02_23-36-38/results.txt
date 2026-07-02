@@ -1,0 +1,169 @@
+Date : 2026-07-02 23:36:38
+Directory : c:\C_C++_C#\Vacancies\Nornickel-hack
+Total : 103 files,  25783 codes, 417 comments, 4606 blanks, all 30806 lines
+
+Languages
++--------------+------------+------------+------------+------------+------------+
+| language     | files      | code       | comment    | blank      | total      |
++--------------+------------+------------+------------+------------+------------+
+| Markdown     |         39 |     12,202 |          3 |      2,891 |     15,096 |
+| Python       |         47 |     10,948 |        409 |      1,483 |     12,840 |
+| HTML         |          1 |      1,580 |          0 |          4 |      1,584 |
+| Skill        |          6 |        548 |          0 |        184 |        732 |
+| JSON         |          4 |        335 |          0 |          4 |        339 |
+| PowerShell   |          2 |         66 |          2 |         23 |         91 |
+| YAML         |          1 |         55 |          0 |          3 |         58 |
+| Shell Script |          1 |         23 |          3 |          6 |         32 |
+| Ignore       |          1 |         14 |          0 |          1 |         15 |
+| Docker       |          1 |         12 |          0 |          7 |         19 |
++--------------+------------+------------+------------+------------+------------+
+
+Directories
++---------------------------------------------------------------------------------------------------------------------------------+------------+------------+------------+------------+------------+
+| path                                                                                                                            | files      | code       | comment    | blank      | total      |
++---------------------------------------------------------------------------------------------------------------------------------+------------+------------+------------+------------+------------+
+| .                                                                                                                               |        103 |     25,783 |        417 |      4,606 |     30,806 |
+| . (Files)                                                                                                                       |          8 |      2,351 |         36 |        238 |      2,625 |
+| .agents                                                                                                                         |          8 |        615 |          0 |        208 |        823 |
+| .agents\skills                                                                                                                  |          8 |        615 |          0 |        208 |        823 |
+| .agents\skills\code-style                                                                                                       |          1 |         45 |          0 |         20 |         65 |
+| .agents\skills\critical-thinking                                                                                                |          1 |         24 |          0 |          8 |         32 |
+| .agents\skills\docker-workflow                                                                                                  |          1 |         49 |          0 |         20 |         69 |
+| .agents\skills\materials-knowledge-graph                                                                                        |          1 |        113 |          0 |         26 |        139 |
+| .agents\skills\mimo-subagent                                                                                                    |          3 |        352 |          0 |        122 |        474 |
+| .agents\skills\mimo-subagent (Files)                                                                                            |          1 |        285 |          0 |         98 |        383 |
+| .agents\skills\mimo-subagent\references                                                                                         |          1 |         22 |          0 |          7 |         29 |
+| .agents\skills\mimo-subagent\scripts                                                                                            |          1 |         45 |          0 |         17 |         62 |
+| .agents\skills\team-coordination                                                                                                |          1 |         32 |          0 |         12 |         44 |
+| .claude                                                                                                                         |          1 |         98 |          0 |         28 |        126 |
+| .codex                                                                                                                          |          1 |        104 |          0 |         29 |        133 |
+| .mimocode                                                                                                                       |          1 |         99 |          0 |         44 |        143 |
+| .opencode                                                                                                                       |         30 |     11,021 |          0 |      2,489 |     13,510 |
+| .opencode\chats                                                                                                                 |          3 |      5,357 |          0 |        828 |      6,185 |
+| .opencode\plans                                                                                                                 |         27 |      5,664 |          0 |      1,661 |      7,325 |
+| data                                                                                                                            |          3 |        249 |          0 |          3 |        252 |
+| docs                                                                                                                            |          1 |        237 |          0 |         94 |        331 |
+| kg_engine                                                                                                                       |         48 |     10,916 |        381 |      1,467 |     12,764 |
+| kg_engine (Files)                                                                                                               |          1 |          2 |          1 |          3 |          6 |
+| kg_engine\agents                                                                                                                |          4 |        389 |         42 |         63 |        494 |
+| kg_engine\api                                                                                                                   |          2 |        739 |          5 |         93 |        837 |
+| kg_engine\config                                                                                                                |          2 |        110 |         16 |         32 |        158 |
+| kg_engine\domain                                                                                                                |          3 |        428 |         44 |        132 |        604 |
+| kg_engine\ingestion                                                                                                             |          2 |        556 |          8 |         51 |        615 |
+| kg_engine\llm_core                                                                                                              |          5 |      1,204 |         95 |        178 |      1,477 |
+| kg_engine\repositories                                                                                                          |          5 |        775 |         82 |        119 |        976 |
+| kg_engine\scripts                                                                                                               |          4 |        444 |          7 |         73 |        524 |
+| kg_engine\services                                                                                                              |          5 |      2,961 |         69 |        263 |      3,293 |
+| kg_engine\tests                                                                                                                 |         15 |      3,308 |         12 |        460 |      3,780 |
+| sample_sources                                                                                                                  |          2 |         93 |          0 |          6 |         99 |
++---------------------------------------------------------------------------------------------------------------------------------+------------+------------+------------+------------+------------+
+
+Files
++---------------------------------------------------------------------------------------------------------------------------------+--------------+------------+------------+------------+------------+
+| filename                                                                                                                        | language     | code       | comment    | blank      | total      |
++---------------------------------------------------------------------------------------------------------------------------------+--------------+------------+------------+------------+------------+
+| c:\C_C++_C#\Vacancies\Nornickel-hack\.agents\skills\code-style\SKILL.md                                                         | Skill        |         45 |          0 |         20 |         65 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\.agents\skills\critical-thinking\SKILL.md                                                  | Skill        |         24 |          0 |          8 |         32 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\.agents\skills\docker-workflow\SKILL.md                                                    | Skill        |         49 |          0 |         20 |         69 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\.agents\skills\materials-knowledge-graph\SKILL.md                                          | Skill        |        113 |          0 |         26 |        139 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\.agents\skills\mimo-subagent\SKILL.md                                                      | Skill        |        285 |          0 |         98 |        383 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\.agents\skills\mimo-subagent\references\models.md                                          | Markdown     |         22 |          0 |          7 |         29 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\.agents\skills\mimo-subagent\scripts\run_mimo.ps1                                          | PowerShell   |         45 |          0 |         17 |         62 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\.agents\skills\team-coordination\SKILL.md                                                  | Skill        |         32 |          0 |         12 |         44 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\.claude\CLAUDE.md                                                                          | Markdown     |         98 |          0 |         28 |        126 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\.codex\instructions.md                                                                     | Markdown     |        104 |          0 |         29 |        133 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\.dockerignore                                                                              | Ignore       |         14 |          0 |          1 |         15 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\.mimocode\RULES.md                                                                         | Markdown     |         99 |          0 |         44 |        143 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\.opencode\chats\20260518_aliasrenamed_batch2_localization.md                               | Markdown     |      5,306 |          0 |        798 |      6,104 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\.opencode\chats\20260626-architecture-discussion.md                                        | Markdown     |         48 |          0 |         27 |         75 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\.opencode\chats\README.md                                                                  | Markdown     |          3 |          0 |          3 |          6 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\.opencode\plans\20260422_cmw-platform-skill-reorganization-plan.md                         | Markdown     |        310 |          0 |         89 |        399 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\.opencode\plans\20260422_langchain_gradio_version_analysis.md                              | Markdown     |        204 |          0 |         70 |        274 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\.opencode\plans\20260422_mcp_integration_implementation_plan.md                            | Markdown     |        109 |          0 |         36 |        145 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\.opencode\plans\20260423_browser_automation_implementation_plan.md                         | Markdown     |        705 |          0 |        191 |        896 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\.opencode\plans\20260423_browser_automation_summary.md                                     | Markdown     |        174 |          0 |         52 |        226 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\.opencode\plans\20260423_image_generation_COMPLETE.md                                      | Markdown     |        119 |          0 |         38 |        157 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\.opencode\plans\20260423_image_generation_research_archive.md                              | Markdown     |        701 |          0 |        197 |        898 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\.opencode\plans\20260423_image_generation_summary.md                                       | Markdown     |         69 |          0 |         27 |         96 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\.opencode\plans\20260423_image_generation_upgrade_plan.md                                  | Markdown     |        201 |          0 |         54 |        255 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\.opencode\plans\20260423_workspace-navigation-tools-analysis.md                            | Markdown     |        170 |          0 |         75 |        245 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\.opencode\plans\20260425_consolidated_asset_extraction_plan.md                             | Markdown     |        112 |          0 |         20 |        132 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\.opencode\plans\20260425_final_tdd_lean_impeccable_asset_extraction_implementation_plan.md | Markdown     |         97 |          0 |         24 |        121 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\.opencode\plans\20260425_image_extraction_strategy_pdf_office.md                           | Markdown     |         80 |          0 |         28 |        108 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\.opencode\plans\20260425_impeccable_consensus_asset_extraction_plan.md                     | Markdown     |        114 |          0 |         30 |        144 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\.opencode\plans\20260425_pdf_image_extraction_plan.md                                      | Markdown     |        168 |          0 |         30 |        198 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\.opencode\plans\20260425_unified_extract_assets_plan.md                                    | Markdown     |        115 |          0 |         31 |        146 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\.opencode\plans\20260427_button_kind_regression_fix.md                                     | Markdown     |        468 |          0 |        101 |        569 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\.opencode\plans\20260427_button_kind_regression_fix_SUMMARY.md                             | Markdown     |        139 |          0 |         38 |        177 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\.opencode\plans\20260427_localization_script_update_plan.md                                | Markdown     |         42 |          0 |         13 |         55 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\.opencode\plans\20260427_platform_entity_url_resolver.md                                   | Markdown     |        379 |          0 |        111 |        490 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\.opencode\plans\20260428_refactor_platform_entity_url.md                                   | Markdown     |        128 |          0 |         31 |        159 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\.opencode\plans\20260510_file_reference_rename.md                                          | Markdown     |        104 |          0 |         48 |        152 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\.opencode\plans\20260626-initial-setup-plan.md                                             | Markdown     |         94 |          0 |         19 |        113 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\.opencode\plans\README.md                                                                  | Markdown     |          8 |          0 |          3 |         11 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\.opencode\plans\cmw-platform-skill-collection-plan.md                                      | Markdown     |        568 |          0 |        203 |        771 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\.opencode\plans\gradio-text-paste-support.md                                               | Markdown     |         63 |          0 |         27 |         90 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\.opencode\plans\markitdown-support.md                                                      | Markdown     |        223 |          0 |         75 |        298 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\AGENTS.md                                                                                  | Markdown     |        334 |          0 |        106 |        440 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\Dockerfile                                                                                 | Docker       |         12 |          0 |          7 |         19 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\README.md                                                                                  | Markdown     |        193 |          0 |         59 |        252 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\TEAM_STATUS.md                                                                             | Markdown     |         87 |          3 |         30 |        120 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\data\documents.json                                                                        | JSON         |         40 |          0 |          1 |         41 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\data\experiments.json                                                                      | JSON         |        105 |          0 |          1 |        106 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\data\reference.json                                                                        | JSON         |        104 |          0 |          1 |        105 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\docker-compose.yml                                                                         | YAML         |         55 |          0 |          3 |         58 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\docs\ARCHITECTURE.md                                                                       | Markdown     |        237 |          0 |         94 |        331 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\kg_engine\__init__.py                                                                      | Python       |          2 |          1 |          3 |          6 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\kg_engine\agents\__init__.py                                                               | Python       |         12 |          1 |          3 |         16 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\kg_engine\agents\extraction_agent.py                                                       | Python       |         52 |         29 |         15 |         96 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\kg_engine\agents\hypothesis_factory.py                                                     | Python       |        210 |          5 |         31 |        246 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\kg_engine\agents\hypothesis_tools.py                                                       | Python       |        115 |          7 |         14 |        136 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\kg_engine\api\__init__.py                                                                  | Python       |          0 |          1 |          1 |          2 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\kg_engine\api\materials_core.py                                                            | Python       |        739 |          4 |         92 |        835 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\kg_engine\config\__init__.py                                                               | Python       |         27 |          5 |          6 |         38 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\kg_engine\config\settings.py                                                               | Python       |         83 |         11 |         26 |        120 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\kg_engine\domain\__init__.py                                                               | Python       |         68 |          1 |          3 |         72 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\kg_engine\domain\models.py                                                                 | Python       |        343 |         39 |        118 |        500 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\kg_engine\domain\resolution.py                                                             | Python       |         17 |          4 |         11 |         32 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\kg_engine\ingestion\__init__.py                                                            | Python       |         12 |          1 |          3 |         16 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\kg_engine\ingestion\adapters.py                                                            | Python       |        544 |          7 |         48 |        599 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\kg_engine\llm_core\__init__.py                                                             | Python       |          0 |          1 |          1 |          2 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\kg_engine\llm_core\extraction.py                                                           | Python       |        531 |         19 |         62 |        612 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\kg_engine\llm_core\fallback.py                                                             | Python       |        133 |         23 |         23 |        179 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\kg_engine\llm_core\provider.py                                                             | Python       |        434 |         34 |         65 |        533 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\kg_engine\llm_core\token_budget.py                                                         | Python       |        106 |         18 |         27 |        151 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\kg_engine\repositories\__init__.py                                                         | Python       |          6 |          1 |          2 |          9 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\kg_engine\repositories\factory.py                                                          | Python       |         30 |          6 |          9 |         45 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\kg_engine\repositories\memory.py                                                           | Python       |        269 |          2 |         30 |        301 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\kg_engine\repositories\neo4j.py                                                            | Python       |        411 |         69 |         53 |        533 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\kg_engine\repositories\protocols.py                                                        | Python       |         59 |          4 |         25 |         88 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\kg_engine\scripts\ingest_materials_kg.py                                                   | Python       |        383 |          1 |         50 |        434 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\kg_engine\scripts\run_materials_api.py                                                     | Python       |         17 |          1 |         11 |         29 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\kg_engine\scripts\start_app.ps1                                                            | PowerShell   |         21 |          2 |          6 |         29 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\kg_engine\scripts\start_app.sh                                                             | Shell Script |         23 |          3 |          6 |         32 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\kg_engine\services\__init__.py                                                             | Python       |         46 |          1 |          3 |         50 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\kg_engine\services\hypothesis_adjustments.py                                               | Python       |         86 |          4 |         12 |        102 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\kg_engine\services\materials_kg.py                                                         | Python       |      2,201 |         20 |        111 |      2,332 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\kg_engine\services\metrics.py                                                              | Python       |        530 |         31 |        121 |        682 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\kg_engine\services\session.py                                                              | Python       |         98 |         13 |         16 |        127 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\kg_engine\tests\conftest.py                                                                | Python       |          8 |          1 |          4 |         13 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\kg_engine\tests\test_dataset_intake_contract.py                                            | Python       |         49 |          0 |         11 |         60 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\kg_engine\tests\test_deepagents_hypothesis_factory.py                                      | Python       |        370 |          0 |         61 |        431 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\kg_engine\tests\test_ingest_materials_cli_loading.py                                       | Python       |         92 |          0 |         22 |        114 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\kg_engine\tests\test_ingestion_adapters.py                                                 | Python       |        119 |          0 |         23 |        142 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\kg_engine\tests\test_llm_provider_selection.py                                             | Python       |        139 |          0 |         41 |        180 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\kg_engine\tests\test_materials_api_smoke.py                                                | Python       |        652 |          1 |         60 |        713 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\kg_engine\tests\test_materials_domain_prompts.py                                           | Python       |         10 |          0 |          8 |         18 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\kg_engine\tests\test_materials_graph_database_behavior.py                                  | Python       |        240 |          0 |         16 |        256 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\kg_engine\tests\test_materials_kg_core.py                                                  | Python       |        875 |          3 |         82 |        960 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\kg_engine\tests\test_materials_measurement_parsing.py                                      | Python       |         78 |          0 |         16 |         94 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\kg_engine\tests\test_metrics_evaluation.py                                                 | Python       |        439 |          0 |         55 |        494 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\kg_engine\tests\test_neo4j_repository.py                                                   | Python       |         69 |          0 |         22 |         91 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\kg_engine\tests\test_no_donor_brand_in_core.py                                             | Python       |        108 |          7 |         19 |        134 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\kg_engine\tests\test_repository_factory.py                                                 | Python       |         60 |          0 |         20 |         80 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\lint.py                                                                                    | Python       |         76 |         33 |         28 |        137 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\sample_sources\process_notes.md                                                            | Markdown     |          7 |          0 |          5 |         12 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\sample_sources\reference_pack.json                                                         | JSON         |         86 |          0 |          1 |         87 |
+| c:\C_C++_C#\Vacancies\Nornickel-hack\ui-page.html                                                                               | HTML         |      1,580 |          0 |          4 |      1,584 |
+| Total                                                                                                                           |              |     25,783 |        417 |      4,606 |     30,806 |
++---------------------------------------------------------------------------------------------------------------------------------+--------------+------------+------------+------------+------------+

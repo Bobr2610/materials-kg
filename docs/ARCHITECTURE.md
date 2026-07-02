@@ -43,7 +43,7 @@ kg_engine/domain/models.py
 | `lint.py` | Colored ruff check/format wrapper with summary |
 | `Dockerfile` | Python 3.11-slim build, exposes 8090 |
 | `docker-compose.yml` | Two services: `materials-neo4j` (Neo4j 5) + `materials-api` (FastAPI) |
-| `ui-page.html` | Single-page Russian UI "Фабрика гипотез": upload, graph inspection, hypothesis generation, evidence IDs, expert feedback, JSON/CSV export |
+| `ui-page.html` | Single-page Russian UI "Фабрика гипотез": upload, graph inspection, hypothesis generation, evidence IDs, expert feedback, JSON/CSV/XLSX/DOCX/PDF export |
 | `.env` | Live env vars (gitignored) |
 | `.env.example` | Template: Neo4j, API, LLM provider config (82 lines) |
 | `.gitignore` | Ignores .env, .venv, __pycache__, caches |
@@ -75,7 +75,9 @@ Full 30-line deps: deepagents, langchain, neo4j, networkx, openai, tiktoken, fas
 | File | Purpose |
 |------|---------|
 | `__init__.py` | Re-exports all public domain types from `models.py` |
-| `models.py` | **499 lines.** All typed objects: `EntityKind` (8), `RelationType` (9), Pydantic models for entities, relations, evidence, observations, findings, hypotheses, queries, DTOs |
+| `models.py` | Typed graph objects and backward-compatible enriched hypothesis contracts |
+| `ingestion.py` | Format-neutral parsed sources, fragments, tables, warnings, and ingestion job states |
+| `product.py` | Research projects, constraints, roadmaps, runs, reviews, outcomes, and audit contracts |
 | `resolution.py` | `normalize_name()` + `ReferenceResolver`: alias index for canonical entity resolution |
 
 ---
@@ -101,6 +103,9 @@ Full 30-line deps: deepagents, langchain, neo4j, networkx, openai, tiktoken, fas
 | `hypothesis_adjustments.py` | Expert override helpers: `apply_expert_adjustments()`, schema for reject/note/score adjustments |
 | `metrics.py` | **681 lines.** Offline quality metrics: Entity/Relation F1, context recall, groundedness, novelty, coverage heatmap, full run comparison, expert feedback persistence/calibration/correlation |
 | `session.py` | Thread-safe in-memory session store with TTL expiry. `SessionStore` manages `ConversationSession` objects |
+| `research_projects.py` | Transactional SQLite product state: projects, constraints, immutable runs, reviews, and audit events |
+| `ingestion_jobs.py` | Persistent batch jobs, checksum deduplication, failure isolation, and graph ingestion |
+| `reports.py` | Markdown, XLSX, DOCX, and PDF hypothesis reports with provenance IDs |
 
 ---
 
@@ -130,6 +135,7 @@ Full 30-line deps: deepagents, langchain, neo4j, networkx, openai, tiktoken, fas
 |------|---------|
 | `__init__.py` | Exports 5 adapters: `DocumentCorpusAdapter`, `ExperimentCatalogAdapter`, `ReferenceDataAdapter`, `StaffDirectoryAdapter`, `TagCatalogAdapter` |
 | `adapters.py` | **478 lines.** Normalizes raw JSON/CSV payloads → domain DTOs. Each adapter handles one source type |
+| `readers.py` | Allowlisted TXT/MD/PDF/DOCX/XLSX/image readers with signature validation and source coordinates |
 
 ---
 
@@ -165,6 +171,10 @@ Full 30-line deps: deepagents, langchain, neo4j, networkx, openai, tiktoken, fas
 | `test_deepagents_hypothesis_factory.py` | **430 lines.** Deep Agents hypothesis workflow tests |
 | `test_neo4j_repository.py` | **90 lines.** Neo4j repo with `FakeSession` mock |
 | `test_repository_factory.py` | **79 lines.** Factory: memory vs Neo4j selection |
+| `test_document_readers.py` | Reader provenance, tables, checksums, and signature validation |
+| `test_ingestion_jobs.py` | Batch failure isolation, fragment lookup, and deduplication |
+| `test_research_product.py` | Projects, constraints, RBAC, runs, roadmaps, reviews, and audit persistence |
+| `test_hypothesis_reports.py` | Portable report format contracts |
 | `test_ingestion_adapters.py` | **141 lines.** Unit tests for each adapter |
 | `test_ingest_materials_cli_loading.py` | **113 lines.** CLI `_load_bundle()` and `_load_payload()` tests |
 | `test_llm_provider_selection.py` | **179 lines.** LLM provider detection and creation |

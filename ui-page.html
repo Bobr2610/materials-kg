@@ -908,6 +908,9 @@
         <div class="hypothesis-actions">
           <button class="hypothesis-action" id="exportHypothesesJson" type="button" disabled>Экспорт JSON</button>
           <button class="hypothesis-action" id="exportHypothesesCsv" type="button" disabled>Экспорт CSV</button>
+          <button class="hypothesis-action" id="exportHypothesesXlsx" type="button" disabled>Экспорт XLSX</button>
+          <button class="hypothesis-action" id="exportHypothesesDocx" type="button" disabled>Отчёт DOCX</button>
+          <button class="hypothesis-action" id="exportHypothesesPdf" type="button" disabled>Отчёт PDF</button>
         </div>
       </div>
       <div class="suggestions" id="suggestions"></div>
@@ -1187,6 +1190,9 @@
       state.lastHypothesisResult = data;
       $("exportHypothesesJson").disabled = !data?.hypotheses?.length;
       $("exportHypothesesCsv").disabled = !data?.hypotheses?.length;
+      $("exportHypothesesXlsx").disabled = !data?.hypotheses?.length;
+      $("exportHypothesesDocx").disabled = !data?.hypotheses?.length;
+      $("exportHypothesesPdf").disabled = !data?.hypotheses?.length;
       const warnings = (data.warnings||[]).map(r => '<span class="chip" style="border-color:#fdd835;background:#fffde7">' + escapeHtml(r) + "</span>").join("");
       const hypotheses = data.hypotheses || [];
       const cards = hypotheses.length ? hypotheses.map(h =>
@@ -1528,6 +1534,9 @@
       state.lastHypothesisResult = null;
       $("exportHypothesesJson").disabled = true;
       $("exportHypothesesCsv").disabled = true;
+      $("exportHypothesesXlsx").disabled = true;
+      $("exportHypothesesDocx").disabled = true;
+      $("exportHypothesesPdf").disabled = true;
       setSourceStats();
       renderSourceList();
         addMsg("assistant", '<div class="bubble">' + UI_TEXT.allSourcesRemoved + "</div>");
@@ -1545,6 +1554,9 @@
       state.lastHypothesisResult = null;
       $("exportHypothesesJson").disabled = true;
       $("exportHypothesesCsv").disabled = true;
+      $("exportHypothesesXlsx").disabled = true;
+      $("exportHypothesesDocx").disabled = true;
+      $("exportHypothesesPdf").disabled = true;
       fetch("/source/suggestions").then(r => r.json()).then(q => { if (state.total) renderSuggestions(q); }).catch(() => {});
     }
     $("addSources").addEventListener("click", () => $("fileInput").click());
@@ -1553,6 +1565,9 @@
     $("generateHypotheses").addEventListener("click", generateHypothesesFromKpi);
     $("exportHypothesesJson").addEventListener("click", () => exportHypotheses("json"));
     $("exportHypothesesCsv").addEventListener("click", () => exportHypotheses("csv"));
+    $("exportHypothesesXlsx").addEventListener("click", () => exportHypotheses("xlsx"));
+    $("exportHypothesesDocx").addEventListener("click", () => exportHypotheses("docx"));
+    $("exportHypothesesPdf").addEventListener("click", () => exportHypotheses("pdf"));
     $("targetKpi").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); generateHypothesesFromKpi(); } });
     $("question").addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ask(); } });
     $("question").addEventListener("input", function() { this.style.height = "auto"; this.style.height = Math.min(this.scrollHeight, 120) + "px"; });
