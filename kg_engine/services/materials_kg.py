@@ -367,17 +367,6 @@ class MaterialsKGService:
             )
             linked_entity_ids: list[str] = [document_entity.id]
 
-            has_explicit_entities = any(
-                [
-                    document.material_names,
-                    document.mode_names,
-                    document.property_names,
-                    document.equipment_names,
-                    document.team_names,
-                    document.experiment_ids,
-                ]
-            )
-
             llm_extracted_entity_names: set[tuple[str, str]] = set()
 
             if self._llm and document.text:

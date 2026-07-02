@@ -43,7 +43,7 @@ kg_engine/domain/models.py
 | `lint.py` | Colored ruff check/format wrapper with summary |
 | `Dockerfile` | Python 3.11-slim build, exposes 8090 |
 | `docker-compose.yml` | Two services: `materials-neo4j` (Neo4j 5) + `materials-api` (FastAPI) |
-| `ui-page.html` | Single-page Russian UI "Фабрика гипотез" |
+| `ui-page.html` | Single-page Russian UI "Фабрика гипотез": upload, graph inspection, hypothesis generation, evidence IDs, expert feedback, JSON/CSV export |
 | `.env` | Live env vars (gitignored) |
 | `.env.example` | Template: Neo4j, API, LLM provider config (82 lines) |
 | `.gitignore` | Ignores .env, .venv, __pycache__, caches |
@@ -120,7 +120,7 @@ Full 30-line deps: deepagents, langchain, neo4j, networkx, openai, tiktoken, fas
 | File | Purpose |
 |------|---------|
 | `__init__.py` | Docstring: "API entry points for the materials core API" |
-| `materials_core.py` | **834 lines.** FastAPI app factory `create_materials_app()`. Endpoints: health, ingest (reference/experiments/documents/canonical), query (material-mode-property/search), entities, hypotheses (deterministic+agent), metrics, expert feedback, adjustments, decision traces, coverage rules, destructive wipe, UI |
+| `materials_core.py` | FastAPI app factory `create_materials_app()`. Endpoints: health, ingest (reference/experiments/documents/canonical/upload), demo sample + Task 1 materials loader, query (material-mode-property/search), hypotheses (deterministic+agent), JSON/CSV hypothesis export, metrics, expert feedback, adjustments, decision traces, coverage rules, destructive wipe, UI |
 
 ---
 
@@ -183,13 +183,17 @@ Full 30-line deps: deepagents, langchain, neo4j, networkx, openai, tiktoken, fas
 
 ---
 
-### `sample_sources/` — Example Input Files
+### `sample_sources/` — Packaged Task Materials Fallback
 
 | File | Purpose |
 |------|---------|
-| `reference_pack.json` | Sample reference batch: 2 materials (CuCrZr, 316L), properties, equipment |
-| `experiment_rows.csv` | 4 CSV experiment rows: CuCrZr conductivity, 316L density |
-| `process_notes.md` | Free-text meeting notes from Thermal Processing Group |
+| `reference_pack.json` | Fallback reference batch for `/demo/load-task-materials`: 2 materials (CuCrZr, 316L), properties, equipment |
+| `experiment_rows.csv` | Fallback flat experiment rows loaded as observations: CuCrZr conductivity, 316L density/roughness |
+| `process_notes.md` | Fallback free-text notes from Thermal Processing Group |
+
+When a real Task 1 corpus is present in `Задача 1/`, `task-1/`, `task1/`,
+`task_1/` or `data/task1/`, `/demo/load-task-materials` loads that corpus.
+Otherwise it loads `sample_sources/` and returns a warning in the API/UI.
 
 ---
 

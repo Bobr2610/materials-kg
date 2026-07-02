@@ -659,6 +659,30 @@
     }
     .hypothesis-btn:hover { background: #1557b0; }
     .hypothesis-btn:disabled { background: #dadce0; cursor: default; }
+    .hypothesis-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      min-width: 0;
+    }
+    .hypothesis-action {
+      height: 32px;
+      border: 1px solid #dadce0;
+      border-radius: 8px;
+      background: #fff;
+      color: #1a73e8;
+      font: inherit;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      padding: 0 10px;
+      white-space: nowrap;
+    }
+    .hypothesis-action:disabled {
+      color: #9aa0a6;
+      cursor: default;
+      background: #f8f9fa;
+    }
     .score-grid {
       display: grid;
       grid-template-columns: repeat(5, minmax(72px, 1fr));
@@ -704,6 +728,22 @@
       flex-wrap: wrap;
       gap: 6px;
       align-items: center;
+    }
+    .id-chip-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 6px;
+    }
+    .id-chip {
+      max-width: 100%;
+      border: 1px solid #dadce0;
+      border-radius: 8px;
+      background: #fff;
+      padding: 4px 7px;
+      font-size: 11px;
+      color: #3c4043;
+      overflow-wrap: anywhere;
     }
     .agent-trace {
       display: grid;
@@ -837,6 +877,7 @@
           </button>
           <button id="menuButton" title="Меню">&vellip;</button>
           <div class="menu-popover" id="menuPopover">
+            <button id="loadTaskMaterials" type="button">Загрузить материалы Task 1</button>
             <button id="clearAllSources" type="button">Удалить все источники</button>
             <button id="clearChat" type="button">Очистить чат</button>
           </div>
@@ -863,6 +904,10 @@
           <input id="targetKpi" type="text" placeholder="Например: снизить пористость, повысить прочность" aria-label="Целевой KPI">
           <input id="hypothesisLimit" type="number" min="1" max="20" value="5" aria-label="Количество гипотез">
           <button class="hypothesis-btn" id="generateHypotheses" type="button">Гипотезы</button>
+        </div>
+        <div class="hypothesis-actions">
+          <button class="hypothesis-action" id="exportHypothesesJson" type="button" disabled>Экспорт JSON</button>
+          <button class="hypothesis-action" id="exportHypothesesCsv" type="button" disabled>Экспорт CSV</button>
         </div>
       </div>
       <div class="suggestions" id="suggestions"></div>
@@ -941,6 +986,7 @@
       total: 0,
       overview: null,
       lastHypothesisRequest: null,
+      lastHypothesisResult: null,
       expertAdjustments: {}
     };
 
@@ -1074,6 +1120,12 @@
       if (!rows?.length) return '<span style="color:#9aa0a6;font-size:13px">' + escapeHtml(empty) + "</span>";
       return '<ul class="mini-list">' + rows.slice(0, UI_CONFIG.maxListRows).map(r => "<li><span>" + escapeHtml(r) + "</span></li>").join("") + "</ul>";
     }
+    function renderIdChips(label, ids) {
+      if (!ids?.length) return "";
+      return '<div><b style="font-size:13px">' + escapeHtml(label) + '</b><div class="id-chip-list">' +
+        ids.slice(0, UI_CONFIG.maxChipRows).map(id => '<span class="id-chip">' + escapeHtml(id) + '</span>').join("") +
+        "</div></div>";
+    }
     function hypothesisTypeLabel(type) {
       return ({
         coverage_gap: "пробел данных",
@@ -1121,14 +1173,20 @@
           '<label>Данные<input class="expert-input" data-field="evidence_strength_adjustment" type="number" min="-1" max="1" step="0.05" value="' + escapeHtml(adj.evidence_strength_adjustment ?? "") + '"></label>' +
         '</div>' +
         '<label style="display:grid;gap:4px;font-size:11px;color:#5f6368">Заметка<input class="expert-input" data-field="note" type="text" value="' + escapeHtml(adj.note ?? "") + '"></label>' +
+        '<label style="display:grid;gap:4px;font-size:11px;color:#5f6368">Оценка 1-5<input class="feedback-input" data-field="rating" type="number" min="1" max="5" step="1" value="4"></label>' +
+        '<label style="display:grid;gap:4px;font-size:11px;color:#5f6368">Комментарий<input class="feedback-input" data-field="comment" type="text" value=""></label>' +
         '<div class="expert-actions">' +
           '<label style="font-size:12px;color:#5f6368"><input class="expert-input" data-field="reject" type="checkbox" ' + checked + '> отклонить</label>' +
           '<button class="primary apply-expert" type="button">Пересчитать</button>' +
+          '<button class="primary save-feedback" type="button">Сохранить feedback</button>' +
           '<button class="danger clear-expert" type="button">Сбросить</button>' +
         '</div>' +
       '</div>';
     }
     function renderHypotheses(data) {
+      state.lastHypothesisResult = data;
+      $("exportHypothesesJson").disabled = !data?.hypotheses?.length;
+      $("exportHypothesesCsv").disabled = !data?.hypotheses?.length;
       const warnings = (data.warnings||[]).map(r => '<span class="chip" style="border-color:#fdd835;background:#fffde7">' + escapeHtml(r) + "</span>").join("");
       const hypotheses = data.hypotheses || [];
       const cards = hypotheses.length ? hypotheses.map(h =>
@@ -1142,6 +1200,11 @@
           '<div><b style="font-size:13px">Риски</b>' + renderStringList(h.risk_items, "Риски не указаны") + '</div>' +
           '<div><b style="font-size:13px">Критерии фальсификации</b>' + renderStringList(h.falsification_criteria, "Критерии не указаны") + '</div>' +
           '<div><b style="font-size:13px">Что нужно собрать</b>' + renderStringList(h.required_evidence, "Нет списка evidence") + '</div>' +
+          renderIdChips("Supporting entity IDs", h.supporting_entity_ids) +
+          renderIdChips("Evidence IDs", h.supporting_evidence_ids) +
+          renderIdChips("Observation IDs", h.supporting_observation_ids) +
+          renderIdChips("Text unit IDs", h.supporting_text_unit_ids) +
+          renderIdChips("Data gap IDs", h.data_gap_ids) +
           renderExpertControls(h) +
         '</div>'
       ).join("") : '<div class="answer-card"><h3>' + UI_TEXT.noHypotheses + '</h3><span style="font-size:13px;color:#5f6368">Уточните KPI или загрузите источники.</span></div>';
@@ -1372,6 +1435,65 @@
         addMsg("assistant", '<div class="bubble error">' + escapeHtml(e.message) + "</div>");
       }
     }
+    function hypothesisById(id) {
+      return (state.lastHypothesisResult?.hypotheses || []).find(h => h.id === id);
+    }
+    async function saveExpertFeedback(panel) {
+      const id = panel?.dataset?.hypothesisId;
+      const hypothesis = hypothesisById(id);
+      if (!id || !hypothesis?.score) return;
+      const ratingInput = panel.querySelector('.feedback-input[data-field="rating"]');
+      const commentInput = panel.querySelector('.feedback-input[data-field="comment"]');
+      const rejectInput = panel.querySelector('.expert-input[data-field="reject"]');
+      const rating = rejectInput?.checked ? 1 : Math.max(1, Math.min(5, Number(ratingInput?.value || 4)));
+      try {
+        const data = await postJson("/metrics/feedback", {
+          hypothesis_id: id,
+          rating,
+          score: hypothesis.score,
+          expert_id: "ui",
+          comment: commentInput?.value || ""
+        });
+        addMsg("assistant", '<div class="bubble">Feedback сохранён. Записей: ' + escapeHtml(data.sample_size) + ".</div>");
+      } catch(e) {
+        addMsg("assistant", '<div class="bubble error">' + escapeHtml(e.message) + "</div>");
+      }
+    }
+    async function exportHypotheses(format) {
+      if (!state.lastHypothesisResult?.hypotheses?.length) return;
+      try {
+        const r = await fetch("/hypotheses/export?format=" + encodeURIComponent(format), {
+          method: "POST",
+          headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({ result: state.lastHypothesisResult })
+        });
+        if (!r.ok) throw new Error(await r.text() || r.statusText);
+        const blob = await r.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "materials-hypotheses." + format;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+      } catch(e) {
+        addMsg("assistant", '<div class="bubble error">' + escapeHtml(e.message) + "</div>");
+      }
+    }
+    async function loadTaskMaterials() {
+      $("menuPopover").classList.remove("open");
+      try {
+        const data = await postJson("/demo/load-task-materials", {});
+        renderSources(data, { notify: false });
+        const unsupported = data.unsupported_files?.length ? " Неподдерживаемых файлов: " + data.unsupported_files.length + "." : "";
+        const warning = data.warnings?.length ? " " + data.warnings.map(escapeHtml).join(" ") : "";
+        addMsg("assistant", '<div class="bubble">Материалы Task 1 загружены из ' + escapeHtml(data.task_materials_dir) + "." + unsupported + warning + "</div>");
+        refreshGraphIfOpen();
+      } catch(e) {
+        addMsg("assistant", '<div class="bubble error">' + escapeHtml(e.message) + "</div>");
+      }
+    }
     function graphDataUrl() {
       const selected = state.files.filter(f => state.selected.has(f.name)).map(f => f.name);
       if (!selected.length) return null;
@@ -1401,10 +1523,13 @@
         const data = await r.json();
         state.files = [];
         state.selected.clear();
-        state.overview = null;
-        state.sourceLimit = UI_CONFIG.sourcePageSize;
-        setSourceStats();
-        renderSourceList();
+      state.overview = null;
+      state.sourceLimit = UI_CONFIG.sourcePageSize;
+      state.lastHypothesisResult = null;
+      $("exportHypothesesJson").disabled = true;
+      $("exportHypothesesCsv").disabled = true;
+      setSourceStats();
+      renderSourceList();
         addMsg("assistant", '<div class="bubble">' + UI_TEXT.allSourcesRemoved + "</div>");
         refreshGraphIfOpen();
         if (data.suggested_questions?.length) renderSuggestions(data.suggested_questions);
@@ -1417,12 +1542,17 @@
       $("chatBody").innerHTML =
         '<div class="hero" id="hero"><div class="hero-inner"><div class="hero-icon">&#9883;</div><h1>Фабрика гипотез</h1><p id="notebookMeta">Добавьте источники слева и задавайте вопросы в чате. Граф знаний строится только из загруженных данных.</p></div></div>';
       if ($("suggestions")) $("suggestions").innerHTML = "";
+      state.lastHypothesisResult = null;
+      $("exportHypothesesJson").disabled = true;
+      $("exportHypothesesCsv").disabled = true;
       fetch("/source/suggestions").then(r => r.json()).then(q => { if (state.total) renderSuggestions(q); }).catch(() => {});
     }
     $("addSources").addEventListener("click", () => $("fileInput").click());
     $("fileInput").addEventListener("change", e => { uploadFiles(Array.from(e.target.files)); e.target.value = ""; });
     $("sendQuestion").addEventListener("click", ask);
     $("generateHypotheses").addEventListener("click", generateHypothesesFromKpi);
+    $("exportHypothesesJson").addEventListener("click", () => exportHypotheses("json"));
+    $("exportHypothesesCsv").addEventListener("click", () => exportHypotheses("csv"));
     $("targetKpi").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); generateHypothesesFromKpi(); } });
     $("question").addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ask(); } });
     $("question").addEventListener("input", function() { this.style.height = "auto"; this.style.height = Math.min(this.scrollHeight, 120) + "px"; });
@@ -1434,6 +1564,7 @@
     });
     $("graphClose").addEventListener("click", closeGraphPanel);
     $("menuButton").addEventListener("click", e => { e.stopPropagation(); $("menuPopover").classList.toggle("open"); });
+    $("loadTaskMaterials").addEventListener("click", loadTaskMaterials);
     $("clearAllSources").addEventListener("click", () => { $("menuPopover").classList.remove("open"); clearAllSources(); });
     $("clearChat").addEventListener("click", clearChat);
     $("sourceSearch").addEventListener("input", e => {
@@ -1469,6 +1600,11 @@
       const applyBtn = e.target.closest(".apply-expert");
       if (applyBtn) {
         applyExpertAdjustments();
+        return;
+      }
+      const saveBtn = e.target.closest(".save-feedback");
+      if (saveBtn) {
+        saveExpertFeedback(saveBtn.closest(".expert-panel"));
         return;
       }
       const clearBtn = e.target.closest(".clear-expert");
