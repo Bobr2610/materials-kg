@@ -154,6 +154,7 @@ python_files = [
     "test_ingestion_adapters.py",
     "test_ingest_materials_cli_loading.py",
     "test_deepagents_hypothesis_factory.py",
+    "test_document_block_pipeline.py",
     "test_llm_provider_selection.py",
     "test_materials_api_smoke.py",
     "test_materials_graph_database_behavior.py",

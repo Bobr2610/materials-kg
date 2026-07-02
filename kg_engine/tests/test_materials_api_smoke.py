@@ -4,6 +4,7 @@ import json
 
 from fastapi.testclient import TestClient
 
+from kg_engine.api import materials_core
 from kg_engine.api.materials_core import create_materials_app
 from kg_engine.config.settings import Settings
 from kg_engine.repositories.memory import InMemoryMaterialsKGRepository
@@ -686,6 +687,139 @@ def test_upload_uses_llm_to_structure_ambiguous_csv_columns() -> None:
     body = query.json()
     assert body["observations"][0]["value"] == 810.0
     assert body["evidence"][0]["source_id"] == "messy.csv"
+
+
+def test_task_materials_loader_and_hypothesis_exports(tmp_path, monkeypatch) -> None:
+    task_dir = tmp_path / "Задача 1"
+    task_dir.mkdir()
+    (task_dir / "reference.json").write_text(
+        json.dumps(
+            {
+                "entities": [
+                    {"kind": "material", "name": "CuCrZr"},
+                    {"kind": "mode", "name": "Aging"},
+                    {"kind": "property", "name": "Conductivity"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (task_dir / "experiments.json").write_text(
+        json.dumps(
+            [
+                {
+                    "experiment_id": "task1-exp",
+                    "title": "Task 1 conductivity check",
+                    "material_name": "CuCrZr",
+                    "mode_name": "Aging",
+                    "observations": [
+                        {
+                            "property_name": "Conductivity",
+                            "value": 58.0,
+                            "unit": "%IACS",
+                        }
+                    ],
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (task_dir / "notes.md").write_text(
+        "# Task 1 notes\nCuCrZr aging improves conductivity.",
+        encoding="utf-8",
+    )
+    (task_dir / "scan.pdf").write_bytes(b"%PDF unsupported by Agent 2")
+    monkeypatch.setattr(materials_core, "_TASK_MATERIALS_DIRS", (task_dir,))
+
+    app = create_materials_app(
+        settings=deterministic_settings(),
+        service=MaterialsKGService(InMemoryMaterialsKGRepository())
+    )
+    client = TestClient(app)
+
+    loaded = client.post("/demo/load-task-materials")
+    assert loaded.status_code == 200
+    loaded_body = loaded.json()
+    assert len(loaded_body["uploaded"]) == 3
+    assert loaded_body["unsupported_files"] == ["scan.pdf"]
+    assert loaded_body["reference"]["entities"] == 3
+    assert loaded_body["experiments"]["observations"] == 1
+    assert loaded_body["documents"]["documents"] == 1
+
+    hypotheses = client.post(
+        "/hypotheses/generate",
+        json={
+            "target_kpi": "Conductivity",
+            "material": "CuCrZr",
+            "max_hypotheses": 2,
+        },
+    )
+    assert hypotheses.status_code == 200
+    result = hypotheses.json()
+    assert result["hypotheses"]
+
+    json_export = client.post(
+        "/hypotheses/export?format=json",
+        json={"result": result},
+    )
+    assert json_export.status_code == 200
+    assert json_export.headers["content-disposition"].endswith(
+        'filename="materials-hypotheses.json"'
+    )
+    assert json_export.json()["target_kpi"] == "Conductivity"
+
+    csv_export = client.post(
+        "/hypotheses/export?format=csv",
+        json={"result": result},
+    )
+    assert csv_export.status_code == 200
+    assert "text/csv" in csv_export.headers["content-type"]
+    assert "supporting_observation_ids" in csv_export.text
+    assert "Conductivity" in csv_export.text
+
+
+def test_task_materials_loader_uses_packaged_fallback(tmp_path, monkeypatch) -> None:
+    missing_task_dir = tmp_path / "missing-task"
+    fallback_dir = tmp_path / "sample_sources"
+    fallback_dir.mkdir()
+    (fallback_dir / "reference_pack.json").write_text(
+        json.dumps(
+            {
+                "materials": [{"name": "CuCrZr"}],
+                "properties": [{"name": "Electrical Conductivity"}],
+                "modes": [{"name": "Solution Treated"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (fallback_dir / "experiment_rows.csv").write_text(
+        "experiment_id,title,material,mode,property,value,unit,finding\n"
+        "FALLBACK-001,CuCrZr fallback conductivity,CuCrZr,"
+        "Solution Treated,Electrical Conductivity,58,%IACS,"
+        "Fallback row becomes a structured observation",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(materials_core, "_TASK_MATERIALS_DIRS", (missing_task_dir,))
+    monkeypatch.setattr(
+        materials_core,
+        "_TASK_MATERIALS_FALLBACK_DIRS",
+        (fallback_dir,),
+    )
+
+    app = create_materials_app(
+        settings=deterministic_settings(),
+        service=MaterialsKGService(InMemoryMaterialsKGRepository()),
+    )
+    client = TestClient(app)
+
+    loaded = client.post("/demo/load-task-materials")
+
+    assert loaded.status_code == 200
+    loaded_body = loaded.json()
+    assert loaded_body["used_fallback"] is True
+    assert "sample_sources" in loaded_body["task_materials_dir"]
+    assert loaded_body["warnings"]
+    assert loaded_body["reference"]["entities"] == 3
 
 
 class TestDestructiveEndpoints:

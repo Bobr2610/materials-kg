@@ -234,6 +234,38 @@ def test_deep_agent_discards_ungrounded_hypotheses() -> None:
     )
 
 
+def test_deep_agent_does_not_treat_entity_ids_as_grounding() -> None:
+    service = _build_service()
+    baseline = service.generate_hypotheses(
+        HypothesisInput(target_kpi="Electrical Conductivity", material="CuCrZr")
+    )
+    payload = baseline.model_dump(mode="json")
+    entity_only = payload["hypotheses"][0].copy()
+    entity_only.update(
+        {
+            "id": "entity-only-hypothesis",
+            "supporting_entity_ids": [payload["matched_entities"][0]["id"]],
+            "supporting_evidence_ids": [],
+            "supporting_observation_ids": [],
+            "supporting_text_unit_ids": [],
+            "data_gap_ids": [],
+        }
+    )
+    payload["hypotheses"] = [entity_only]
+    payload["generation_engine"] = "deepagents"
+
+    result = generate_hypotheses_with_deep_agent(
+        service,
+        HypothesisInput(target_kpi="Electrical Conductivity", material="CuCrZr"),
+        runtime_settings=_settings(),
+        agent_factory=lambda **kwargs: _FakeDeepAgent(payload, kwargs["tools"]),
+        model_factory=lambda _: ("fake-model", "openai:gpt-test"),
+    )
+
+    assert result.hypotheses == []
+    assert any("entity-only-hypothesis" in item for item in result.warnings)
+
+
 def test_hypothesis_tools_are_read_only() -> None:
     service = _build_service()
     before = service.get_source_overview()

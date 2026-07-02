@@ -84,6 +84,12 @@ class Settings(BaseSettings):
     materials_deepagents_enabled: bool = True
     materials_deepagents_max_tool_steps: int = 12
 
+    # Document parsing / Vision-Language interpretation
+    materials_document_vision_enabled: bool = False
+    materials_vision_model: str = ""
+    materials_pdf_render_dpi: int = 180
+    materials_pdf_max_pages: int | None = None
+
     # Session management
     session_ttl_seconds: int = 3600
     session_max_messages: int = 50

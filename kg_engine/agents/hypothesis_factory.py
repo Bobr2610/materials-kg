@@ -205,7 +205,6 @@ def _filter_ungrounded_hypotheses(
     observation_ids = {item.id for item in result.observations}
     text_unit_ids = {item.id for item in result.search_hits}
     data_gap_ids = {item.id for item in result.data_gaps}
-    entity_ids = {item.id for item in result.matched_entities}
 
     # Collect IDs from agent_trace tool_call results
     trace_ids: set[str] = set()
@@ -223,11 +222,6 @@ def _filter_ungrounded_hypotheses(
             if isinstance(val, list):
                 trace_ids.update(str(v) for v in val if v)
 
-    all_known_ids = (
-        evidence_ids | observation_ids | text_unit_ids | data_gap_ids
-        | entity_ids | trace_ids
-    )
-
     kept = []
     rejected: list[str] = []
     for hypothesis in result.hypotheses:
@@ -237,18 +231,19 @@ def _filter_ungrounded_hypotheses(
                 set(hypothesis.supporting_observation_ids) & observation_ids,
                 set(hypothesis.supporting_text_unit_ids) & text_unit_ids,
                 set(hypothesis.data_gap_ids) & data_gap_ids,
-                set(hypothesis.supporting_entity_ids) & entity_ids,
             ]
         )
         if not has_graph_support:
-            all_hypothesis_refs = (
+            concrete_hypothesis_refs = (
                 set(hypothesis.supporting_evidence_ids)
                 | set(hypothesis.supporting_observation_ids)
                 | set(hypothesis.supporting_text_unit_ids)
                 | set(hypothesis.data_gap_ids)
-                | set(hypothesis.supporting_entity_ids)
             )
-            has_graph_support = bool(all_hypothesis_refs & all_known_ids)
+            concrete_known_ids = (
+                evidence_ids | observation_ids | text_unit_ids | data_gap_ids
+            )
+            has_graph_support = bool(concrete_hypothesis_refs & concrete_known_ids)
         if has_graph_support:
             kept.append(hypothesis)
             continue

@@ -23,6 +23,11 @@ from kg_engine.ingestion.adapters import ExperimentCatalogAdapter
 from kg_engine.ingestion.adapters import ReferenceDataAdapter
 from kg_engine.ingestion.adapters import StaffDirectoryAdapter
 from kg_engine.ingestion.adapters import TagCatalogAdapter
+from kg_engine.ingestion.document_blocks import DocumentBlockParser
+from kg_engine.ingestion.document_blocks import DocumentParseSettings
+from kg_engine.ingestion.document_blocks import parse_document_file
+from kg_engine.llm_core.provider import create_provider_from_settings
+from kg_engine.llm_core.vision import OpenAICompatibleVisionConductor
 from kg_engine.repositories.factory import create_materials_repository
 from kg_engine.services.materials_kg import MaterialsKGService
 
@@ -43,6 +48,21 @@ _CANONICAL_EXPERIMENT_SECTIONS = {"experiments", "rows", "items"}
 _CANONICAL_DOCUMENT_SECTIONS = {"documents", "rows", "items"}
 _TEXT_FILE_SUFFIXES = {".txt", ".md"}
 _STRUCTURED_FILE_SUFFIXES = {".json", ".jsonl", ".csv", ".tsv"}
+_PARSER_FILE_SUFFIXES = {
+    ".docx",
+    ".xlsx",
+    ".xls",
+    ".pdf",
+    ".html",
+    ".htm",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".webp",
+    ".tif",
+    ".tiff",
+    ".bmp",
+}
 
 
 def _supported_files(path: Path) -> list[Path]:
@@ -52,7 +72,8 @@ def _supported_files(path: Path) -> list[Path]:
         item
         for item in sorted(path.rglob("*"))
         if item.is_file()
-        and item.suffix.lower() in {*_STRUCTURED_FILE_SUFFIXES, *_TEXT_FILE_SUFFIXES}
+        and item.suffix.lower()
+        in {*_STRUCTURED_FILE_SUFFIXES, *_TEXT_FILE_SUFFIXES, *_PARSER_FILE_SUFFIXES}
     ]
 
 
@@ -62,7 +83,41 @@ def _load_tabular(path: Path) -> list[dict[str, Any]]:
         return [dict(row) for row in csv.DictReader(handle, delimiter=delimiter)]
 
 
-def _load_one(path: Path, *, family: str) -> Any:
+def _document_parser(*, enable_vision: bool | None = None) -> DocumentBlockParser:
+    vision_enabled = (
+        settings.materials_document_vision_enabled
+        if enable_vision is None
+        else enable_vision
+    )
+    conductor = None
+    if vision_enabled:
+        provider = create_provider_from_settings(settings)
+        if provider is None:
+            msg = (
+                "Document vision is enabled, but no LLM provider is configured. "
+                "Set DEFAULT_LLM_PROVIDER plus provider API/base URL settings."
+            )
+            raise RuntimeError(msg)
+        conductor = OpenAICompatibleVisionConductor(
+            provider,
+            model=settings.materials_vision_model or settings.default_model or None,
+        )
+    return DocumentBlockParser(
+        vision_conductor=conductor,
+        settings=DocumentParseSettings(
+            enable_vision=vision_enabled,
+            pdf_render_dpi=settings.materials_pdf_render_dpi,
+            max_pdf_pages=settings.materials_pdf_max_pages,
+        ),
+    )
+
+
+def _load_one(
+    path: Path,
+    *,
+    family: str,
+    document_parser: DocumentBlockParser | None = None,
+) -> Any:
     suffix = path.suffix.lower()
     if suffix == ".json":
         return json.loads(path.read_text(encoding="utf-8"))
@@ -90,6 +145,10 @@ def _load_one(path: Path, *, family: str) -> Any:
                 "metadata": {"source_path": str(path)},
             }
         ]
+    if family in {"documents", "bundle"} and suffix in _PARSER_FILE_SUFFIXES:
+        parser = document_parser or _document_parser()
+        document = parse_document_file(path, parser=parser)
+        return [document.model_dump(mode="json")]
     logger.warning("Skipping unsupported %s input file: %s", family, path)
     return [] if family != "reference" else {}
 
@@ -268,7 +327,11 @@ def _merge_bundle_payload(bundle: dict[str, Any], payload: Any, source: Path) ->
         bundle["documents"].append(_fallback_document(source, payload))
 
 
-def _load_bundle(path: str) -> dict[str, Any]:
+def _load_bundle(
+    path: str,
+    *,
+    document_parser: DocumentBlockParser | None = None,
+) -> dict[str, Any]:
     source_path = Path(path)
     if not source_path.exists():
         raise FileNotFoundError(f"Input path not found: {source_path}")
@@ -284,12 +347,34 @@ def _load_bundle(path: str) -> dict[str, Any]:
             continue
         if suffix in _STRUCTURED_FILE_SUFFIXES:
             _merge_bundle_payload(
-                bundle, _load_one(file_path, family="bundle"), file_path
+                bundle,
+                _load_one(
+                    file_path,
+                    family="bundle",
+                    document_parser=document_parser,
+                ),
+                file_path,
+            )
+            continue
+        if suffix in _PARSER_FILE_SUFFIXES:
+            _merge_bundle_payload(
+                bundle,
+                _load_one(
+                    file_path,
+                    family="bundle",
+                    document_parser=document_parser,
+                ),
+                file_path,
             )
     return bundle
 
 
-def _load_payload(path: str | None, *, family: str) -> object | None:
+def _load_payload(
+    path: str | None,
+    *,
+    family: str,
+    document_parser: DocumentBlockParser | None = None,
+) -> object | None:
     if path is None:
         return None
     source_path = Path(path)
@@ -300,12 +385,22 @@ def _load_payload(path: str | None, *, family: str) -> object | None:
         merged: dict[str, Any] = {}
         for file_path in files:
             _merge_reference_payload(
-                merged, _load_one(file_path, family=family), file_path
+                merged,
+                _load_one(
+                    file_path,
+                    family=family,
+                    document_parser=document_parser,
+                ),
+                file_path,
             )
         return merged
     merged_rows: list[Any] = []
     for file_path in files:
-        payload = _load_one(file_path, family=family)
+        payload = _load_one(
+            file_path,
+            family=family,
+            document_parser=document_parser,
+        )
         if isinstance(payload, list):
             merged_rows.extend(payload)
         elif isinstance(payload, dict):
@@ -368,7 +463,18 @@ def main() -> None:
         default=False,
         help="Ensure Neo4j schema constraints before ingestion",
     )
+    parser.add_argument(
+        "--enable-vision",
+        action="store_true",
+        default=False,
+        help=(
+            "Interpret rendered PDF/image pages through the configured "
+            "Vision-Language provider. Disabled by default to avoid hidden cost."
+        ),
+    )
     args = parser.parse_args()
+
+    document_parser = _document_parser(enable_vision=args.enable_vision)
 
     repository = create_materials_repository(
         settings,
@@ -377,7 +483,7 @@ def main() -> None:
     service = MaterialsKGService(repository)
 
     if args.input:
-        bundle = _load_bundle(args.input)
+        bundle = _load_bundle(args.input, document_parser=document_parser)
         reference_result = service.ingest_reference_data(
             ReferenceDataAdapter().from_payload(bundle["reference"])
         )
@@ -404,7 +510,11 @@ def main() -> None:
         logger.info("Experiment ingestion: %s", result)
 
     if args.documents:
-        payload = _load_payload(args.documents, family="documents")
+        payload = _load_payload(
+            args.documents,
+            family="documents",
+            document_parser=document_parser,
+        )
         batch = DocumentCorpusAdapter().from_payload(payload or [])
         result = service.ingest_documents(batch)
         logger.info("Document ingestion: %s", result)

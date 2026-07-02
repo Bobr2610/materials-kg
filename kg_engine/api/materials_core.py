@@ -20,6 +20,7 @@ from pydantic import Field
 
 from kg_engine.domain.models import DocumentInput
 from kg_engine.domain.models import ExperimentInput
+from kg_engine.domain.models import HypothesisGenerationResult
 from kg_engine.domain.models import HypothesisInput
 from kg_engine.domain.models import PropertyFilters
 from kg_engine.domain.models import QueryFilters
@@ -50,6 +51,15 @@ if TYPE_CHECKING:
 _TEXT_SUFFIXES = {".txt", ".md"}
 _STRUCTURED_SUFFIXES = {".json", ".jsonl", ".csv", ".tsv"}
 _SAMPLE_DATA_DIR = Path(__file__).resolve().parents[2] / "data"
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_TASK_MATERIALS_DIRS = (
+    _PROJECT_ROOT / "Задача 1",
+    _PROJECT_ROOT / "task-1",
+    _PROJECT_ROOT / "task1",
+    _PROJECT_ROOT / "task_1",
+    _PROJECT_ROOT / "data" / "task1",
+)
+_TASK_MATERIALS_FALLBACK_DIRS = (_PROJECT_ROOT / "sample_sources",)
 _SOURCES_QUERY = Query(default=None)
 _REFERENCE_KEYS = {
     "entities",
@@ -121,8 +131,13 @@ def _looks_like_reference_record(item: dict) -> bool:
 def _looks_like_experiment_record(item: dict) -> bool:
     return bool(
         (item.get("experiment_id") or item.get("id"))
-        and item.get("material_name")
-        and item.get("observations")
+        and (item.get("material_name") or item.get("material") or item.get("alloy"))
+        and (
+            item.get("observations")
+            or item.get("property_name")
+            or item.get("property")
+            or item.get("property_id")
+        )
     )
 
 
@@ -206,6 +221,167 @@ def _append_as_searchable_documents(
         )
 
 
+def _append_parsed_payload_without_llm(
+    *,
+    parsed: object,
+    name: str,
+    suffix: str,
+    ref_payload: dict,
+    exp_payload: list,
+    doc_payload: list,
+) -> None:
+    if suffix in _TEXT_SUFFIXES:
+        items = parsed if isinstance(parsed, list) else [parsed]
+        for item in items:
+            if isinstance(item, dict):
+                _mark_uploaded_from(item, name)
+                doc_payload.append(item)
+        return
+    if isinstance(parsed, dict):
+        for key in _REFERENCE_KEYS:
+            values = parsed.get(key)
+            if isinstance(values, list):
+                for item in values:
+                    _mark_uploaded_from(item, name)
+                ref_payload.setdefault(key, []).extend(values)
+        experiments = parsed.get("experiments")
+        if isinstance(experiments, list):
+            for item in experiments:
+                _mark_uploaded_from(item, name)
+            exp_payload.extend(experiments)
+        documents = parsed.get("documents")
+        if isinstance(documents, list):
+            for item in documents:
+                _mark_uploaded_from(item, name)
+            doc_payload.extend(documents)
+        if not any(key in parsed for key in _REFERENCE_KEYS | {"experiments"}):
+            if _looks_like_reference_record(parsed):
+                _mark_uploaded_from(parsed, name)
+                ref_payload.setdefault("entities", []).append(parsed)
+            elif _looks_like_experiment_record(parsed):
+                _mark_uploaded_from(parsed, name)
+                exp_payload.append(parsed)
+            elif _looks_like_document_record(parsed):
+                _mark_uploaded_from(parsed, name)
+                doc_payload.append(parsed)
+            else:
+                _append_as_searchable_documents(
+                    parsed=parsed,
+                    name=name,
+                    doc_payload=doc_payload,
+                )
+        return
+    if isinstance(parsed, list):
+        for item_index, item in enumerate(parsed):
+            if not isinstance(item, dict):
+                continue
+            if _looks_like_reference_record(item):
+                _mark_uploaded_from(item, name)
+                ref_payload.setdefault("entities", []).append(item)
+            elif _looks_like_experiment_record(item):
+                _mark_uploaded_from(item, name)
+                exp_payload.append(item)
+            elif _looks_like_document_record(item):
+                _mark_uploaded_from(item, name)
+                doc_payload.append(item)
+            else:
+                doc_payload.append(
+                    {
+                        "document_id": f"{name}#row-{item_index}",
+                        "title": f"{Path(name).stem} #row-{item_index}",
+                        "text": json.dumps(item, ensure_ascii=False),
+                        "metadata": {"source_file": name},
+                    }
+                )
+
+
+def _find_task_materials_dir() -> tuple[Path | None, bool, list[str]]:
+    checked: list[str] = []
+    for candidate in _TASK_MATERIALS_DIRS:
+        checked.append(_display_path(candidate))
+        if candidate.is_dir():
+            return candidate, False, checked
+    for candidate in _TASK_MATERIALS_FALLBACK_DIRS:
+        checked.append(_display_path(candidate))
+        if candidate.is_dir():
+            return candidate, True, checked
+    return None, False, checked
+
+
+def _display_path(path: Path) -> str:
+    try:
+        return str(path.relative_to(_PROJECT_ROOT))
+    except ValueError:
+        return str(path)
+
+
+def _hypotheses_csv(result: HypothesisGenerationResult) -> str:
+    output = io.StringIO()
+    fieldnames = [
+        "rank",
+        "id",
+        "target_kpi",
+        "hypothesis_type",
+        "statement",
+        "rationale",
+        "test_plan",
+        "final_score",
+        "novelty",
+        "risk",
+        "value",
+        "evidence_strength",
+        "novelty_rationale",
+        "value_rationale",
+        "risk_items",
+        "supporting_entity_ids",
+        "supporting_evidence_ids",
+        "supporting_observation_ids",
+        "supporting_text_unit_ids",
+        "data_gap_ids",
+        "assumptions",
+        "required_evidence",
+        "falsification_criteria",
+    ]
+    writer = csv.DictWriter(output, fieldnames=fieldnames)
+    writer.writeheader()
+    for hypothesis in result.hypotheses:
+        score = hypothesis.score
+        writer.writerow(
+            {
+                "rank": hypothesis.rank,
+                "id": hypothesis.id,
+                "target_kpi": hypothesis.target_kpi,
+                "hypothesis_type": hypothesis.hypothesis_type,
+                "statement": hypothesis.statement,
+                "rationale": hypothesis.rationale,
+                "test_plan": hypothesis.test_plan,
+                "final_score": score.final_score,
+                "novelty": score.novelty,
+                "risk": score.risk,
+                "value": score.value,
+                "evidence_strength": score.evidence_strength,
+                "novelty_rationale": hypothesis.novelty_rationale,
+                "value_rationale": hypothesis.value_rationale,
+                "risk_items": ";".join(hypothesis.risk_items),
+                "supporting_entity_ids": ";".join(hypothesis.supporting_entity_ids),
+                "supporting_evidence_ids": ";".join(hypothesis.supporting_evidence_ids),
+                "supporting_observation_ids": ";".join(
+                    hypothesis.supporting_observation_ids
+                ),
+                "supporting_text_unit_ids": ";".join(
+                    hypothesis.supporting_text_unit_ids
+                ),
+                "data_gap_ids": ";".join(hypothesis.data_gap_ids),
+                "assumptions": ";".join(hypothesis.assumptions),
+                "required_evidence": ";".join(hypothesis.required_evidence),
+                "falsification_criteria": ";".join(
+                    hypothesis.falsification_criteria
+                ),
+            }
+        )
+    return output.getvalue()
+
+
 class MaterialModeRequest(BaseModel):
     material: str = Field(min_length=1)
     mode: str | None = Field(default=None)
@@ -254,8 +430,11 @@ class MetricsRunComparisonRequest(BaseModel):
     right: RunMetricsInput
 
 
+class HypothesisExportRequest(BaseModel):
+    result: HypothesisGenerationResult
+
+
 _UI_PAGE = Path(__file__).resolve().parents[2] / "ui-page.html"
-_PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _notebook_dashboard_html() -> str:
@@ -614,6 +793,81 @@ def create_materials_app(
         _source_files.extend(results["uploaded"])
         return results
 
+    @app.post("/demo/load-task-materials")
+    def load_task_materials() -> dict:
+        task_dir, used_fallback, checked = _find_task_materials_dir()
+        if task_dir is None:
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    "No Task 1 corpus or packaged fallback corpus is present. "
+                    f"Checked: {', '.join(checked)}"
+                ),
+            )
+
+        ref_payload: dict = {}
+        exp_payload: list = []
+        doc_payload: list = []
+        uploaded: list[dict] = []
+        unsupported: list[str] = []
+        supported_suffixes = _TEXT_SUFFIXES | _STRUCTURED_SUFFIXES
+        for path in sorted(item for item in task_dir.rglob("*") if item.is_file()):
+            relative_name = str(path.relative_to(task_dir))
+            suffix = path.suffix.lower()
+            if suffix not in supported_suffixes:
+                unsupported.append(relative_name)
+                continue
+            content = path.read_bytes()
+            parsed = _parse_uploaded_file(relative_name, content)
+            if parsed is None:
+                unsupported.append(relative_name)
+                continue
+            _append_parsed_payload_without_llm(
+                parsed=parsed,
+                name=relative_name,
+                suffix=suffix,
+                ref_payload=ref_payload,
+                exp_payload=exp_payload,
+                doc_payload=doc_payload,
+            )
+            uploaded.append(
+                {
+                    "name": relative_name,
+                    "size": path.stat().st_size,
+                    "type": suffix.lstrip(".") or "unknown",
+                }
+            )
+
+        results: dict = {
+            "task_materials_dir": _display_path(task_dir),
+            "used_fallback": used_fallback,
+            "uploaded": uploaded,
+            "unsupported_files": unsupported,
+        }
+        if used_fallback:
+            results["warnings"] = [
+                (
+                    "Task 1 corpus directory is not present; loaded packaged "
+                    "sample_sources fallback instead."
+                )
+            ]
+        if ref_payload:
+            results["reference"] = runtime_service.ingest_reference_data(
+                ReferenceDataAdapter().from_payload(ref_payload)
+            )
+        if exp_payload:
+            results["experiments"] = runtime_service.ingest_experiments(
+                ExperimentCatalogAdapter().from_payload(exp_payload)
+            )
+        if doc_payload:
+            results["documents"] = runtime_service.ingest_documents(
+                DocumentCorpusAdapter().from_payload(doc_payload)
+            )
+        results["overview"] = runtime_service.get_source_overview()
+        results["suggested_questions"] = runtime_service.get_suggested_questions()
+        _source_files.extend(uploaded)
+        return results
+
     @app.post("/ingest/reference")
     def ingest_reference(batch: ReferenceDataBatch) -> dict[str, int]:
         return runtime_service.ingest_reference_data(batch)
@@ -683,6 +937,34 @@ def create_materials_app(
         except DeepAgentsResultError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         return result.model_dump(mode="json")
+
+    @app.post("/hypotheses/export")
+    def export_hypotheses(
+        request: HypothesisExportRequest,
+        export_format: str = Query(
+            default="json",
+            pattern="^(json|csv)$",
+            alias="format",
+        ),
+    ) -> Response:
+        result = request.result
+        if export_format == "csv":
+            return Response(
+                content=_hypotheses_csv(result),
+                media_type="text/csv; charset=utf-8",
+                headers={
+                    "Content-Disposition": (
+                        'attachment; filename="materials-hypotheses.csv"'
+                    )
+                },
+            )
+        return Response(
+            content=json.dumps(result.model_dump(mode="json"), ensure_ascii=False, indent=2),
+            media_type="application/json",
+            headers={
+                "Content-Disposition": 'attachment; filename="materials-hypotheses.json"'
+            },
+        )
 
     @app.post("/metrics/extraction")
     def metrics_extraction(request: ExtractionBenchmark) -> dict:
