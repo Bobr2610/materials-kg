@@ -96,21 +96,18 @@ def test_configured_mistral_provider_is_openai_compatible() -> None:
     provider.close()
 
 
-def test_empty_provider_keeps_legacy_auto_detection_order() -> None:
+def test_empty_provider_does_not_auto_detect_spare_keys() -> None:
     settings = Settings(
         default_llm_provider="",
         default_model="gpt-4o-mini",
         default_embedding_model="text-embedding-3-small",
+        llm_api_key="",
+        yandex_api_key="",
         openai_api_key="openai-key",
         openrouter_api_key="openrouter-key",
     )
 
-    provider = create_provider_from_settings(settings)
-
-    assert provider is not None
-    assert provider.base_url == "https://api.openai.com"
-    assert provider.api_key == "openai-key"
-    provider.close()
+    assert create_provider_from_settings(settings) is None
 
 
 def test_agent_provider_alias_selects_provider_when_default_is_empty(

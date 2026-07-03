@@ -21,6 +21,12 @@ dependencies = [
     "pydantic>=2.0,<3",
     "pydantic-settings>=2.0,<3",
     "python-dotenv>=1.0,<2",
+    "python-docx>=1.1,<2",
+    "openpyxl>=3.1,<4",
+    "pypdf>=5.0,<6",
+    "pillow>=10,<12",
+    "pytesseract>=0.3.13,<1",
+    "reportlab>=4.0,<5",
     "uvicorn>=0.20",
 ]
 
@@ -152,6 +158,8 @@ max-statements = 60
 testpaths = ["kg_engine/tests"]
 python_files = [
     "test_ingestion_adapters.py",
+    "test_ingestion_jobs.py",
+    "test_hypothesis_reports.py",
     "test_ingest_materials_cli_loading.py",
     "test_deepagents_hypothesis_factory.py",
     "test_llm_provider_selection.py",
@@ -162,6 +170,7 @@ python_files = [
     "test_neo4j_repository.py",
     "test_no_donor_brand_in_core.py",
     "test_repository_factory.py",
+    "test_research_product.py",
 ]
 markers = [
     "integration: marks tests as integration (deselect with '-m \"not integration\"')",

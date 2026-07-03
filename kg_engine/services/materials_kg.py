@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 from statistics import fmean
+from threading import Lock
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -50,6 +54,33 @@ from kg_engine.services.hypothesis_adjustments import clamp_score
 
 logger = logging.getLogger(__name__)
 
+_FALLBACK_SEMANTIC_TEXT_MAX_CHARS = 1400
+_FALLBACK_IMPORTANT_TERMS = (
+    "material",
+    "alloy",
+    "sample",
+    "property",
+    "temperature",
+    "strength",
+    "hardness",
+    "conductivity",
+    "mpa",
+    "gpa",
+    "hv",
+    "hrc",
+    "iacs",
+    "CuCrZr",
+    "Ti-6Al",
+    "316L",
+    "материал",
+    "образец",
+    "свойство",
+    "температура",
+    "прочность",
+    "твердость",
+    "твёрдость",
+)
+
 
 def _stable_id(prefix: str, *parts: Any) -> str:
     raw = "::".join(str(part) for part in parts if part is not None)
@@ -71,26 +102,221 @@ def _merge_source_refs(
     return list(refs)
 
 
+def _source_key_variants(value: Any) -> set[str]:
+    if value is None:
+        return set()
+    normalized = str(value).strip().replace("\\", "/")
+    if not normalized:
+        return set()
+    parts = [part for part in normalized.split("/") if part]
+    variants = {normalized.casefold()}
+    for idx in range(len(parts)):
+        variants.add("/".join(parts[idx:]).casefold())
+    return variants
+
+
+def _expand_source_set(source_set: set[str]) -> set[str]:
+    expanded: set[str] = set()
+    for item in source_set:
+        expanded.update(_source_key_variants(item))
+    return expanded
+
+
+def _source_matches(value: Any, source_set: set[str]) -> bool:
+    return bool(_source_key_variants(value) & source_set)
+
+
+def _compact_document_text_for_storage(text: str, *, document_id: str) -> tuple[str, dict[str, Any]]:
+    """Keep fallback document text units compact when parser text_units are absent."""
+    lines = [" ".join(line.strip().split()) for line in text.splitlines()]
+    lines = [line for line in lines if line]
+    if not lines:
+        return "", {
+            "semantic_unit": True,
+            "semantic_method": "fallback_document_compaction_v1",
+            "source_text_chars": len(text),
+            "stored_text_chars": 0,
+            "storage_policy": "meaning_with_document_provenance",
+        }
+
+    selected: list[str] = []
+    selected_indices = set(range(min(2, len(lines))))
+    scored = sorted(
+        (
+            (
+                _fallback_semantic_line_score(line, idx),
+                idx,
+            )
+            for idx, line in enumerate(lines)
+        ),
+        key=lambda item: (-item[0], item[1]),
+    )
+    for score, idx in scored:
+        if len(selected_indices) >= 14:
+            break
+        if score <= 0:
+            continue
+        selected_indices.add(idx)
+    if len(selected) < min(4, len(lines)):
+        for idx in range(len(lines)):
+            selected_indices.add(idx)
+            if len(selected_indices) >= min(4, len(lines)):
+                break
+    selected = [lines[idx] for idx in sorted(selected_indices)]
+
+    content = (
+        f"Meaning from {document_id}; page unknown; storage=fallback semantic. "
+        f"Semantic summary: {' / '.join(selected)}"
+    )
+    if len(content) > _FALLBACK_SEMANTIC_TEXT_MAX_CHARS:
+        content = content[: _FALLBACK_SEMANTIC_TEXT_MAX_CHARS - 3].rstrip() + "..."
+    metadata = {
+        "semantic_unit": True,
+        "semantic_method": "fallback_document_compaction_v1",
+        "source_text_chars": len(text),
+        "stored_text_chars": len(content),
+        "storage_policy": "meaning_with_document_provenance",
+    }
+    return content, metadata
+
+
+def _fallback_semantic_line_score(line: str, index: int) -> int:
+    lower = line.casefold()
+    score = 0
+    if index < 2:
+        score += 2
+    if any(char.isdigit() for char in line):
+        score += 2
+    if any(term.casefold() in lower for term in _FALLBACK_IMPORTANT_TERMS):
+        score += 4
+    if "%" in line or "°" in line:
+        score += 2
+    if len(line) <= 180:
+        score += 1
+    return score
+
+
+def _document_extraction_batches(
+    document: DocumentInput,
+    max_chars: int,
+) -> list[tuple[str, str, dict[str, Any]]]:
+    """Split large semantic documents into bounded agent extraction prompts."""
+    if not document.text:
+        return []
+    if len(document.text) <= max_chars:
+        return [
+            (
+                document.title,
+                document.text,
+                {
+                    "batch_index": 1,
+                    "batch_count": 1,
+                    "batch_source": "document_text",
+                },
+            )
+        ]
+    if not document.text_units:
+        compact_text, compact_metadata = _compact_document_text_for_storage(
+            document.text,
+            document_id=document.document_id,
+        )
+        if not compact_text:
+            return []
+        return [
+            (
+                f"{document.title} semantic fallback",
+                compact_text,
+                {
+                    **compact_metadata,
+                    "batch_index": 1,
+                    "batch_count": 1,
+                    "batch_source": "compacted_document_text",
+                },
+            )
+        ]
+
+    batches: list[tuple[str, str, dict[str, Any]]] = []
+    current_parts: list[str] = []
+    current_pages: list[int] = []
+    current_chars = 0
+    # Leave room for title/instructions added by extraction prompts downstream.
+    target_chars = max(4_000, int(max_chars * 0.75))
+
+    def flush() -> None:
+        nonlocal current_parts, current_pages, current_chars
+        if not current_parts:
+            return
+        pages = sorted(set(current_pages))
+        batch_number = len(batches) + 1
+        title = f"{document.title} semantic batch {batch_number}"
+        metadata: dict[str, Any] = {
+            "batch_index": batch_number,
+            "batch_source": "semantic_text_units",
+            "text_units": len(current_parts),
+        }
+        if pages:
+            metadata["pages"] = pages
+            metadata["page_start"] = pages[0]
+            metadata["page_end"] = pages[-1]
+        batches.append((title, "\n\n".join(current_parts), metadata))
+        current_parts = []
+        current_pages = []
+        current_chars = 0
+
+    for index, text_unit in enumerate(document.text_units, start=1):
+        metadata = text_unit.metadata
+        page = metadata.get("page")
+        source_file = metadata.get("source_file") or metadata.get("source_id") or document.document_id
+        block_id = metadata.get("block_id") or f"text-unit-{index}"
+        prefix = (
+            f"[text_unit={index} source={source_file} page={page} "
+            f"block_id={block_id} semantic_unit={metadata.get('semantic_unit', False)}]"
+        )
+        part = f"{prefix}\n{text_unit.content}"
+        if current_parts and current_chars + len(part) > target_chars:
+            flush()
+        if len(part) > target_chars:
+            part = part[: target_chars - 3].rstrip() + "..."
+        current_parts.append(part)
+        current_chars += len(part)
+        if isinstance(page, int):
+            current_pages.append(page)
+
+    flush()
+    batch_count = len(batches)
+    return [
+        (
+            title,
+            text,
+            {
+                **metadata,
+                "batch_count": batch_count,
+            },
+        )
+        for title, text, metadata in batches
+    ]
+
+
 def _entity_matches_sources(entity: Entity, source_set: set[str]) -> bool:
     """Check if an entity originated from any of the given sources."""
-    if any(ref in source_set for ref in entity.source_refs):
+    if any(_source_matches(ref, source_set) for ref in entity.source_refs):
         return True
     props = entity.properties
     for key in ("source_file", "source_ref", "_uploaded_from"):
         val = props.get(key)
-        if val and val in source_set:
+        if _source_matches(val, source_set):
             return True
     return False
 
 
 def _evidence_matches_sources(evidence: Evidence, source_set: set[str]) -> bool:
     """Check if evidence originated from any of the given sources."""
-    if evidence.source_id in source_set:
+    if _source_matches(evidence.source_id, source_set):
         return True
     meta = evidence.metadata
     for key in ("source_file", "source_ref"):
         val = meta.get(key)
-        if val and val in source_set:
+        if _source_matches(val, source_set):
             return True
     return False
 
@@ -106,7 +332,7 @@ def _observation_matches_sources(
         return True
     for key in ("source_file", "source_ref"):
         val = observation.metadata.get(key)
-        if val and val in source_set:
+        if _source_matches(val, source_set):
             return True
     return False
 
@@ -137,7 +363,7 @@ def _trace_matches_sources(
     meta = trace.metadata
     for key in ("source_file", "source_ref"):
         val = meta.get(key)
-        if val and val in source_set:
+        if _source_matches(val, source_set):
             return True
     return False
 
@@ -176,7 +402,12 @@ class MaterialsKGService:
             "coverage_rules": len(batch.coverage_rules),
         }
 
-    def ingest_experiments(self, batch: list[ExperimentInput]) -> dict[str, int]:
+    def ingest_experiments(
+        self,
+        batch: list[ExperimentInput],
+        *,
+        enable_embeddings: bool = True,
+    ) -> dict[str, int]:
         observation_count = 0
         trace_count = 0
         pending_observations: list[Observation] = []
@@ -338,6 +569,8 @@ class MaterialsKGService:
         self._repository.batch_upsert_evidence(pending_evidence)
         self._repository.batch_upsert_relations(pending_relations)
         self._repository.batch_upsert_traces(pending_traces)
+        if enable_embeddings:
+            pending_text_units = self._batch_compute_embeddings(pending_text_units)
         self._repository.batch_upsert_text_units(pending_text_units)
 
         return {
@@ -346,7 +579,13 @@ class MaterialsKGService:
             "decision_traces": trace_count,
         }
 
-    def ingest_documents(self, batch: list[DocumentInput]) -> dict[str, int]:
+    def ingest_documents(
+        self,
+        batch: list[DocumentInput],
+        *,
+        enable_llm_extraction: bool = True,
+        enable_embeddings: bool = True,
+    ) -> dict[str, int]:
         trace_count = 0
         llm_extracted_count = 0
         llm_extraction_errors: list[str] = []
@@ -369,105 +608,158 @@ class MaterialsKGService:
 
             llm_extracted_entity_names: set[tuple[str, str]] = set()
 
-            if self._llm and document.text:
+            from kg_engine.config.settings import settings as _kg_settings
+            _llm_max_chars = getattr(_kg_settings, "materials_llm_extraction_max_chars", 80_000)
+            extraction_batches = (
+                _document_extraction_batches(document, _llm_max_chars)
+                if self._llm and enable_llm_extraction
+                else []
+            )
+
+            if extraction_batches:
                 try:
-                    from kg_engine.llm_core.extraction import (
-                        extract_entities_from_document,
+                    from kg_engine.agents.extraction_agent import (
+                        extract_and_resolve,
+                    )
+                    from kg_engine.agents.extraction_agent import (
+                        resolve_relation_type,
                     )
 
-                    extraction = extract_entities_from_document(
-                        self._llm, document.title, document.text
-                    )
+                    for batch_title, batch_text, batch_metadata in extraction_batches:
+                        extraction = extract_and_resolve(
+                            self._llm, batch_title, batch_text
+                        )
+                        extraction_method = extraction.extraction_engine
+                        extraction_context = {
+                            "source_file": doc_src,
+                            "agent_trace": extraction.agent_trace,
+                            "extraction_batch": batch_metadata,
+                        }
 
-                    name_to_id: dict[str, str] = {}
-                    for ent in extraction.entities:
-                        entity = self._ensure_entity(
-                            ent.kind,
-                            ent.name,
-                            source_ref=doc_src,
-                            aliases=ent.aliases,
-                            properties=ent.properties,
-                        )
-                        name_to_id[ent.name] = entity.id
-                        linked_entity_ids.append(entity.id)
-                        llm_extracted_entity_names.add(
-                            (ent.kind.value, ent.name.lower().strip())
-                        )
-                        evidence = self._create_evidence(
-                            source_kind=SourceKind.DOCUMENT,
-                            source_id=doc_src,
-                            fragment=ent.name,
-                            extraction_method="llm_extraction",
-                            confidence=0.85,
-                        )
-                        pending_evidence.append(evidence)
-                        pending_relations.append(Relation(
-                            id=_stable_id(
-                                "rel",
-                                RelationType.REFERENCES.value,
-                                document_entity.id,
-                                entity.id,
-                            ),
-                            relation_type=RelationType.REFERENCES,
-                            source_entity_id=document_entity.id,
-                            target_entity_id=entity.id,
-                            evidence_ids=[evidence.id],
-                        ))
+                        name_to_id: dict[str, str] = {}
+                        for ent in extraction.entities:
+                            entity = self._ensure_entity(
+                                ent.kind,
+                                ent.name,
+                                source_ref=doc_src,
+                                aliases=ent.aliases,
+                                properties={
+                                    **ent.properties,
+                                    "extraction_batch": batch_metadata,
+                                },
+                            )
+                            name_to_id[ent.name] = entity.id
+                            linked_entity_ids.append(entity.id)
+                            llm_extracted_entity_names.add(
+                                (ent.kind.value, ent.name.lower().strip())
+                            )
+                            evidence = self._create_evidence(
+                                source_kind=SourceKind.DOCUMENT,
+                                source_id=doc_src,
+                                fragment=ent.name,
+                                extraction_method=extraction_method,
+                                confidence=0.85,
+                                metadata=extraction_context,
+                            )
+                            pending_evidence.append(evidence)
+                            pending_relations.append(Relation(
+                                id=_stable_id(
+                                    "rel",
+                                    RelationType.REFERENCES.value,
+                                    document_entity.id,
+                                    entity.id,
+                                ),
+                                relation_type=RelationType.REFERENCES,
+                                source_entity_id=document_entity.id,
+                                target_entity_id=entity.id,
+                                evidence_ids=[evidence.id],
+                            ))
 
-                    for exp in extraction.experiments:
-                        exp_input = ExperimentInput(
-                            experiment_id=exp.experiment_id,
-                            title=exp.title or f"Extracted from {document.title}",
-                            material_name=exp.material_name,
-                            mode_name=exp.mode_name,
-                            observations=list(exp.observations),
-                            findings=list(exp.findings),
-                            source_ref=doc_src,
-                            metadata={
-                                "source_document": document.document_id,
-                                "extraction_method": "llm",
-                            },
-                        )
-                        self.ingest_experiments([exp_input])
-                        llm_extracted_count += 1
+                        for exp in extraction.experiments:
+                            observations = [
+                                item.model_copy(
+                                    update={
+                                        "extraction_method": extraction_method,
+                                        "metadata": {
+                                            **item.metadata,
+                                            "agent_trace": extraction.agent_trace,
+                                            "extraction_batch": batch_metadata,
+                                        },
+                                    }
+                                )
+                                for item in exp.observations
+                            ]
+                            findings = [
+                                item.model_copy(
+                                    update={
+                                        "extraction_method": extraction_method,
+                                        "metadata": {
+                                            **item.metadata,
+                                            "agent_trace": extraction.agent_trace,
+                                            "extraction_batch": batch_metadata,
+                                        },
+                                    }
+                                )
+                                for item in exp.findings
+                            ]
+                            exp_input = ExperimentInput(
+                                experiment_id=exp.experiment_id,
+                                title=exp.title or f"Extracted from {document.title}",
+                                material_name=exp.material_name,
+                                mode_name=exp.mode_name,
+                                observations=observations,
+                                findings=findings,
+                                source_ref=doc_src,
+                                metadata={
+                                    "source_document": document.document_id,
+                                    "extraction_method": extraction_method,
+                                    "agent_trace": extraction.agent_trace,
+                                    "extraction_batch": batch_metadata,
+                                },
+                            )
+                            self.ingest_experiments(
+                                [exp_input],
+                                enable_embeddings=enable_embeddings,
+                            )
+                            llm_extracted_count += 1
 
-                    for rel in extraction.relationships:
-                        source_id = name_to_id.get(rel.source)
-                        target_id = name_to_id.get(rel.target)
-                        if not source_id or not target_id:
-                            continue
-                        from kg_engine.agents.extraction_agent import (
-                            resolve_relation_type,
-                        )
+                        for rel in extraction.relationships:
+                            source_id = name_to_id.get(rel.source)
+                            target_id = name_to_id.get(rel.target)
+                            if not source_id or not target_id:
+                                continue
 
-                        relation_type = resolve_relation_type(rel.type)
-                        evidence = self._create_evidence(
-                            source_kind=SourceKind.DOCUMENT,
-                            source_id=doc_src,
-                            fragment=f"{rel.source} {relation_type.value} {rel.target}",
-                            extraction_method="llm_relationship_extraction",
-                            confidence=0.8,
-                            metadata={"source_file": doc_src},
-                        )
-                        pending_evidence.append(evidence)
-                        pending_relations.append(Relation(
-                            id=_stable_id(
-                                "rel",
-                                relation_type.value,
-                                source_id,
-                                target_id,
-                            ),
-                            relation_type=relation_type,
-                            source_entity_id=source_id,
-                            target_entity_id=target_id,
-                            evidence_ids=[evidence.id],
-                            properties={"extraction_method": "llm"},
-                        ))
+                            relation_type = resolve_relation_type(rel.type)
+                            evidence = self._create_evidence(
+                                source_kind=SourceKind.DOCUMENT,
+                                source_id=doc_src,
+                                fragment=f"{rel.source} {relation_type.value} {rel.target}",
+                                extraction_method=f"{extraction_method}_relationship",
+                                confidence=0.8,
+                                metadata=extraction_context,
+                            )
+                            pending_evidence.append(evidence)
+                            pending_relations.append(Relation(
+                                id=_stable_id(
+                                    "rel",
+                                    relation_type.value,
+                                    source_id,
+                                    target_id,
+                                ),
+                                relation_type=relation_type,
+                                source_entity_id=source_id,
+                                target_entity_id=target_id,
+                                evidence_ids=[evidence.id],
+                                properties={
+                                    "extraction_method": extraction_method,
+                                    "extraction_batch": batch_metadata,
+                                },
+                            ))
 
-                    for warning in extraction.warnings:
-                        llm_extraction_errors.append(
-                            f"{document.document_id}: {warning}"
-                        )
+                        for warning in extraction.warnings:
+                            llm_extraction_errors.append(
+                                f"{document.document_id}: {batch_title}: {warning}"
+                            )
 
                 except Exception:
                     logger.exception(
@@ -554,22 +846,27 @@ class MaterialsKGService:
                 "source_id": doc_src,
                 "source_file": doc_src,
             }
-            doc_text_unit = self._build_text_unit_with_embedding(
-                unit_id=_stable_id("doc_text", document.document_id, document.text),
-                source_entity_id=document_entity.id,
-                source_kind=SourceKind.DOCUMENT,
-                content=document.text,
-                metadata=doc_metadata,
-            )
-            if doc_text_unit is not None:
-                pending_text_units.append(doc_text_unit)
+            if not document.text_units:
+                compact_content, compact_metadata = _compact_document_text_for_storage(
+                    document.text,
+                    document_id=document.document_id,
+                )
+                doc_text_unit = self._build_text_unit(
+                    unit_id=_stable_id("doc_text", document.document_id, compact_content),
+                    source_entity_id=document_entity.id,
+                    source_kind=SourceKind.DOCUMENT,
+                    content=compact_content,
+                    metadata={**doc_metadata, **compact_metadata},
+                )
+                if doc_text_unit is not None:
+                    pending_text_units.append(doc_text_unit)
             for index, text_unit in enumerate(document.text_units):
                 unit_metadata = {
                     **text_unit.metadata,
                     "source_id": doc_src,
                     "source_file": doc_src,
                 }
-                chunk_unit = self._build_text_unit_with_embedding(
+                chunk_unit = self._build_text_unit(
                     unit_id=_stable_id("doc_chunk", document.document_id, index),
                     source_entity_id=document_entity.id,
                     source_kind=SourceKind.DOCUMENT,
@@ -600,16 +897,406 @@ class MaterialsKGService:
         self._repository.batch_upsert_evidence(pending_evidence)
         self._repository.batch_upsert_relations(pending_relations)
         self._repository.batch_upsert_traces(pending_traces)
+        if enable_embeddings:
+            pending_text_units = self._batch_compute_embeddings(pending_text_units)
         self._repository.batch_upsert_text_units(pending_text_units)
 
         return {
             "documents": len(batch),
             "decision_traces": trace_count,
             "llm_extracted_experiments": llm_extracted_count,
+            "deepagents_extracted_experiments": llm_extracted_count,
             "llm_extraction_errors": llm_extraction_errors,
         }
 
-    def _build_text_unit_with_embedding(
+    def ingest_documents_parallel(
+        self,
+        batch: list[DocumentInput],
+        *,
+        enable_llm_extraction: bool = True,
+        enable_embeddings: bool = True,
+        parallel_workers: int = 4,
+    ) -> dict[str, int]:
+        """Ingest documents with parallel LLM extraction for speed.
+
+        Each document's LLM extraction + entity creation runs in its own thread.
+        Final batch Neo4j writes happen after all threads complete.
+        """
+        if not batch or parallel_workers <= 1:
+            return self.ingest_documents(
+                batch,
+                enable_llm_extraction=enable_llm_extraction,
+                enable_embeddings=enable_embeddings,
+            )
+
+        from kg_engine.agents.extraction_agent import extract_and_resolve
+        from kg_engine.agents.extraction_agent import resolve_relation_type
+        from kg_engine.config.settings import settings as _kg_settings
+
+        _llm_max_chars = getattr(_kg_settings, "materials_llm_extraction_max_chars", 80_000)
+
+        all_evidence: list[Evidence] = []
+        all_relations: list[Relation] = []
+        all_traces: list[DecisionTrace] = []
+        all_text_units: list[SearchTextUnit] = []
+        all_errors: list[str] = []
+        trace_count = 0
+        llm_extracted_count = 0
+        merge_lock = Lock()
+
+        def _process_one_document(document: DocumentInput) -> dict:
+            """Process a single document — runs in worker thread."""
+            local_evidence: list[Evidence] = []
+            local_relations: list[Relation] = []
+            local_traces: list[DecisionTrace] = []
+            local_text_units: list[SearchTextUnit] = []
+            local_errors: list[str] = []
+            local_trace_count = 0
+            local_llm_count = 0
+
+            doc_src = document.source_ref or document.document_id
+            document_entity = self._ensure_entity(
+                EntityKind.DOCUMENT,
+                document.title,
+                entity_id=document.document_id,
+                aliases=[document.document_id],
+                source_ref=doc_src,
+                properties=document.metadata,
+            )
+            linked_entity_ids: list[str] = [document_entity.id]
+            llm_extracted_entity_names: set[tuple[str, str]] = set()
+
+            extraction_batches = (
+                _document_extraction_batches(document, _llm_max_chars)
+                if self._llm and enable_llm_extraction
+                else []
+            )
+
+            if extraction_batches:
+                try:
+                    for batch_title, batch_text, batch_metadata in extraction_batches:
+                        extraction = extract_and_resolve(
+                            self._llm, batch_title, batch_text
+                        )
+                        extraction_method = extraction.extraction_engine
+                        extraction_context = {
+                            "source_file": doc_src,
+                            "agent_trace": extraction.agent_trace,
+                            "extraction_batch": batch_metadata,
+                        }
+
+                        name_to_id: dict[str, str] = {}
+                        for ent in extraction.entities:
+                            entity = self._ensure_entity(
+                                ent.kind,
+                                ent.name,
+                                source_ref=doc_src,
+                                aliases=ent.aliases,
+                                properties={
+                                    **ent.properties,
+                                    "extraction_batch": batch_metadata,
+                                },
+                            )
+                            name_to_id[ent.name] = entity.id
+                            linked_entity_ids.append(entity.id)
+                            llm_extracted_entity_names.add(
+                                (ent.kind.value, ent.name.lower().strip())
+                            )
+                            evidence = self._create_evidence(
+                                source_kind=SourceKind.DOCUMENT,
+                                source_id=doc_src,
+                                fragment=ent.name,
+                                extraction_method=extraction_method,
+                                confidence=0.85,
+                                metadata=extraction_context,
+                            )
+                            local_evidence.append(evidence)
+                            local_relations.append(Relation(
+                                id=_stable_id(
+                                    "rel",
+                                    RelationType.REFERENCES.value,
+                                    document_entity.id,
+                                    entity.id,
+                                ),
+                                relation_type=RelationType.REFERENCES,
+                                source_entity_id=document_entity.id,
+                                target_entity_id=entity.id,
+                                evidence_ids=[evidence.id],
+                            ))
+
+                        for exp in extraction.experiments:
+                            observations = [
+                                item.model_copy(
+                                    update={
+                                        "extraction_method": extraction_method,
+                                        "metadata": {
+                                            **item.metadata,
+                                            "agent_trace": extraction.agent_trace,
+                                            "extraction_batch": batch_metadata,
+                                        },
+                                    }
+                                )
+                                for item in exp.observations
+                            ]
+                            findings = [
+                                item.model_copy(
+                                    update={
+                                        "extraction_method": extraction_method,
+                                        "metadata": {
+                                            **item.metadata,
+                                            "agent_trace": extraction.agent_trace,
+                                            "extraction_batch": batch_metadata,
+                                        },
+                                    }
+                                )
+                                for item in exp.findings
+                            ]
+                            exp_input = ExperimentInput(
+                                experiment_id=exp.experiment_id,
+                                title=exp.title or f"Extracted from {document.title}",
+                                material_name=exp.material_name,
+                                mode_name=exp.mode_name,
+                                observations=observations,
+                                findings=findings,
+                                source_ref=doc_src,
+                                metadata={
+                                    "source_document": document.document_id,
+                                    "extraction_method": extraction_method,
+                                    "agent_trace": extraction.agent_trace,
+                                    "extraction_batch": batch_metadata,
+                                },
+                            )
+                            self.ingest_experiments(
+                                [exp_input],
+                                enable_embeddings=enable_embeddings,
+                            )
+                            local_llm_count += 1
+
+                        for rel in extraction.relationships:
+                            source_id = name_to_id.get(rel.source)
+                            target_id = name_to_id.get(rel.target)
+                            if not source_id or not target_id:
+                                continue
+                            relation_type = resolve_relation_type(rel.type)
+                            evidence = self._create_evidence(
+                                source_kind=SourceKind.DOCUMENT,
+                                source_id=doc_src,
+                                fragment=f"{rel.source} {relation_type.value} {rel.target}",
+                                extraction_method=f"{extraction_method}_relationship",
+                                confidence=0.8,
+                                metadata=extraction_context,
+                            )
+                            local_evidence.append(evidence)
+                            local_relations.append(Relation(
+                                id=_stable_id(
+                                    "rel",
+                                    relation_type.value,
+                                    source_id,
+                                    target_id,
+                                ),
+                                relation_type=relation_type,
+                                source_entity_id=source_id,
+                                target_entity_id=target_id,
+                                evidence_ids=[evidence.id],
+                                properties={
+                                    "extraction_method": extraction_method,
+                                    "extraction_batch": batch_metadata,
+                                },
+                            ))
+
+                        for warning in extraction.warnings:
+                            local_errors.append(
+                                f"{document.document_id}: {batch_title}: {warning}"
+                            )
+
+                except Exception:
+                    logger.exception(
+                        "LLM extraction failed for document %s",
+                        document.document_id,
+                    )
+                    local_errors.append(
+                        f"{document.document_id}: extraction failed"
+                    )
+
+            for kind, values in (
+                (EntityKind.MATERIAL, document.material_names),
+                (EntityKind.MODE, document.mode_names),
+                (EntityKind.PROPERTY, document.property_names),
+                (EntityKind.EQUIPMENT, document.equipment_names),
+                (EntityKind.TEAM, document.team_names),
+            ):
+                for value in values:
+                    entity = self._ensure_entity(kind, value, source_ref=doc_src)
+                    linked_entity_ids.append(entity.id)
+                    already_linked = (
+                        kind.value,
+                        value.lower().strip(),
+                    ) in llm_extracted_entity_names
+                    if not already_linked:
+                        evidence = self._create_evidence(
+                            source_kind=SourceKind.DOCUMENT,
+                            source_id=doc_src,
+                            fragment=value,
+                            extraction_method="document_reference",
+                            metadata={"source_file": doc_src},
+                        )
+                        local_evidence.append(evidence)
+                        local_relations.append(Relation(
+                            id=_stable_id(
+                                "rel",
+                                RelationType.REFERENCES.value,
+                                document_entity.id,
+                                entity.id,
+                            ),
+                            relation_type=RelationType.REFERENCES,
+                            source_entity_id=document_entity.id,
+                            target_entity_id=entity.id,
+                            evidence_ids=[evidence.id],
+                        ))
+            for tag_name in document.tag_names:
+                tag = self._ensure_entity(EntityKind.TAG, tag_name, source_ref=doc_src)
+                linked_entity_ids.append(tag.id)
+                local_relations.append(Relation(
+                    id=_stable_id(
+                        "rel",
+                        RelationType.TAGGED_WITH.value,
+                        document_entity.id,
+                        tag.id,
+                    ),
+                    relation_type=RelationType.TAGGED_WITH,
+                    source_entity_id=document_entity.id,
+                    target_entity_id=tag.id,
+                    evidence_ids=[],
+                ))
+            for experiment_id in document.experiment_ids:
+                experiment_entity = self._ensure_entity(
+                    EntityKind.EXPERIMENT,
+                    experiment_id,
+                    entity_id=experiment_id,
+                    aliases=[experiment_id],
+                    source_ref=doc_src,
+                )
+                linked_entity_ids.append(experiment_entity.id)
+                local_relations.append(Relation(
+                    id=_stable_id(
+                        "rel",
+                        RelationType.DOCUMENTED_IN.value,
+                        experiment_entity.id,
+                        document_entity.id,
+                    ),
+                    relation_type=RelationType.DOCUMENTED_IN,
+                    source_entity_id=experiment_entity.id,
+                    target_entity_id=document_entity.id,
+                    evidence_ids=[],
+                ))
+
+            doc_metadata = {
+                **document.metadata,
+                "source_id": doc_src,
+                "source_file": doc_src,
+            }
+            if not document.text_units:
+                compact_content, compact_metadata = _compact_document_text_for_storage(
+                    document.text,
+                    document_id=document.document_id,
+                )
+                doc_text_unit = self._build_text_unit(
+                    unit_id=_stable_id("doc_text", document.document_id, compact_content),
+                    source_entity_id=document_entity.id,
+                    source_kind=SourceKind.DOCUMENT,
+                    content=compact_content,
+                    metadata={**doc_metadata, **compact_metadata},
+                )
+                if doc_text_unit is not None:
+                    local_text_units.append(doc_text_unit)
+            for index, text_unit in enumerate(document.text_units):
+                unit_metadata = {
+                    **text_unit.metadata,
+                    "source_id": doc_src,
+                    "source_file": doc_src,
+                }
+                chunk_unit = self._build_text_unit(
+                    unit_id=_stable_id("doc_chunk", document.document_id, index),
+                    source_entity_id=document_entity.id,
+                    source_kind=SourceKind.DOCUMENT,
+                    content=text_unit.content,
+                    metadata=unit_metadata,
+                )
+                if chunk_unit is not None:
+                    local_text_units.append(chunk_unit)
+
+            for index, finding in enumerate(document.findings):
+                trace, trace_evidence = self._build_trace(
+                    finding=finding,
+                    source_kind=SourceKind.DOCUMENT,
+                    source_id=doc_src,
+                    entity_ids=linked_entity_ids,
+                    experiment_id=None,
+                    observation_ids=[],
+                    trace_id=_stable_id(
+                        "doc_trace",
+                        document.document_id,
+                        index,
+                        finding.summary,
+                    ),
+                )
+                local_traces.append(trace)
+                local_evidence.append(trace_evidence)
+                local_trace_count += 1
+
+            return {
+                "evidence": local_evidence,
+                "relations": local_relations,
+                "traces": local_traces,
+                "text_units": local_text_units,
+                "errors": local_errors,
+                "trace_count": local_trace_count,
+                "llm_count": local_llm_count,
+            }
+
+        max_workers = min(parallel_workers, len(batch))
+        logger.info(
+            "Parallel ingestion: %d documents across %d workers",
+            len(batch),
+            max_workers,
+        )
+
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = {
+                pool.submit(_process_one_document, doc): doc
+                for doc in batch
+            }
+            for future in as_completed(futures):
+                doc = futures[future]
+                try:
+                    result = future.result()
+                    all_evidence.extend(result["evidence"])
+                    all_relations.extend(result["relations"])
+                    all_traces.extend(result["traces"])
+                    all_text_units.extend(result["text_units"])
+                    all_errors.extend(result["errors"])
+                    trace_count += result["trace_count"]
+                    llm_extracted_count += result["llm_count"]
+                except Exception:
+                    logger.exception("Worker failed for document %s", doc.document_id)
+                    all_errors.append(f"{doc.document_id}: worker_failed")
+
+        self._repository.batch_upsert_evidence(all_evidence)
+        self._repository.batch_upsert_relations(all_relations)
+        self._repository.batch_upsert_traces(all_traces)
+        if enable_embeddings:
+            all_text_units = self._batch_compute_embeddings(all_text_units)
+        self._repository.batch_upsert_text_units(all_text_units)
+
+        return {
+            "documents": len(batch),
+            "decision_traces": trace_count,
+            "llm_extracted_experiments": llm_extracted_count,
+            "deepagents_extracted_experiments": llm_extracted_count,
+            "llm_extraction_errors": all_errors,
+        }
+
+    def _build_text_unit(
         self,
         unit_id: str,
         source_entity_id: str,
@@ -617,27 +1304,42 @@ class MaterialsKGService:
         content: str,
         metadata: dict | None = None,
     ) -> SearchTextUnit | None:
-        """Build a text unit with optional embedding, without writing."""
         if not content:
             return None
-        embedding = None
-        if self._llm:
-            try:
-                from kg_engine.config.settings import settings
-                embed_budget = settings.llm_embedding_truncation_chars
-                embeddings = self._llm.embed([content[:embed_budget]])
-                if embeddings and embeddings[0]:
-                    embedding = embeddings[0]
-            except Exception:
-                logger.debug("Embedding generation failed for text unit %s", unit_id)
         return SearchTextUnit(
             id=unit_id,
             source_entity_id=source_entity_id,
             source_kind=source_kind,
             content=content,
-            embedding=embedding,
+            embedding=None,
             metadata=metadata or {},
         )
+
+    def _batch_compute_embeddings(
+        self, text_units: list[SearchTextUnit]
+    ) -> list[SearchTextUnit]:
+        if not text_units or not self._llm:
+            return text_units
+        texts: list[str] = []
+        indices: list[int] = []
+        from kg_engine.config.settings import settings
+        embed_budget = settings.llm_embedding_truncation_chars
+        for idx, unit in enumerate(text_units):
+            content = (unit.content or "").strip()
+            if not content:
+                continue
+            texts.append(content[:embed_budget])
+            indices.append(idx)
+        if not texts:
+            return text_units
+        try:
+            results = self._llm.embed(texts)
+            for idx, emb in zip(indices, results):
+                if emb:
+                    text_units[idx].embedding = emb
+        except Exception:
+            logger.debug("Batch embedding failed for %d text units", len(texts))
+        return text_units
 
     def _upsert_text_unit_with_embedding(
         self,
@@ -647,7 +1349,7 @@ class MaterialsKGService:
         content: str,
         metadata: dict | None = None,
     ) -> SearchTextUnit | None:
-        unit = self._build_text_unit_with_embedding(
+        unit = self._build_text_unit(
             unit_id=unit_id,
             source_entity_id=source_entity_id,
             source_kind=source_kind,
@@ -656,7 +1358,8 @@ class MaterialsKGService:
         )
         if unit is None:
             return None
-        return self._repository.upsert_text_unit(unit)
+        units = self._batch_compute_embeddings([unit])
+        return self._repository.upsert_text_unit(units[0])
 
     def query_material_mode(
         self,
@@ -1017,8 +1720,16 @@ class MaterialsKGService:
         related_entities: list[Entity] = []
         relations: list[Relation] = []
         search_hits = (
-            self._repository.search_text_units(question, limit=8) if question else []
+            self._repository.search_text_units(question, limit=15) if question else []
         )
+        # Boost VL interpretations to the top — they contain richer content
+        search_hits.sort(
+            key=lambda h: (
+                0 if "vl_conductor" in str(h.metadata.get("parser", "")) else 1,
+                -(h.metadata.get("confidence", 0) or 0),
+            )
+        )
+        search_hits = search_hits[:8]
 
         if material_entity is not None:
             material_result = self.query_material_mode(
@@ -1962,25 +2673,27 @@ class MaterialsKGService:
 
     def get_graph_data(self, source_ids: list[str]) -> dict[str, Any]:
         """Return nodes/edges for visualization, filtered by uploaded source file names."""
-        source_set = {item.strip() for item in source_ids if item and item.strip()}
+        source_set = _expand_source_set(
+            {item.strip() for item in source_ids if item and item.strip()}
+        )
         all_entities = self._repository.find_entities()
         all_relations = self._repository.list_relations()
         if not source_set:
-            return {"nodes": [], "edges": []}
-
-        seed_ids = {
-            entity.id
-            for entity in all_entities
-            if _entity_matches_sources(entity, source_set)
-        }
-        kept_ids = set(seed_ids)
-        for relation in all_relations:
-            if (
-                relation.source_entity_id in seed_ids
-                or relation.target_entity_id in seed_ids
-            ):
-                kept_ids.add(relation.source_entity_id)
-                kept_ids.add(relation.target_entity_id)
+            kept_ids = {entity.id for entity in all_entities}
+        else:
+            seed_ids = {
+                entity.id
+                for entity in all_entities
+                if _entity_matches_sources(entity, source_set)
+            }
+            kept_ids = set(seed_ids)
+            for relation in all_relations:
+                if (
+                    relation.source_entity_id in seed_ids
+                    or relation.target_entity_id in seed_ids
+                ):
+                    kept_ids.add(relation.source_entity_id)
+                    kept_ids.add(relation.target_entity_id)
 
         entities = [entity for entity in all_entities if entity.id in kept_ids]
         entity_ids = {entity.id for entity in entities}
@@ -2190,6 +2903,93 @@ class MaterialsKGService:
 
     def _dedupe_by_id(self, items: list[Any]) -> list[Any]:
         return list({item.id: item for item in items}.values())
+
+    def export_graph_snapshot(self) -> dict[str, Any]:
+        """Return a portable JSON-ready snapshot of the current graph core."""
+        repository = self._repository
+        return {
+            "schema_version": 1,
+            "entities": [
+                item.model_dump(mode="json")
+                for item in repository.find_entities()
+            ],
+            "relations": [
+                item.model_dump(mode="json")
+                for item in repository.list_relations()
+            ],
+            "evidence": [
+                item.model_dump(mode="json")
+                for item in repository.list_all_evidence()
+            ],
+            "observations": [
+                item.model_dump(mode="json")
+                for item in repository.list_observations()
+            ],
+            "decision_traces": [
+                item.model_dump(mode="json")
+                for item in repository.list_decision_traces()
+            ],
+            "coverage_rules": [
+                item.model_dump(mode="json")
+                for item in repository.list_coverage_rules()
+            ],
+            "text_units": [
+                item.model_dump(mode="json")
+                for item in repository.list_text_units()
+            ],
+        }
+
+    def save_graph_snapshot(self, path: str | Path) -> dict[str, Any]:
+        """Persist a graph snapshot and return compact counts for callers."""
+        snapshot_path = Path(path)
+        snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+        snapshot = self.export_graph_snapshot()
+        snapshot_path.write_text(
+            json.dumps(snapshot, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        return {
+            "path": str(snapshot_path),
+            "entities": len(snapshot["entities"]),
+            "relations": len(snapshot["relations"]),
+            "evidence": len(snapshot["evidence"]),
+            "observations": len(snapshot["observations"]),
+            "decision_traces": len(snapshot["decision_traces"]),
+            "coverage_rules": len(snapshot["coverage_rules"]),
+            "text_units": len(snapshot["text_units"]),
+        }
+
+    def load_graph_snapshot(self, path: str | Path, *, clear_existing: bool = False) -> dict[str, int]:
+        """Load a snapshot created by save_graph_snapshot into the repository."""
+        snapshot_path = Path(path)
+        payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
+        if payload.get("schema_version") != 1:
+            raise ValueError(f"Unsupported graph snapshot schema: {payload.get('schema_version')}")
+        if clear_existing:
+            self._repository.clear_all()
+        for item in payload.get("entities", []):
+            self._repository.upsert_entity(Entity.model_validate(item))
+        for item in payload.get("evidence", []):
+            self._repository.upsert_evidence(Evidence.model_validate(item))
+        for item in payload.get("relations", []):
+            self._repository.upsert_relation(Relation.model_validate(item))
+        for item in payload.get("observations", []):
+            self._repository.upsert_observation(Observation.model_validate(item))
+        for item in payload.get("decision_traces", []):
+            self._repository.upsert_decision_trace(DecisionTrace.model_validate(item))
+        for item in payload.get("coverage_rules", []):
+            self._repository.upsert_coverage_rule(CoverageRuleInput.model_validate(item))
+        for item in payload.get("text_units", []):
+            self._repository.upsert_text_unit(SearchTextUnit.model_validate(item))
+        return {
+            "entities": len(payload.get("entities", [])),
+            "relations": len(payload.get("relations", [])),
+            "evidence": len(payload.get("evidence", [])),
+            "observations": len(payload.get("observations", [])),
+            "decision_traces": len(payload.get("decision_traces", [])),
+            "coverage_rules": len(payload.get("coverage_rules", [])),
+            "text_units": len(payload.get("text_units", [])),
+        }
 
     def _build_observation(
         self,
@@ -2485,3 +3285,9 @@ class MaterialsKGService:
             if entity is not None:
                 return entity
         raise ValueError(f"Entity '{raw_name}' not found")
+
+    def delete_source(self, source_id: str) -> int:
+        return self._repository.delete_source(source_id)
+
+    def clear_all(self) -> None:
+        self._repository.clear_all()

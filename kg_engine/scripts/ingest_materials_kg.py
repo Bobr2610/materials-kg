@@ -23,6 +23,11 @@ from kg_engine.ingestion.adapters import ExperimentCatalogAdapter
 from kg_engine.ingestion.adapters import ReferenceDataAdapter
 from kg_engine.ingestion.adapters import StaffDirectoryAdapter
 from kg_engine.ingestion.adapters import TagCatalogAdapter
+from kg_engine.ingestion.document_blocks import DocumentBlockParser
+from kg_engine.ingestion.document_blocks import DocumentParseSettings
+from kg_engine.ingestion.document_blocks import parse_document_file
+from kg_engine.llm_core.provider import create_provider_from_settings
+from kg_engine.llm_core.vision import OpenAICompatibleVisionConductor
 from kg_engine.repositories.factory import create_materials_repository
 from kg_engine.services.materials_kg import MaterialsKGService
 
@@ -43,6 +48,21 @@ _CANONICAL_EXPERIMENT_SECTIONS = {"experiments", "rows", "items"}
 _CANONICAL_DOCUMENT_SECTIONS = {"documents", "rows", "items"}
 _TEXT_FILE_SUFFIXES = {".txt", ".md"}
 _STRUCTURED_FILE_SUFFIXES = {".json", ".jsonl", ".csv", ".tsv"}
+_PARSER_FILE_SUFFIXES = {
+    ".docx",
+    ".xlsx",
+    ".xls",
+    ".pdf",
+    ".html",
+    ".htm",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".webp",
+    ".tif",
+    ".tiff",
+    ".bmp",
+}
 
 
 def _supported_files(path: Path) -> list[Path]:
@@ -52,7 +72,8 @@ def _supported_files(path: Path) -> list[Path]:
         item
         for item in sorted(path.rglob("*"))
         if item.is_file()
-        and item.suffix.lower() in {*_STRUCTURED_FILE_SUFFIXES, *_TEXT_FILE_SUFFIXES}
+        and item.suffix.lower()
+        in {*_STRUCTURED_FILE_SUFFIXES, *_TEXT_FILE_SUFFIXES, *_PARSER_FILE_SUFFIXES}
     ]
 
 
@@ -62,7 +83,102 @@ def _load_tabular(path: Path) -> list[dict[str, Any]]:
         return [dict(row) for row in csv.DictReader(handle, delimiter=delimiter)]
 
 
-def _load_one(path: Path, *, family: str) -> Any:
+def _document_parser(*, disable_vision: bool = False) -> DocumentBlockParser:
+    vision_enabled = not disable_vision
+    conductor = None
+    if vision_enabled:
+        vision_provider = _create_vision_provider()
+        if vision_provider is None:
+            logger.info(
+                "No VLM provider configured — VLM interpretation disabled."
+            )
+            vision_enabled = False
+        else:
+            vision_model = settings.materials_vision_model or settings.default_model or None
+            conductor = OpenAICompatibleVisionConductor(vision_provider, model=vision_model)
+            logger.info("VLM enabled, model: %s", vision_model or "(default)")
+    return DocumentBlockParser(
+        vision_conductor=conductor,
+        settings=DocumentParseSettings(
+            enable_vision=vision_enabled,
+            pdf_render_dpi=settings.materials_pdf_render_dpi,
+            max_pdf_pages=settings.materials_pdf_max_pages,
+        ),
+    )
+
+
+def _create_vision_provider():
+    """Create LLM provider for VLM. Uses dedicated VLM settings if configured,
+    otherwise falls back to the main LLM provider."""
+    from kg_engine.llm_core.provider import LLMProvider, resolve_openai_compatible_config
+
+    vision_provider_name = (settings.materials_vision_provider or "").strip().lower()
+    vision_model = (settings.materials_vision_model or "").strip()
+    vision_api_key = (settings.materials_vision_api_key or "").strip()
+    vision_base_url = (settings.materials_vision_base_url or "").strip()
+
+    # If dedicated VLM provider is configured, use it
+    if vision_provider_name:
+        # Use VLM API key if provided, otherwise fall back to main provider's key
+        if not vision_api_key:
+            main_provider = (settings.default_llm_provider or "").strip().lower()
+            if vision_provider_name == main_provider:
+                # Same provider — reuse main API key
+                vision_api_key = (
+                    getattr(settings, f"{main_provider}_api_key", "")
+                    or settings.llm_api_key
+                    or ""
+                ).strip()
+            else:
+                # Different provider — need explicit key
+                vision_api_key = (
+                    getattr(settings, f"{vision_provider_name}_api_key", "")
+                    or settings.llm_api_key
+                    or ""
+                ).strip()
+
+        if not vision_base_url:
+            vision_base_url = (
+                getattr(settings, f"{vision_provider_name}_base_url", "")
+                or settings.llm_base_url
+                or ""
+            ).strip()
+
+        if vision_api_key or vision_base_url:
+            # If no vision model specified, use the vision provider's default
+            if not vision_model:
+                # Try to get from main settings for same provider
+                main_provider = (settings.default_llm_provider or "").strip().lower()
+                if vision_provider_name == main_provider:
+                    vision_model = settings.default_model
+
+            vision_settings_proxy = type("VisionSettings", (), {
+                "default_llm_provider": vision_provider_name,
+                "default_model": vision_model,
+                f"{vision_provider_name}_api_key": vision_api_key,
+                f"{vision_provider_name}_base_url": vision_base_url,
+                "llm_api_key": vision_api_key,
+                "llm_base_url": vision_base_url,
+            })()
+            config = resolve_openai_compatible_config(vision_settings_proxy)
+            if config is not None:
+                return LLMProvider(
+                    base_url=config.base_url,
+                    api_key=config.api_key,
+                    chat_model=config.chat_model,
+                    embedding_model=config.embedding_model,
+                )
+
+    # Fallback to main LLM provider
+    return create_provider_from_settings(settings)
+
+
+def _load_one(
+    path: Path,
+    *,
+    family: str,
+    document_parser: DocumentBlockParser | None = None,
+) -> Any:
     suffix = path.suffix.lower()
     if suffix == ".json":
         return json.loads(path.read_text(encoding="utf-8"))
@@ -90,6 +206,10 @@ def _load_one(path: Path, *, family: str) -> Any:
                 "metadata": {"source_path": str(path)},
             }
         ]
+    if family in {"documents", "bundle"} and suffix in _PARSER_FILE_SUFFIXES:
+        parser = document_parser or _document_parser()
+        document = parse_document_file(path, parser=parser)
+        return [document.model_dump(mode="json")]
     logger.warning("Skipping unsupported %s input file: %s", family, path)
     return [] if family != "reference" else {}
 
@@ -268,7 +388,11 @@ def _merge_bundle_payload(bundle: dict[str, Any], payload: Any, source: Path) ->
         bundle["documents"].append(_fallback_document(source, payload))
 
 
-def _load_bundle(path: str) -> dict[str, Any]:
+def _load_bundle(
+    path: str,
+    *,
+    document_parser: DocumentBlockParser | None = None,
+) -> dict[str, Any]:
     source_path = Path(path)
     if not source_path.exists():
         raise FileNotFoundError(f"Input path not found: {source_path}")
@@ -284,12 +408,34 @@ def _load_bundle(path: str) -> dict[str, Any]:
             continue
         if suffix in _STRUCTURED_FILE_SUFFIXES:
             _merge_bundle_payload(
-                bundle, _load_one(file_path, family="bundle"), file_path
+                bundle,
+                _load_one(
+                    file_path,
+                    family="bundle",
+                    document_parser=document_parser,
+                ),
+                file_path,
+            )
+            continue
+        if suffix in _PARSER_FILE_SUFFIXES:
+            _merge_bundle_payload(
+                bundle,
+                _load_one(
+                    file_path,
+                    family="bundle",
+                    document_parser=document_parser,
+                ),
+                file_path,
             )
     return bundle
 
 
-def _load_payload(path: str | None, *, family: str) -> object | None:
+def _load_payload(
+    path: str | None,
+    *,
+    family: str,
+    document_parser: DocumentBlockParser | None = None,
+) -> object | None:
     if path is None:
         return None
     source_path = Path(path)
@@ -300,12 +446,22 @@ def _load_payload(path: str | None, *, family: str) -> object | None:
         merged: dict[str, Any] = {}
         for file_path in files:
             _merge_reference_payload(
-                merged, _load_one(file_path, family=family), file_path
+                merged,
+                _load_one(
+                    file_path,
+                    family=family,
+                    document_parser=document_parser,
+                ),
+                file_path,
             )
         return merged
     merged_rows: list[Any] = []
     for file_path in files:
-        payload = _load_one(file_path, family=family)
+        payload = _load_one(
+            file_path,
+            family=family,
+            document_parser=document_parser,
+        )
         if isinstance(payload, list):
             merged_rows.extend(payload)
         elif isinstance(payload, dict):
@@ -368,7 +524,18 @@ def main() -> None:
         default=False,
         help="Ensure Neo4j schema constraints before ingestion",
     )
+    parser.add_argument(
+        "--disable-vision",
+        action="store_true",
+        default=False,
+        help=(
+            "Disable Vision-Language interpretation for rendered PDF/image pages. "
+            "VLM is enabled by default when an LLM provider is configured."
+        ),
+    )
     args = parser.parse_args()
+
+    document_parser = _document_parser(disable_vision=args.disable_vision)
 
     repository = create_materials_repository(
         settings,
@@ -377,7 +544,7 @@ def main() -> None:
     service = MaterialsKGService(repository)
 
     if args.input:
-        bundle = _load_bundle(args.input)
+        bundle = _load_bundle(args.input, document_parser=document_parser)
         reference_result = service.ingest_reference_data(
             ReferenceDataAdapter().from_payload(bundle["reference"])
         )
@@ -404,7 +571,11 @@ def main() -> None:
         logger.info("Experiment ingestion: %s", result)
 
     if args.documents:
-        payload = _load_payload(args.documents, family="documents")
+        payload = _load_payload(
+            args.documents,
+            family="documents",
+            document_parser=document_parser,
+        )
         batch = DocumentCorpusAdapter().from_payload(payload or [])
         result = service.ingest_documents(batch)
         logger.info("Document ingestion: %s", result)

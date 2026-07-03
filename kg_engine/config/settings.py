@@ -51,13 +51,16 @@ class Settings(BaseSettings):
     groq_base_url: str = ""
     mistral_api_key: str = ""
     mistral_base_url: str = ""
+    yandex_api_key: str = ""
+    yandex_base_url: str = ""
+    yandex_folder_id: str = ""
     llm_api_key: str = ""
     llm_base_url: str = ""
     vllm_base_url: str = ""
     vllm_api_key: str = ""
-    default_llm_provider: str = ""
-    default_model: str = ""
-    default_embedding_model: str = ""
+    default_llm_provider: str = "yandex"
+    default_model: str = "deepseek-v4-flash"
+    default_embedding_model: str = "text-search-doc/latest"
     llm_temperature: float = 0.7
 
     # Materials KG core API / storage
@@ -83,6 +86,22 @@ class Settings(BaseSettings):
     materials_hypothesis_engine: str = "deepagents"
     materials_deepagents_enabled: bool = True
     materials_deepagents_max_tool_steps: int = 12
+
+    # Document parsing / Vision-Language interpretation
+    materials_document_vision_enabled: bool = False
+    materials_vision_model: str = "qwen3.6-35b-a3b"
+    materials_vision_provider: str = "yandex"
+    materials_vision_api_key: str = ""
+    materials_vision_base_url: str = ""
+    materials_pdf_render_dpi: int = 180
+    materials_pdf_max_pages: int | None = 500
+
+    # Ingestion limits
+    materials_llm_extraction_max_chars: int = 80_000
+    materials_llm_extraction_chunk_size: int = 3000
+    materials_llm_extraction_chunk_overlap: int = 500
+    materials_ingestion_doc_batch_size: int = 1
+    materials_ingestion_parallel_workers: int = 4
 
     # Session management
     session_ttl_seconds: int = 3600
@@ -111,6 +130,9 @@ class _SettingsProxy:
 
     def __getattr__(self, name: str):
         return getattr(_get_settings(), name)
+
+    def __setattr__(self, name: str, value):
+        setattr(_get_settings(), name, value)
 
     def __repr__(self) -> str:
         return repr(_get_settings())

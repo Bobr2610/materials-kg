@@ -10,6 +10,11 @@ from typing import Any
 from pydantic import BaseModel
 from pydantic import Field
 
+from kg_engine.domain.product import ConstraintCheck
+from kg_engine.domain.product import ExpectedEffect
+from kg_engine.domain.product import RequiredResource
+from kg_engine.domain.product import VerificationRoadmap
+
 
 def utc_now() -> datetime:
     """Return a timezone-aware UTC timestamp."""
@@ -360,6 +365,13 @@ class HypothesisScore(BaseModel):
     value: float = Field(ge=0.0, le=1.0)
     evidence_strength: float = Field(ge=0.0, le=1.0)
     final_score: float = Field(ge=0.0, le=1.0)
+    feasibility: float = Field(default=0.0, ge=0.0, le=1.0)
+    technical_risk: float = Field(default=0.0, ge=0.0, le=1.0)
+    economic_risk: float = Field(default=0.0, ge=0.0, le=1.0)
+    regulatory_risk: float = Field(default=0.0, ge=0.0, le=1.0)
+    resource_cost: float = Field(default=0.0, ge=0.0, le=1.0)
+    time_to_test: float = Field(default=0.0, ge=0.0, le=1.0)
+    uncertainty: float = Field(default=0.0, ge=0.0, le=1.0)
 
 
 class ResearchHypothesis(BaseModel):
@@ -371,12 +383,15 @@ class ResearchHypothesis(BaseModel):
     hypothesis_type: str = Field(default="observed_effect")
     statement: str
     rationale: str
+    mechanism: str = ""
     test_plan: str
     score: HypothesisScore
     supporting_entity_ids: list[str] = Field(default_factory=list)
     supporting_evidence_ids: list[str] = Field(default_factory=list)
     supporting_observation_ids: list[str] = Field(default_factory=list)
     supporting_text_unit_ids: list[str] = Field(default_factory=list)
+    contradicting_evidence_ids: list[str] = Field(default_factory=list)
+    contradicting_observation_ids: list[str] = Field(default_factory=list)
     data_gap_ids: list[str] = Field(default_factory=list)
     assumptions: list[str] = Field(default_factory=list)
     expert_notes: list[str] = Field(default_factory=list)
@@ -402,6 +417,18 @@ class ResearchHypothesis(BaseModel):
     required_evidence: list[str] = Field(
         default_factory=list, description="Evidence needed to test this hypothesis"
     )
+    expected_effect: ExpectedEffect | None = None
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    uncertainty_factors: list[str] = Field(default_factory=list)
+    constraint_checks: list[ConstraintCheck] = Field(default_factory=list)
+    verification_roadmap: VerificationRoadmap | None = None
+    resource_estimate: list[RequiredResource] = Field(default_factory=list)
+    success_criteria: list[str] = Field(default_factory=list)
+    failure_criteria: list[str] = Field(default_factory=list)
+    prompt_version: str | None = None
+    model_version: str | None = None
+    retrieval_packet_id: str | None = None
+    ranking_version: str = "v1"
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 

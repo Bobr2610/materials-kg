@@ -1,4 +1,8 @@
-"""Deep Agents orchestration for document entity extraction."""
+"""Deep Agents orchestration for document entity extraction and graph writes.
+
+This module owns the agent-facing extraction contract. The service layer calls
+it first, then materializes the returned typed result into the graph repository.
+"""
 
 from __future__ import annotations
 
@@ -49,6 +53,21 @@ def extract_and_resolve(
         relationships, and any warnings.
     """
     result = extract_entities_from_document(provider, title, text)
+    if not result.extraction_engine.startswith("deepagents"):
+        result.extraction_engine = f"deepagents_{result.extraction_engine}"
+    result.agent_trace = [
+        {
+            "event": "deepagents_extraction_started",
+            "title": title,
+        },
+        *result.agent_trace,
+        {
+            "event": "deepagents_extraction_completed",
+            "entities": len(result.entities),
+            "experiments": len(result.experiments),
+            "relationships": len(result.relationships),
+        },
+    ]
 
     if resolve_names and result.relationships:
         resolved: list[ExtractedRelationship] = []

@@ -234,6 +234,38 @@ def test_deep_agent_discards_ungrounded_hypotheses() -> None:
     )
 
 
+def test_deep_agent_does_not_treat_entity_ids_as_grounding() -> None:
+    service = _build_service()
+    baseline = service.generate_hypotheses(
+        HypothesisInput(target_kpi="Electrical Conductivity", material="CuCrZr")
+    )
+    payload = baseline.model_dump(mode="json")
+    entity_only = payload["hypotheses"][0].copy()
+    entity_only.update(
+        {
+            "id": "entity-only-hypothesis",
+            "supporting_entity_ids": [payload["matched_entities"][0]["id"]],
+            "supporting_evidence_ids": [],
+            "supporting_observation_ids": [],
+            "supporting_text_unit_ids": [],
+            "data_gap_ids": [],
+        }
+    )
+    payload["hypotheses"] = [entity_only]
+    payload["generation_engine"] = "deepagents"
+
+    result = generate_hypotheses_with_deep_agent(
+        service,
+        HypothesisInput(target_kpi="Electrical Conductivity", material="CuCrZr"),
+        runtime_settings=_settings(),
+        agent_factory=lambda **kwargs: _FakeDeepAgent(payload, kwargs["tools"]),
+        model_factory=lambda _: ("fake-model", "openai:gpt-test"),
+    )
+
+    assert result.hypotheses == []
+    assert any("entity-only-hypothesis" in item for item in result.warnings)
+
+
 def test_hypothesis_tools_are_read_only() -> None:
     service = _build_service()
     before = service.get_source_overview()
@@ -673,6 +705,7 @@ def test_ingest_documents_writes_llm_extracted_graph_data_with_evidence() -> Non
     )
 
     assert result["llm_extracted_experiments"] == 1
+    assert result["deepagents_extracted_experiments"] == 1
     material_mode = service.query_material_mode(
         "CuCrZr",
         "Aging",
@@ -680,9 +713,14 @@ def test_ingest_documents_writes_llm_extracted_graph_data_with_evidence() -> Non
     )
     assert material_mode.observations
     assert material_mode.observations[0].value == 58.0
+    assert material_mode.evidence[0].extraction_method.startswith("deepagents_")
+    assert material_mode.evidence[0].metadata["agent_trace"][0]["event"] == (
+        "deepagents_extraction_started"
+    )
     related = service.query_related("CuCrZr", relation_filters=[RelationType.USES_MODE])
     assert related.relations
     assert related.relations[0].evidence_ids
     relation_evidence = service.repository.list_evidence(related.relations[0].evidence_ids)
     assert relation_evidence
     assert relation_evidence[0].metadata["source_file"] == "doc-llm.txt"
+    assert relation_evidence[0].extraction_method.startswith("deepagents_")

@@ -26,12 +26,14 @@ _OPENROUTER_BASE_URL = "https://openrouter.ai/api"
 _POLZA_BASE_URL = "https://polza.ai/api"
 _GROQ_BASE_URL = "https://api.groq.com/openai"
 _MISTRAL_BASE_URL = "https://api.mistral.ai"
+_YANDEX_BASE_URL = "https://ai.api.cloud.yandex.net"
 _PROVIDER_DEFAULT_BASE_URLS = {
     "openai": _OPENAI_BASE_URL,
     "openrouter": _OPENROUTER_BASE_URL,
     "polza": _POLZA_BASE_URL,
     "groq": _GROQ_BASE_URL,
     "mistral": _MISTRAL_BASE_URL,
+    "yandex": _YANDEX_BASE_URL,
 }
 
 
@@ -91,14 +93,6 @@ def _selected_chat_model(settings: Any) -> str:
     )
 
 
-def _generic_api_key(settings: Any) -> str:
-    return _setting_or_env(settings, "llm_api_key", "LLM_API_KEY")
-
-
-def _generic_base_url(settings: Any) -> str:
-    return _setting_or_env(settings, "llm_base_url", "LLM_BASE_URL")
-
-
 def resolve_openai_compatible_config(
     settings: Any,
     *,
@@ -106,9 +100,8 @@ def resolve_openai_compatible_config(
 ) -> OpenAICompatibleConfig | None:
     """Resolve any OpenAI-compatible LLM provider from settings/env.
 
-    Known providers keep their built-in default base URLs. Any other provider
-    can be used through ``<PROVIDER>_API_KEY`` and ``<PROVIDER>_BASE_URL`` or
-    universal ``LLM_API_KEY`` and ``LLM_BASE_URL``.
+    Known providers keep their built-in default base URLs. Provider selection is
+    explicit: no other provider or generic API key is used as a fallback.
     """
     provider = _selected_provider(settings)
     if not provider:
@@ -119,13 +112,13 @@ def resolve_openai_compatible_config(
 
     provider_key = provider.lower()
     env_prefix = _provider_env_prefix(provider)
-    api_key = (
-        _setting_or_env(settings, f"{provider_key}_api_key", f"{env_prefix}_API_KEY")
-        or _generic_api_key(settings)
+    api_key = _setting_or_env(
+        settings,
+        f"{provider_key}_api_key",
+        f"{env_prefix}_API_KEY",
     )
     base_url = (
         _setting_or_env(settings, f"{provider_key}_base_url", f"{env_prefix}_BASE_URL")
-        or _generic_base_url(settings)
         or _PROVIDER_DEFAULT_BASE_URLS.get(provider_key, "")
     )
     if not api_key or not base_url:
@@ -136,6 +129,11 @@ def resolve_openai_compatible_config(
     if provider_key == "openrouter":
         chat_model = _openrouter_model_name(chat_model)
         embedding_model = _openrouter_model_name(embedding_model)
+    elif provider_key == "yandex":
+        folder_id = _clean(getattr(settings, "yandex_folder_id", ""))
+        if folder_id:
+            chat_model = f"gpt://{folder_id}/{chat_model.lstrip('gpt://')}" if chat_model else ""
+            embedding_model = f"emb://{folder_id}/{embedding_model.lstrip('emb://')}" if embedding_model else ""
 
     return OpenAICompatibleConfig(
         provider=provider,
@@ -164,6 +162,7 @@ class LLMProvider:
         timeout: float = _DEFAULT_TIMEOUT,
         max_retries: int = _MAX_RETRIES,
         retry_base_delay: float = _RETRY_BASE_DELAY,
+        reasoning_effort: str | None = None,
     ) -> None:
         self.base_url = _openai_compatible_root(base_url)
         self.api_key = api_key
@@ -172,6 +171,7 @@ class LLMProvider:
         self.timeout = timeout
         self.max_retries = max_retries
         self.retry_base_delay = retry_base_delay
+        self.reasoning_effort = reasoning_effort
         self._client = httpx.Client(
             timeout=self.timeout,
             headers={"Authorization": f"Bearer {self.api_key}"},
@@ -203,6 +203,8 @@ class LLMProvider:
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
+        if self.reasoning_effort:
+            payload["reasoning_effort"] = self.reasoning_effort
         if response_format:
             payload["response_format"] = response_format
         for attempt in range(self.max_retries):
@@ -211,6 +213,10 @@ class LLMProvider:
                     f"{self.base_url}/v1/chat/completions",
                     json=payload,
                 )
+                if resp.status_code == 400:
+                    logger.warning(
+                        "LLM chat 400: body=%s", resp.text
+                    )
                 resp.raise_for_status()
                 data = resp.json()
                 return data["choices"][0]["message"]["content"]
@@ -284,10 +290,37 @@ class LLMProvider:
     def embed(self, texts: list[str]) -> list[list[float]]:
         if not texts:
             return []
+        results: list[list[float]] = []
+        batch_size = 5
+        for i in range(0, len(texts), batch_size):
+            chunk = texts[i : i + batch_size]
+            batch_result = self._embed_batch(chunk)
+            if batch_result is not None:
+                results.extend(batch_result)
+            else:
+                for text in chunk:
+                    emb = self._embed_one(text)
+                    results.append(emb)
+                    time.sleep(0.5)
+        return results
+
+    def _embed_batch(self, texts: list[str]) -> list[list[float]] | None:
         payload = {"model": self.embedding_model, "input": texts}
         for attempt in range(self.max_retries):
             try:
-                resp = self._client.post(f"{self.base_url}/v1/embeddings", json=payload)
+                resp = self._client.post(
+                    f"{self.base_url}/v1/embeddings", json=payload
+                )
+                if resp.status_code == 400:
+                    return None  # provider doesn't support batch
+                if resp.status_code == 429:
+                    delay = (2**attempt) * 5 + random.uniform(0, 2)
+                    logger.warning(
+                        "Batch embedding rate-limited, retrying in %.1fs",
+                        delay,
+                    )
+                    time.sleep(delay)
+                    continue
                 resp.raise_for_status()
                 data = resp.json()
                 return [item["embedding"] for item in data["data"]]
@@ -298,9 +331,52 @@ class LLMProvider:
             ) as exc:
                 if attempt == self.max_retries - 1:
                     logger.exception(
+                        "Batch embedding call failed after %d attempts",
+                        self.max_retries,
+                    )
+                    return None
+                delay = self.retry_base_delay * (2**attempt) + random.uniform(0, 0.5)
+                logger.warning(
+                    "Batch embedding attempt %d/%d failed (%s), retrying in %.1fs",
+                    attempt + 1,
+                    self.max_retries,
+                    exc,
+                    delay,
+                )
+                time.sleep(delay)
+            except Exception:
+                logger.exception("Batch embedding call failed with unexpected error")
+                return None
+        return None
+
+    def _embed_one(self, text: str) -> list[float]:
+        payload = {"model": self.embedding_model, "input": text}
+        for attempt in range(self.max_retries):
+            try:
+                resp = self._client.post(
+                    f"{self.base_url}/v1/embeddings", json=payload
+                )
+                if resp.status_code == 429:
+                    delay = (2**attempt) * 5 + random.uniform(0, 2)
+                    logger.warning(
+                        "Individual embedding rate-limited, retrying in %.1fs",
+                        delay,
+                    )
+                    time.sleep(delay)
+                    continue
+                resp.raise_for_status()
+                data = resp.json()
+                return data["data"][0]["embedding"]
+            except (
+                httpx.TimeoutException,
+                httpx.HTTPStatusError,
+                httpx.ConnectError,
+            ) as exc:
+                if attempt == self.max_retries - 1:
+                    logger.exception(
                         "Embedding call failed after %d attempts", self.max_retries
                     )
-                    return [[] for _ in texts]
+                    return []
                 delay = self.retry_base_delay * (2**attempt) + random.uniform(0, 0.5)  # noqa: S311
                 logger.warning(
                     "Embedding attempt %d/%d failed (%s), retrying in %.1fs",
@@ -312,8 +388,8 @@ class LLMProvider:
                 time.sleep(delay)
             except Exception:
                 logger.exception("Embedding call failed with unexpected error")
-                return [[] for _ in texts]
-        return [[] for _ in texts]
+                return []
+        return []
 
     # ── Async methods ─────────────────────────────────────────────
 
@@ -400,11 +476,39 @@ class LLMProvider:
         if not texts:
             return []
         client = self._get_async_client()
-        payload = {"model": self.embedding_model, "input": texts}
+        results: list[list[float]] = []
+        batch_size = 5
+        for i in range(0, len(texts), batch_size):
+            chunk = texts[i : i + batch_size]
+            batch_result = await self._embed_batch_async(chunk, client)
+            if batch_result is not None:
+                results.extend(batch_result)
+            else:
+                for text in chunk:
+                    emb = await self._embed_one_async(text, client)
+                    results.append(emb)
+                    await asyncio.sleep(0.5)
+        return results
 
+    async def _embed_batch_async(
+        self, texts: list[str], client: httpx.AsyncClient
+    ) -> list[list[float]] | None:
+        payload = {"model": self.embedding_model, "input": texts}
         for attempt in range(self.max_retries):
             try:
-                resp = await client.post(f"{self.base_url}/v1/embeddings", json=payload)
+                resp = await client.post(
+                    f"{self.base_url}/v1/embeddings", json=payload
+                )
+                if resp.status_code == 400:
+                    return None
+                if resp.status_code == 429:
+                    delay = (2**attempt) * 5 + random.uniform(0, 2)
+                    logger.warning(
+                        "Async batch embedding rate-limited, retrying in %.1fs",
+                        delay,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
                 resp.raise_for_status()
                 data = resp.json()
                 return [item["embedding"] for item in data["data"]]
@@ -415,10 +519,57 @@ class LLMProvider:
             ) as exc:
                 if attempt == self.max_retries - 1:
                     logger.exception(
+                        "Async batch embedding call failed after %d attempts",
+                        self.max_retries,
+                    )
+                    return None
+                delay = self.retry_base_delay * (2**attempt) + random.uniform(0, 0.5)
+                logger.warning(
+                    "Async batch embedding attempt %d/%d failed (%s), retrying in %.1fs",
+                    attempt + 1,
+                    self.max_retries,
+                    exc,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+            except Exception:
+                logger.exception(
+                    "Async batch embedding call failed with unexpected error"
+                )
+                return None
+        return None
+
+    async def _embed_one_async(
+        self, text: str, client: httpx.AsyncClient
+    ) -> list[float]:
+        payload = {"model": self.embedding_model, "input": text}
+        for attempt in range(self.max_retries):
+            try:
+                resp = await client.post(
+                    f"{self.base_url}/v1/embeddings", json=payload
+                )
+                if resp.status_code == 429:
+                    delay = (2**attempt) * 5 + random.uniform(0, 2)
+                    logger.warning(
+                        "Async individual embedding rate-limited, retrying in %.1fs",
+                        delay,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                resp.raise_for_status()
+                data = resp.json()
+                return data["data"][0]["embedding"]
+            except (
+                httpx.TimeoutException,
+                httpx.HTTPStatusError,
+                httpx.ConnectError,
+            ) as exc:
+                if attempt == self.max_retries - 1:
+                    logger.exception(
                         "Async embedding call failed after %d attempts",
                         self.max_retries,
                     )
-                    return [[] for _ in texts]
+                    return []
                 delay = self.retry_base_delay * (2**attempt) + random.uniform(0, 0.5)  # noqa: S311
                 logger.warning(
                     "Async embedding attempt %d/%d failed (%s), retrying in %.1fs",
@@ -430,8 +581,8 @@ class LLMProvider:
                 await asyncio.sleep(delay)
             except Exception:
                 logger.exception("Async embedding call failed with unexpected error")
-                return [[] for _ in texts]
-        return [[] for _ in texts]
+                return []
+        return []
 
     # ── Lifecycle ─────────────────────────────────────────────────
 
@@ -446,10 +597,9 @@ class LLMProvider:
 def create_provider_from_settings(settings: Any) -> LLMProvider | None:
     """Create the configured LLM provider from application settings.
 
-    ``default_llm_provider`` is the single source of truth. When it is empty,
-    provider selection keeps the historical auto-detect order for compatibility.
-    ``AGENT_PROVIDER`` and ``AGENT_DEFAULT_MODEL`` are accepted as agent-style
-    aliases for local workflows that already use those names.
+    ``default_llm_provider`` is the single source of truth. ``AGENT_PROVIDER``
+    and ``AGENT_DEFAULT_MODEL`` are accepted as explicit agent-style aliases,
+    but no provider is auto-detected from spare API keys.
     """
 
     kwargs: dict[str, Any] = {
@@ -462,6 +612,9 @@ def create_provider_from_settings(settings: Any) -> LLMProvider | None:
     }
 
     def create_from_config(config: OpenAICompatibleConfig) -> LLMProvider:
+        reasoning_effort: str | None = None
+        if config.provider == "yandex":
+            reasoning_effort = "none"
         return LLMProvider(
             base_url=config.base_url,
             api_key=config.api_key,
@@ -469,6 +622,7 @@ def create_provider_from_settings(settings: Any) -> LLMProvider | None:
             embedding_model=config.embedding_model,
             max_retries=kwargs["max_retries"],
             retry_base_delay=kwargs["retry_base_delay"],
+            reasoning_effort=reasoning_effort,
         )
 
     selected_provider = _selected_provider(settings)
@@ -476,18 +630,6 @@ def create_provider_from_settings(settings: Any) -> LLMProvider | None:
         config = resolve_openai_compatible_config(settings, require_provider=True)
         return create_from_config(config) if config is not None else None
 
-    for provider_name in ("openai", "vllm", "openrouter", "polza", "groq", "mistral"):
-        proxy = type(
-            "_ProviderSettings",
-            (),
-            {
-                **vars(settings),
-                "default_llm_provider": provider_name,
-            },
-        )()
-        config = resolve_openai_compatible_config(proxy)
-        if config is not None:
-            return create_from_config(config)
     return None
 
 
@@ -510,7 +652,7 @@ def create_langchain_chat_model_from_settings(settings: Any) -> tuple[Any, str]:
         else:
             msg = (
                 f"API key and base URL for provider '{provider}' are not configured. "
-                "Use provider-specific env vars or LLM_API_KEY/LLM_BASE_URL."
+                "Use provider-specific env vars for the selected provider."
             )
         raise RuntimeError(msg)
 

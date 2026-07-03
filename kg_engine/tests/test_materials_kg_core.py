@@ -23,6 +23,56 @@ def build_service() -> MaterialsKGService:
     return MaterialsKGService(repository)
 
 
+def test_graph_data_matches_relative_filter_to_absolute_source_path() -> None:
+    service = build_service()
+    service.ingest_reference_data(
+        ReferenceDataBatch(
+            entities=[
+                CanonicalEntityInput(
+                    kind=EntityKind.DOCUMENT,
+                    name="Регламент 1.png",
+                    canonical_id="doc_abs",
+                    source_ref="/app/Задача 1/Регламенты/Регламент 1.png",
+                    properties={
+                        "source_file": "/app/Задача 1/Регламенты/Регламент 1.png",
+                    },
+                ),
+            ],
+        )
+    )
+
+    graph = service.get_graph_data(["Регламенты/Регламент 1.png"])
+
+    assert [node["id"] for node in graph["nodes"]] == ["doc_abs"]
+
+
+def test_graph_data_without_source_filter_returns_all_entities() -> None:
+    service = build_service()
+    service.ingest_reference_data(
+        ReferenceDataBatch(
+            entities=[
+                CanonicalEntityInput(
+                    kind=EntityKind.MATERIAL,
+                    name="CuCrZr",
+                    canonical_id="mat_cucrzr",
+                ),
+                CanonicalEntityInput(
+                    kind=EntityKind.PROPERTY,
+                    name="Conductivity",
+                    canonical_id="prop_conductivity",
+                ),
+            ],
+        )
+    )
+
+    graph = service.get_graph_data([])
+
+    assert {node["id"] for node in graph["nodes"]} == {
+        "mat_cucrzr",
+        "prop_conductivity",
+    }
+
+
 def test_reference_resolution_handles_aliases_and_noisy_names() -> None:
     service = build_service()
     service.ingest_reference_data(
@@ -464,6 +514,52 @@ class TestSourceGrounding:
         hit = search_hits[0]
         assert "source_entity_id" in hit, "Search hit must reference source entity"
         assert "content" in hit, "Search hit must include content fragment"
+
+    def test_russian_text_search_matches_preserved_source_names(self) -> None:
+        service = build_service()
+        service.ingest_documents(
+            [
+                DocumentInput(
+                    document_id="doc-russian",
+                    title="Хвосты и флотация",
+                    text="Файл сохранен как источник: Пример 1\\Хвосты КГМК.xlsx.",
+                    source_ref="Пример 1\\Хвосты КГМК.xlsx",
+                )
+            ]
+        )
+
+        hits = service.search_evidence_units("хвосты флотация", limit=5)
+
+        assert hits
+        assert "Хвосты" in hits[0].content
+
+    def test_raw_document_fallback_is_compacted_before_storage(self) -> None:
+        service = build_service()
+        noise = "\n".join(
+            f"background paragraph {idx} without useful values"
+            for idx in range(120)
+        )
+        important = "CuCrZr aging at 480 C reached conductivity 82 %IACS."
+        raw_text = f"{noise}\n{important}\n{noise}"
+        service.ingest_documents(
+            [
+                DocumentInput(
+                    document_id="doc-raw",
+                    title="Raw fallback document",
+                    text=raw_text,
+                )
+            ]
+        )
+
+        units = service.repository.list_text_units()
+
+        assert len(units) == 1
+        assert len(units[0].content) < len(raw_text)
+        assert len(units[0].content) <= 1400
+        assert important in units[0].content
+        assert units[0].metadata["semantic_unit"] is True
+        assert units[0].metadata["source_text_chars"] == len(raw_text)
+        assert units[0].metadata["stored_text_chars"] == len(units[0].content)
 
 
 class TestSourceIdsIsolation:
