@@ -297,11 +297,11 @@ def test_task_materials_loader_and_hypothesis_exports(tmp_path, monkeypatch) -> 
     loaded = client.post("/demo/load-task-materials")
     assert loaded.status_code == 200
     loaded_body = loaded.json()
-    assert len(loaded_body["uploaded"]) == 3
-    assert loaded_body["unsupported_files"] == ["scan.pdf"]
+    assert len(loaded_body["uploaded"]) == 4
+    assert loaded_body["unsupported_files"] == []
     assert loaded_body["reference"]["entities"] == 3
     assert loaded_body["experiments"]["observations"] == 1
-    assert loaded_body["documents"]["documents"] == 1
+    assert loaded_body["documents_ingested"] == 2
 
     hypotheses = client.post(
         "/hypotheses/generate",
@@ -379,6 +379,56 @@ def test_task_materials_loader_uses_packaged_fallback(tmp_path, monkeypatch) -> 
     assert loaded_body["reference"]["entities"] == 3
     assert loaded_body["experiments"]["experiments"] == 1
     assert loaded_body["experiments"]["observations"] == 1
+
+
+def test_task_materials_base_loader_skips_examples_and_saves_snapshot(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    task_dir = tmp_path / "Задача 1"
+    example_dir = task_dir / "Пример 1"
+    base_dir = task_dir / "Регламенты"
+    example_dir.mkdir(parents=True)
+    base_dir.mkdir()
+    (base_dir / "base.md").write_text(
+        "# Регламент\nВ базе описан материал CuCrZr и показатель Conductivity.",
+        encoding="utf-8",
+    )
+    (example_dir / "case.md").write_text(
+        "# Пример\nЭтот файл не должен попасть в базовый граф.",
+        encoding="utf-8",
+    )
+    snapshot_path = tmp_path / "base_graph.json"
+    monkeypatch.setattr(materials_core, "_TASK_MATERIALS_DIRS", (task_dir,))
+
+    app = create_materials_app(
+        settings=deterministic_settings(),
+        service=MaterialsKGService(InMemoryMaterialsKGRepository()),
+    )
+    client = TestClient(app)
+
+    loaded = client.post(
+        "/demo/load-task-materials",
+        params={
+            "exclude_examples": "true",
+            "snapshot_path": str(snapshot_path),
+        },
+    )
+
+    assert loaded.status_code == 200
+    body = loaded.json()
+    assert body["excluded_examples"] is True
+    uploaded_name = body["uploaded"][0]["name"].replace("\\", "/")
+    assert uploaded_name == "Регламенты/base.md"
+    skipped = [name.replace("\\", "/") for name in body["skipped_example_files"]]
+    assert skipped == ["Пример 1/case.md"]
+    assert body["snapshot"]["path"] == str(snapshot_path)
+    assert snapshot_path.exists()
+
+    restored_service = MaterialsKGService(InMemoryMaterialsKGRepository())
+    restored_counts = restored_service.load_graph_snapshot(snapshot_path)
+    assert restored_counts["entities"] == body["snapshot"]["entities"]
+    assert restored_service.search_evidence_units("CuCrZr", limit=5)
 
 
 def test_metrics_api_offline_quality_flow() -> None:
@@ -883,11 +933,11 @@ def test_task_materials_loader_and_hypothesis_exports(tmp_path, monkeypatch) -> 
     loaded = client.post("/demo/load-task-materials")
     assert loaded.status_code == 200
     loaded_body = loaded.json()
-    assert len(loaded_body["uploaded"]) == 3
-    assert loaded_body["unsupported_files"] == ["scan.pdf"]
+    assert len(loaded_body["uploaded"]) == 4
+    assert loaded_body["unsupported_files"] == []
     assert loaded_body["reference"]["entities"] == 3
     assert loaded_body["experiments"]["observations"] == 1
-    assert loaded_body["documents"]["documents"] == 1
+    assert loaded_body["documents_ingested"] == 2
 
     hypotheses = client.post(
         "/hypotheses/generate",

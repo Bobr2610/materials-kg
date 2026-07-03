@@ -38,7 +38,7 @@ _ANSWER_CONTEXT_KEYS = [
 
 MATERIALS_ANSWER_SYSTEM_PROMPT = """<role>
 You are a materials science research assistant working over a graph-backed evidence base.
-You answer strictly from the provided graph retrieval packet.
+You answer strictly from the provided graph retrieval packet, citing sources.
 </role>
 
 <answer_language>
@@ -50,7 +50,11 @@ You answer strictly from the provided graph retrieval packet.
 <grounding_rules>
 - Use ONLY facts present in the graph retrieval packet.
 - Do not invent materials, modes, properties, experiments, values, units, teams, equipment, mechanisms, or relationships.
-- Tie important claims to evidence: mention source_id and, when useful, the fragment, row_reference, value, unit, or confidence.
+- Every factual claim MUST be tied to a source. Use this citation format:
+  * For text fragments: [источник: file_name, стр. N] or [source: file_name, page N]
+  * For measurements: [измерение: property value unit, источник: file_name, стр. N]
+  * For experiments: [эксперимент: experiment_id, источник: file_name]
+- Search for source_file and page in search_hits.metadata and evidence metadata to build citations.
 - If the packet is insufficient, say: "Недостаточно данных в загруженных источниках для полного ответа."
 - Explicitly call out data gaps when they are present.
 </grounding_rules>
@@ -58,15 +62,22 @@ You answer strictly from the provided graph retrieval packet.
 <graph_packet_contract>
 - resolved_query: entities selected for this question.
 - entity_lookup: names and kinds for IDs referenced by observations, relations, evidence, and gaps.
-- observations: measured facts; prefer these for numerical answers.
-- evidence and search_hits: source fragments; use these for citations and wording.
+- observations: measured facts with source_file/page in metadata; prefer these for numerical answers.
+- evidence and search_hits: source fragments with source_file/page metadata; use these for citations and wording.
 - relations and decision_history: graph context, dependencies, conclusions, and related experiments/entities.
 - data_gaps: known missing coverage; mention only when relevant.
 </graph_packet_contract>
 
+<citation_examples>
+- "Прочность на разрыв CuCrZr составляет 450 МПа [измерение: tensile_strength 450 MPa, источник: report.pdf, стр. 12]"
+- "Флотация угля описана в [источник: geokniga.pdf, стр. 27-29]"
+- "Эксперимент exp_001 проводился с образцами CuCrZr при режиме отжига [эксперимент: exp_001, источник: lab_notes.xlsx]"
+</citation_examples>
+
 <answer_style>
 - Be concise but complete.
 - Prefer bullets or short sections when several measurements or gaps are present.
+- Always include source citations for factual claims.
 - Do not expose hidden reasoning or query-planning text.
 - Never duplicate sections.
 </answer_style>"""
@@ -363,10 +374,22 @@ def _validate_experiment(raw: dict[str, Any], index: int) -> ExtractedExperiment
         prop_name = (obs.get("property_name") or "").strip()
         if not prop_name:
             continue
+        raw_value = obs.get("value")
+        if isinstance(raw_value, str) and raw_value.strip():
+            try:
+                numeric_value = float(raw_value.strip().replace(",", "."))
+                if numeric_value == int(numeric_value):
+                    numeric_value = int(numeric_value)
+            except ValueError:
+                numeric_value = None
+        elif isinstance(raw_value, (int, float)):
+            numeric_value = raw_value
+        else:
+            numeric_value = None
         observations.append(
             ObservationInput(
                 property_name=prop_name,
-                value=obs.get("value") if isinstance(obs.get("value"), int | float) else None,
+                value=numeric_value,
                 unit=(obs.get("unit") or "").strip() or None,
                 comparator=(obs.get("comparator") or "").strip() or None,
                 fragment=(obs.get("fragment") or "").strip() or None,
@@ -589,8 +612,21 @@ _CHUNK_SIZE = 3000
 _CHUNK_OVERLAP = 500
 
 
-def _chunk_text(text: str, chunk_size: int = _CHUNK_SIZE, overlap: int = _CHUNK_OVERLAP) -> list[str]:
-    """Split text into overlapping chunks of approximately chunk_size characters."""
+def _get_chunk_config() -> tuple[int, int]:
+    try:
+        from kg_engine.config.settings import settings
+        return (
+            getattr(settings, "materials_llm_extraction_chunk_size", _CHUNK_SIZE),
+            getattr(settings, "materials_llm_extraction_chunk_overlap", _CHUNK_OVERLAP),
+        )
+    except Exception:
+        return (_CHUNK_SIZE, _CHUNK_OVERLAP)
+
+
+def _chunk_text(text: str, chunk_size: int | None = None, overlap: int | None = None) -> list[str]:
+    _size, _overlap = _get_chunk_config()
+    chunk_size = chunk_size or _size
+    overlap = overlap or _overlap
     if len(text) <= chunk_size:
         return [text]
     chunks: list[str] = []

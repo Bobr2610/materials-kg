@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import hashlib
 import logging
 from pathlib import Path
+import re
 from typing import Any
 
 from pydantic import BaseModel
@@ -19,6 +20,70 @@ logger = logging.getLogger(__name__)
 _TEXT_SUFFIXES = {".md", ".txt"}
 _MARKITDOWN_SUFFIXES = {".docx", ".xlsx", ".xls", ".pdf", ".html", ".htm"}
 _IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff", ".bmp"}
+_RAW_FRAGMENT_MAX_CHARS = 500
+_SEMANTIC_UNIT_MAX_CHARS = 1400
+_SEMANTIC_LINE_LIMIT = 14
+_UNIT_PATTERN = re.compile(
+    r"(?i)\b(?:mpa|gpa|kpa|pa|hv|hrc|hb|iacs|wt\.?%|at\.?%|mass\s*%|"
+    r"vol\.?%|ppm|nm|um|µm|mm|cm|m/s|kg|g|mg|mol|c|°c|kwh|v|a)\b|[%℃°]"
+)
+_NUMBER_PATTERN = re.compile(r"\d+(?:[.,]\d+)?")
+_MATERIAL_PATTERN = re.compile(
+    r"\b(?:[A-Z][a-z]?\d*){2,}\b|"
+    r"\b(?:Ti-?6Al-?4V|CuCrZr|316L|AlSi10Mg|Inconel|NiTi|FeCrAl)\b"
+)
+_DOMAIN_TERMS = (
+    "alloy",
+    "anneal",
+    "aging",
+    "calcination",
+    "catalyst",
+    "chemical",
+    "composition",
+    "conductivity",
+    "concentration",
+    "condition",
+    "crack",
+    "density",
+    "experiment",
+    "flotation",
+    "grade",
+    "hardness",
+    "heat treatment",
+    "leaching",
+    "material",
+    "microstructure",
+    "ore",
+    "phase",
+    "pressure",
+    "process",
+    "property",
+    "reagent",
+    "recovery",
+    "sample",
+    "sinter",
+    "strength",
+    "temperature",
+    "tensile",
+    "yield",
+    "сплав",
+    "отжиг",
+    "старение",
+    "выщелачивание",
+    "флотация",
+    "материал",
+    "образец",
+    "прочность",
+    "твёрдость",
+    "твердость",
+    "температура",
+    "свойство",
+    "концентрация",
+    "извлечение",
+    "реагент",
+    "руда",
+    "фаза",
+)
 
 
 class DocumentBlock(BaseModel):
@@ -52,7 +117,7 @@ class DocumentParseSettings:
     """Routing knobs for the document parser."""
 
     scanned_pdf_text_threshold: int = 80
-    enable_vision: bool = False
+    enable_vision: bool = True
     vision_prompt: str = (
         "Read the rendered materials science document page. Extract only visible "
         "materials, processing modes, properties, numeric values, units, table "
@@ -60,6 +125,7 @@ class DocumentParseSettings:
     )
     pdf_render_dpi: int = 180
     max_pdf_pages: int | None = None
+    preserve_pdf_pages_without_text: bool = True
 
 
 class MarkItDownAdapter:
@@ -161,7 +227,20 @@ class DocumentBlockParser:
         raise ValueError(msg)
 
     def _pdf_blocks(self, source: Path) -> list[DocumentBlock]:
-        text = self.markitdown.convert(source).strip()
+        page_text_blocks = self._pypdf_text_blocks(source)
+        extracted_text_len = sum(
+            len(block.text.strip())
+            for block in page_text_blocks
+            if block.parser != "pypdf_page_placeholder"
+        )
+        if extracted_text_len >= self.settings.scanned_pdf_text_threshold:
+            return page_text_blocks
+
+        try:
+            text = self.markitdown.convert(source).strip()
+        except Exception:
+            logger.debug("MarkItDown PDF conversion failed for %s", source, exc_info=True)
+            text = ""
         if len(text) >= self.settings.scanned_pdf_text_threshold:
             return [self._text_block(source, text, parser="markitdown", page=None)]
 
@@ -169,7 +248,12 @@ class DocumentBlockParser:
             dpi=self.settings.pdf_render_dpi,
             max_pages=self.settings.max_pdf_pages,
         )
-        page_images = renderer.render_pages(source)
+        try:
+            page_images = renderer.render_pages(source)
+        except RuntimeError:
+            if page_text_blocks:
+                return page_text_blocks
+            raise
         blocks: list[DocumentBlock] = []
         for image in page_images:
             image_block = self._image_block(
@@ -207,6 +291,64 @@ class DocumentBlockParser:
                             },
                         )
                     )
+        return blocks
+
+    def _pypdf_text_blocks(self, source: Path) -> list[DocumentBlock]:
+        try:
+            from pypdf import PdfReader
+        except ImportError:
+            logger.debug("pypdf not available for page-level PDF parsing")
+            return []
+
+        blocks: list[DocumentBlock] = []
+        try:
+            with open(source, "rb") as fh:
+                reader = PdfReader(fh)
+                page_count = len(reader.pages)
+                limit = (
+                    page_count
+                    if self.settings.max_pdf_pages is None
+                    else min(page_count, self.settings.max_pdf_pages)
+                )
+                for page_index in range(limit):
+                    try:
+                        text = (reader.pages[page_index].extract_text() or "").strip()
+                    except Exception:
+                        logger.debug(
+                            "pypdf extraction failed for %s page %s",
+                            source,
+                            page_index + 1,
+                            exc_info=True,
+                        )
+                        continue
+                    page_number = page_index + 1
+                    if text:
+                        block = self._text_block(
+                            source,
+                            text,
+                            parser="pypdf",
+                            page=page_number,
+                        )
+                    elif self.settings.preserve_pdf_pages_without_text:
+                        block = self._text_block(
+                            source,
+                            (
+                                f"PDF page preserved without extracted text: "
+                                f"{source.name} page {page_number}."
+                            ),
+                            parser="pypdf_page_placeholder",
+                            page=page_number,
+                            block_type="page_placeholder",
+                            confidence=0.1,
+                            metadata={"parse_status": "no_text_extracted"},
+                        )
+                    else:
+                        continue
+                    blocks.append(block)
+                reader.stream.close()
+        except Exception:
+            logger.debug("pypdf PDF parsing failed for %s", source, exc_info=True)
+            return []
         return blocks
 
     def _image_blocks(self, source: Path) -> list[DocumentBlock]:
@@ -263,7 +405,7 @@ class DocumentBlockParser:
             page=page,
             block_type=block_type,
             text=text,
-            raw_fragment=text[:2000],
+            raw_fragment=text[:_RAW_FRAGMENT_MAX_CHARS],
             confidence=confidence,
             parser=parser,
             metadata=metadata or {},
@@ -299,23 +441,32 @@ def blocks_to_document_input(
     title: str,
     blocks: list[DocumentBlock],
 ) -> DocumentInput:
-    """Convert parsed blocks into the existing document ingestion DTO."""
+    """Convert parsed blocks into compact semantic units for graph ingestion."""
     text_blocks = [block for block in blocks if block.text.strip()]
-    text_units = [
-        TextUnitInput(content=block.text, metadata=_block_metadata(block))
+    semantic_units = [
+        _semantic_text_unit(block)
         for block in text_blocks
+    ]
+    text_units = [
+        TextUnitInput(content=content, metadata=metadata)
+        for content, metadata in semantic_units
     ]
     source_ref = blocks[0].source_path if blocks else document_id
     return DocumentInput(
         document_id=document_id,
         title=title,
-        text="\n\n".join(_block_text_for_extraction(block) for block in text_blocks),
+        text="\n\n".join(
+            _block_text_for_extraction(block, content)
+            for block, (content, _metadata) in zip(text_blocks, semantic_units, strict=True)
+        ),
         source_ref=source_ref,
         text_units=text_units,
         metadata={
             "source_path": source_ref,
             "parsed_block_count": len(blocks),
             "text_block_count": len(text_blocks),
+            "semantic_text_unit_count": len(text_units),
+            "text_unit_storage": "semantic_compaction",
             "parsers": sorted({block.parser for block in blocks}),
         },
     )
@@ -344,18 +495,106 @@ def _block_metadata(block: DocumentBlock) -> dict[str, Any]:
         "confidence": block.confidence,
     }
     if block.raw_fragment is not None:
-        metadata["raw_fragment"] = block.raw_fragment
+        metadata["raw_fragment"] = block.raw_fragment[:_RAW_FRAGMENT_MAX_CHARS]
+        metadata["raw_fragment_chars"] = min(len(block.raw_fragment), _RAW_FRAGMENT_MAX_CHARS)
     if block.image_path is not None:
         metadata["image_path"] = str(block.image_path)
     metadata.update(block.metadata)
     return metadata
 
 
-def _block_text_for_extraction(block: DocumentBlock) -> str:
+def _semantic_text_unit(block: DocumentBlock) -> tuple[str, dict[str, Any]]:
+    metadata = _block_metadata(block)
+    source_ref = block.source_file
+    page_ref = "unknown page" if block.page is None else f"page {block.page}"
+    meaning = _semantic_meaning(block.text)
+    content = (
+        f"Meaning from {source_ref}, {page_ref}; "
+        f"block={block.block_id}; type={block.block_type}; parser={block.parser}. "
+        f"{meaning}"
+    )
+    content = _truncate_text(content, _SEMANTIC_UNIT_MAX_CHARS)
+    metadata.update(
+        {
+            "semantic_unit": True,
+            "semantic_method": "deterministic_compaction_v1",
+            "source_text_chars": len(block.text),
+            "stored_text_chars": len(content),
+            "storage_policy": "meaning_with_page_provenance",
+        }
+    )
+    return content, metadata
+
+
+def _semantic_meaning(text: str) -> str:
+    lines = [_compact_line(line) for line in text.splitlines()]
+    lines = [line for line in lines if line]
+    if not lines:
+        return ""
+    if len(lines) == 1:
+        return f"Semantic summary: {_truncate_text(lines[0], _SEMANTIC_UNIT_MAX_CHARS)}"
+
+    selected_indices: set[int] = set()
+    for idx in range(min(2, len(lines))):
+        selected_indices.add(idx)
+
+    scored = sorted(
+        ((_semantic_line_score(line, idx), idx) for idx, line in enumerate(lines)),
+        key=lambda item: (-item[0], item[1]),
+    )
+    for score, idx in scored:
+        if len(selected_indices) >= _SEMANTIC_LINE_LIMIT:
+            break
+        if score <= 0:
+            continue
+        selected_indices.add(idx)
+
+    if len(selected_indices) < min(4, len(lines)):
+        for idx in range(len(lines)):
+            selected_indices.add(idx)
+            if len(selected_indices) >= min(4, len(lines)):
+                break
+
+    summary_lines = [lines[idx] for idx in sorted(selected_indices)]
+    summary = " / ".join(summary_lines)
+    return f"Semantic summary: {_truncate_text(summary, _SEMANTIC_UNIT_MAX_CHARS)}"
+
+
+def _semantic_line_score(line: str, index: int) -> int:
+    lower = line.casefold()
+    score = 0
+    if index < 2:
+        score += 2
+    if _NUMBER_PATTERN.search(line):
+        score += 3
+    if _UNIT_PATTERN.search(line):
+        score += 3
+    if _MATERIAL_PATTERN.search(line):
+        score += 3
+    if any(term in lower for term in _DOMAIN_TERMS):
+        score += 2
+    if "|" in line or "\t" in line or "," in line:
+        score += 1
+    if len(line) <= 180:
+        score += 1
+    return score
+
+
+def _compact_line(line: str) -> str:
+    return " ".join(line.strip().split())
+
+
+def _truncate_text(text: str, max_chars: int) -> str:
+    if len(text) <= max_chars:
+        return text
+    return text[: max_chars - 3].rstrip() + "..."
+
+
+def _block_text_for_extraction(block: DocumentBlock, semantic_content: str) -> str:
     page = "" if block.page is None else f" page={block.page}"
     return (
         f"[block_id={block.block_id}{page} type={block.block_type} "
-        f"parser={block.parser}]\n{block.text}"
+        f"parser={block.parser} storage=semantic]\n{semantic_content}"
     )
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import threading
 from dataclasses import dataclass
 from typing import Any
 
@@ -20,17 +21,30 @@ from kg_engine.domain.resolution import normalize_name
 
 @dataclass
 class _ScoredTextUnit:
-    score: int
+    score: float
     text_unit: SearchTextUnit
 
 
-_TERM_PATTERN = re.compile(r"[a-z0-9]+")
+_TERM_PATTERN = re.compile(r"(?u)\w+")
+
+
+def _cosine_similarity(a: list[float], b: list[float]) -> float:
+    """Compute cosine similarity between two vectors."""
+    if len(a) != len(b) or not a:
+        return 0.0
+    dot = sum(x * y for x, y in zip(a, b, strict=False))
+    norm_a = sum(x * x for x in a) ** 0.5
+    norm_b = sum(x * x for x in b) ** 0.5
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+    return dot / (norm_a * norm_b)
 
 
 class InMemoryMaterialsKGRepository:
     """Simple repository implementation for service logic and tests."""
 
     def __init__(self) -> None:
+        self._lock = threading.Lock()
         self._entities: dict[str, Entity] = {}
         self._alias_index: dict[tuple[EntityKind, str], str] = {}
         self._evidence: dict[str, Evidence] = {}
@@ -111,6 +125,9 @@ class InMemoryMaterialsKGRepository:
             for evidence_id in evidence_ids
             if evidence_id in self._evidence
         ]
+
+    def list_all_evidence(self) -> list[Evidence]:
+        return list(self._evidence.values())
 
     def upsert_relation(self, relation: Relation) -> Relation:
         current = self._relations.get(relation.id)
@@ -214,7 +231,7 @@ class InMemoryMaterialsKGRepository:
         for text_unit in self._text_units.values():
             lowered_content = text_unit.content.lower()
             normalized_content = normalize_name(text_unit.content)
-            score = 0
+            score = 0.0
             for term in normalized_terms:
                 if term and (
                     term in lowered_content
@@ -228,7 +245,48 @@ class InMemoryMaterialsKGRepository:
             if score > 0:
                 scored.append(_ScoredTextUnit(score=score, text_unit=text_unit))
         scored.sort(key=lambda item: item.score, reverse=True)
-        return [item.text_unit for item in scored[:limit]]
+        text_results = [item.text_unit for item in scored[:limit]]
+        if not normalized_terms:
+            return text_results
+        if not any(text_unit.embedding for text_unit in self._text_units.values()):
+            return text_results
+        query_embedding = self._compute_query_embedding(query)
+        if query_embedding is None:
+            return text_results
+        cosine_results: list[_ScoredTextUnit] = []
+        for text_unit in self._text_units.values():
+            if text_unit.embedding is None:
+                continue
+            similarity = _cosine_similarity(query_embedding, text_unit.embedding)
+            if similarity > 0.1:
+                cosine_results.append(
+                    _ScoredTextUnit(score=similarity * 100, text_unit=text_unit)
+                )
+        cosine_results.sort(key=lambda item: item.score, reverse=True)
+        seen_ids = {item.id for item in text_results}
+        for item in cosine_results:
+            if item.text_unit.id not in seen_ids:
+                text_results.append(item.text_unit)
+                seen_ids.add(item.text_unit.id)
+        return text_results[:limit]
+
+    def list_text_units(self) -> list[SearchTextUnit]:
+        return list(self._text_units.values())
+
+    def _compute_query_embedding(self, query: str) -> list[float] | None:
+        try:
+            from kg_engine.config.settings import settings
+            from kg_engine.llm_core.provider import create_provider_from_settings
+
+            provider = create_provider_from_settings(settings)
+            if provider is None:
+                return None
+            embeddings = provider.embed([query])
+            if embeddings and embeddings[0]:
+                return embeddings[0]
+        except Exception:
+            pass
+        return None
 
     def clear_all(self) -> None:
         self._entities.clear()
@@ -248,6 +306,11 @@ class InMemoryMaterialsKGRepository:
         for _query, _params in operations:
             results.append([])
         return results
+
+    def batch_upsert_entities(self, entities: list[Entity]) -> list[Entity]:
+        for entity in entities:
+            self.upsert_entity(entity)
+        return entities
 
     def batch_upsert_observations(self, observations: list[Observation]) -> list[Observation]:
         for obs in observations:

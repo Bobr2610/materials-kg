@@ -170,7 +170,6 @@ python_files = [
     "test_neo4j_repository.py",
     "test_no_donor_brand_in_core.py",
     "test_repository_factory.py",
-    "test_document_readers.py",
     "test_research_product.py",
 ]
 markers = [

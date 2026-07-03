@@ -83,25 +83,20 @@ def _load_tabular(path: Path) -> list[dict[str, Any]]:
         return [dict(row) for row in csv.DictReader(handle, delimiter=delimiter)]
 
 
-def _document_parser(*, enable_vision: bool | None = None) -> DocumentBlockParser:
-    vision_enabled = (
-        settings.materials_document_vision_enabled
-        if enable_vision is None
-        else enable_vision
-    )
+def _document_parser(*, disable_vision: bool = False) -> DocumentBlockParser:
+    vision_enabled = not disable_vision
     conductor = None
     if vision_enabled:
-        provider = create_provider_from_settings(settings)
-        if provider is None:
-            msg = (
-                "Document vision is enabled, but no LLM provider is configured. "
-                "Set DEFAULT_LLM_PROVIDER plus provider API/base URL settings."
+        vision_provider = _create_vision_provider()
+        if vision_provider is None:
+            logger.info(
+                "No VLM provider configured — VLM interpretation disabled."
             )
-            raise RuntimeError(msg)
-        conductor = OpenAICompatibleVisionConductor(
-            provider,
-            model=settings.materials_vision_model or settings.default_model or None,
-        )
+            vision_enabled = False
+        else:
+            vision_model = settings.materials_vision_model or settings.default_model or None
+            conductor = OpenAICompatibleVisionConductor(vision_provider, model=vision_model)
+            logger.info("VLM enabled, model: %s", vision_model or "(default)")
     return DocumentBlockParser(
         vision_conductor=conductor,
         settings=DocumentParseSettings(
@@ -110,6 +105,72 @@ def _document_parser(*, enable_vision: bool | None = None) -> DocumentBlockParse
             max_pdf_pages=settings.materials_pdf_max_pages,
         ),
     )
+
+
+def _create_vision_provider():
+    """Create LLM provider for VLM. Uses dedicated VLM settings if configured,
+    otherwise falls back to the main LLM provider."""
+    from kg_engine.llm_core.provider import LLMProvider, resolve_openai_compatible_config
+
+    vision_provider_name = (settings.materials_vision_provider or "").strip().lower()
+    vision_model = (settings.materials_vision_model or "").strip()
+    vision_api_key = (settings.materials_vision_api_key or "").strip()
+    vision_base_url = (settings.materials_vision_base_url or "").strip()
+
+    # If dedicated VLM provider is configured, use it
+    if vision_provider_name:
+        # Use VLM API key if provided, otherwise fall back to main provider's key
+        if not vision_api_key:
+            main_provider = (settings.default_llm_provider or "").strip().lower()
+            if vision_provider_name == main_provider:
+                # Same provider — reuse main API key
+                vision_api_key = (
+                    getattr(settings, f"{main_provider}_api_key", "")
+                    or settings.llm_api_key
+                    or ""
+                ).strip()
+            else:
+                # Different provider — need explicit key
+                vision_api_key = (
+                    getattr(settings, f"{vision_provider_name}_api_key", "")
+                    or settings.llm_api_key
+                    or ""
+                ).strip()
+
+        if not vision_base_url:
+            vision_base_url = (
+                getattr(settings, f"{vision_provider_name}_base_url", "")
+                or settings.llm_base_url
+                or ""
+            ).strip()
+
+        if vision_api_key or vision_base_url:
+            # If no vision model specified, use the vision provider's default
+            if not vision_model:
+                # Try to get from main settings for same provider
+                main_provider = (settings.default_llm_provider or "").strip().lower()
+                if vision_provider_name == main_provider:
+                    vision_model = settings.default_model
+
+            vision_settings_proxy = type("VisionSettings", (), {
+                "default_llm_provider": vision_provider_name,
+                "default_model": vision_model,
+                f"{vision_provider_name}_api_key": vision_api_key,
+                f"{vision_provider_name}_base_url": vision_base_url,
+                "llm_api_key": vision_api_key,
+                "llm_base_url": vision_base_url,
+            })()
+            config = resolve_openai_compatible_config(vision_settings_proxy)
+            if config is not None:
+                return LLMProvider(
+                    base_url=config.base_url,
+                    api_key=config.api_key,
+                    chat_model=config.chat_model,
+                    embedding_model=config.embedding_model,
+                )
+
+    # Fallback to main LLM provider
+    return create_provider_from_settings(settings)
 
 
 def _load_one(
@@ -464,17 +525,17 @@ def main() -> None:
         help="Ensure Neo4j schema constraints before ingestion",
     )
     parser.add_argument(
-        "--enable-vision",
+        "--disable-vision",
         action="store_true",
         default=False,
         help=(
-            "Interpret rendered PDF/image pages through the configured "
-            "Vision-Language provider. Disabled by default to avoid hidden cost."
+            "Disable Vision-Language interpretation for rendered PDF/image pages. "
+            "VLM is enabled by default when an LLM provider is configured."
         ),
     )
     args = parser.parse_args()
 
-    document_parser = _document_parser(enable_vision=args.enable_vision)
+    document_parser = _document_parser(disable_vision=args.disable_vision)
 
     repository = create_materials_repository(
         settings,

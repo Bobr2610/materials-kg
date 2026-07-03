@@ -27,9 +27,23 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _cosine_similarity(a: list[float], b: list[float]) -> float:
+    """Compute cosine similarity between two vectors."""
+    if len(a) != len(b) or not a:
+        return 0.0
+    dot = sum(x * y for x, y in zip(a, b, strict=False))
+    norm_a = sum(x * x for x in a) ** 0.5
+    norm_b = sum(x * x for x in b) ** 0.5
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+    return dot / (norm_a * norm_b)
+
+
 def _jsonable(value: Any) -> Any:
     if isinstance(value, datetime):
         return value.isoformat()
+    if isinstance(value, (set, tuple, frozenset)):
+        return [_jsonable(item) for item in value]
     if isinstance(value, list):
         return [_jsonable(item) for item in value]
     if isinstance(value, dict):
@@ -183,6 +197,10 @@ class Neo4jMaterialsKGRepository:
             )
         }
         return [by_id[item] for item in evidence_ids if item in by_id]
+
+    def list_all_evidence(self) -> list[Evidence]:
+        rows = self._run("MATCH (n:Evidence) RETURN n", {})
+        return [self._node_to_evidence(row["n"]) for row in rows]
 
     def upsert_relation(self, relation: Relation) -> Relation:
         rows = self._run(
@@ -359,124 +377,134 @@ class Neo4jMaterialsKGRepository:
         )
         return text_unit
 
+    def batch_upsert_entities(self, entities: list[Entity]) -> list[Entity]:
+        if not entities:
+            return []
+        batch = [
+            {"id": e.id, "payload": self._entity_to_properties(e)}
+            for e in entities
+        ]
+        self._run(
+            """
+            UNWIND $batch AS row
+            MERGE (n:Entity {id: row.id})
+            SET n += row.payload
+            """,
+            {"batch": batch},
+        )
+        return entities
+
     def batch_upsert_observations(self, observations: list[Observation]) -> list[Observation]:
-        """Upsert multiple observations in a single transaction."""
         if not observations:
             return []
-        with self._session() as session, session.begin_transaction() as tx:
-            for obs in observations:
-                tx.run(
-                        """
-                        MERGE (n:Observation {id: $id})
-                        SET n += $payload
-                        WITH n
-                        OPTIONAL MATCH (m:Entity {id: $material_id})
-                        OPTIONAL MATCH (p:Entity {id: $property_id})
-                        OPTIONAL MATCH (e:Entity {id: $experiment_id})
-                        OPTIONAL MATCH (mode:Entity {id: $mode_id})
-                        OPTIONAL MATCH (ev:Evidence {id: $evidence_id})
-                        FOREACH (_ IN CASE WHEN m IS NULL THEN [] ELSE [1] END | MERGE (n)-[:OBSERVED_MATERIAL]->(m))
-                        FOREACH (_ IN CASE WHEN p IS NULL THEN [] ELSE [1] END | MERGE (n)-[:OBSERVED_PROPERTY]->(p))
-                        FOREACH (_ IN CASE WHEN e IS NULL THEN [] ELSE [1] END | MERGE (n)-[:OBSERVED_IN]->(e))
-                        FOREACH (_ IN CASE WHEN mode IS NULL THEN [] ELSE [1] END | MERGE (n)-[:OBSERVED_MODE]->(mode))
-                        FOREACH (_ IN CASE WHEN ev IS NULL THEN [] ELSE [1] END | MERGE (n)-[:SUPPORTED_BY]->(ev))
-                        RETURN n
-                        """,
-                        {
-                            "id": obs.id,
-                            "payload": self._observation_to_properties(obs),
-                            "material_id": obs.material_id,
-                            "property_id": obs.property_id,
-                            "experiment_id": obs.experiment_id,
-                            "mode_id": obs.mode_id,
-                            "evidence_id": obs.evidence_id,
-                        },
-                )
-            tx.commit()
+        batch = [
+            {
+                "id": obs.id,
+                "payload": self._observation_to_properties(obs),
+                "material_id": obs.material_id,
+                "property_id": obs.property_id,
+                "experiment_id": obs.experiment_id,
+                "mode_id": obs.mode_id,
+                "evidence_id": obs.evidence_id,
+            }
+            for obs in observations
+        ]
+        self._run(
+            """
+            UNWIND $batch AS row
+            MERGE (n:Observation {id: row.id})
+            SET n += row.payload
+            WITH n, row
+            OPTIONAL MATCH (m:Entity {id: row.material_id})
+            OPTIONAL MATCH (p:Entity {id: row.property_id})
+            OPTIONAL MATCH (e:Entity {id: row.experiment_id})
+            OPTIONAL MATCH (mode:Entity {id: row.mode_id})
+            OPTIONAL MATCH (ev:Evidence {id: row.evidence_id})
+            FOREACH (_ IN CASE WHEN m IS NULL THEN [] ELSE [1] END | MERGE (n)-[:OBSERVED_MATERIAL]->(m))
+            FOREACH (_ IN CASE WHEN p IS NULL THEN [] ELSE [1] END | MERGE (n)-[:OBSERVED_PROPERTY]->(p))
+            FOREACH (_ IN CASE WHEN e IS NULL THEN [] ELSE [1] END | MERGE (n)-[:OBSERVED_IN]->(e))
+            FOREACH (_ IN CASE WHEN mode IS NULL THEN [] ELSE [1] END | MERGE (n)-[:OBSERVED_MODE]->(mode))
+            FOREACH (_ IN CASE WHEN ev IS NULL THEN [] ELSE [1] END | MERGE (n)-[:SUPPORTED_BY]->(ev))
+            """,
+            {"batch": batch},
+        )
         return observations
 
     def batch_upsert_traces(self, traces: list[DecisionTrace]) -> list[DecisionTrace]:
-        """Upsert multiple decision traces in a single transaction."""
         if not traces:
             return []
-        with self._session() as session, session.begin_transaction() as tx:
-            for trace in traces:
-                tx.run(
-                        """
-                        MERGE (n:DecisionTrace {id: $id})
-                        SET n += $payload
-                        RETURN n
-                        """,
-                        {"id": trace.id, "payload": self._trace_to_properties(trace)},
-                )
-            tx.commit()
+        batch = [
+            {"id": t.id, "payload": self._trace_to_properties(t)}
+            for t in traces
+        ]
+        self._run(
+            """
+            UNWIND $batch AS row
+            MERGE (n:DecisionTrace {id: row.id})
+            SET n += row.payload
+            """,
+            {"batch": batch},
+        )
         return traces
 
     def batch_upsert_evidence(self, evidence_list: list[Evidence]) -> list[Evidence]:
-        """Upsert multiple evidence records in a single transaction."""
         if not evidence_list:
             return []
-        with self._session() as session, session.begin_transaction() as tx:
-            for evidence in evidence_list:
-                tx.run(
-                        """
-                        MERGE (n:Evidence {id: $id})
-                        SET n += $payload
-                        RETURN n
-                        """,
-                        {"id": evidence.id, "payload": self._evidence_to_properties(evidence)},
-                )
-            tx.commit()
+        batch = [
+            {"id": ev.id, "payload": self._evidence_to_properties(ev)}
+            for ev in evidence_list
+        ]
+        self._run(
+            """
+            UNWIND $batch AS row
+            MERGE (n:Evidence {id: row.id})
+            SET n += row.payload
+            """,
+            {"batch": batch},
+        )
         return evidence_list
 
     def batch_upsert_relations(self, relations: list[Relation]) -> list[Relation]:
-        """Upsert multiple relations in a single transaction."""
         if not relations:
             return []
-        with self._session() as session, session.begin_transaction() as tx:
-            for relation in relations:
-                tx.run(
-                        """
-                        MATCH (source:Entity {id: $source_id})
-                        MATCH (target:Entity {id: $target_id})
-                        MERGE (source)-[r:KG_RELATION {id: $id}]->(target)
-                        SET r += $payload
-                        WITH r, source, target
-                        OPTIONAL MATCH (source)-[old:KG_RELATION {id: $id}]->(target)
-                        WITH r, source, target,
-                             CASE WHEN old IS NOT NULL
-                                  THEN coalesce(old.evidence_ids, []) + $new_evidence_ids
-                                  ELSE $new_evidence_ids
-                             END AS merged_evidence
-                        SET r.evidence_ids = merged_evidence
-                        RETURN r, source.id AS source_id, target.id AS target_id
-                        """,
-                        {
-                            "id": relation.id,
-                            "source_id": relation.source_entity_id,
-                            "target_id": relation.target_entity_id,
-                            "payload": self._relation_to_properties(relation),
-                            "new_evidence_ids": relation.evidence_ids,
-                        },
-                )
-            tx.commit()
+        batch = [
+            {
+                "id": r.id,
+                "source_id": r.source_entity_id,
+                "target_id": r.target_entity_id,
+                "payload": self._relation_to_properties(r),
+                "new_evidence_ids": r.evidence_ids,
+            }
+            for r in relations
+        ]
+        self._run(
+            """
+            UNWIND $batch AS row
+            MATCH (source:Entity {id: row.source_id})
+            MATCH (target:Entity {id: row.target_id})
+            MERGE (source)-[r:KG_RELATION {id: row.id}]->(target)
+            SET r += row.payload
+            SET r.evidence_ids = coalesce(r.evidence_ids, []) + row.new_evidence_ids
+            """,
+            {"batch": batch},
+        )
         return relations
 
     def batch_upsert_text_units(self, text_units: list[SearchTextUnit]) -> list[SearchTextUnit]:
-        """Upsert multiple text units in a single transaction."""
         if not text_units:
             return []
-        with self._session() as session, session.begin_transaction() as tx:
-            for text_unit in text_units:
-                tx.run(
-                        """
-                        MERGE (n:TextUnit {id: $id})
-                        SET n += $payload
-                        RETURN n
-                        """,
-                        {"id": text_unit.id, "payload": self._text_unit_to_properties(text_unit)},
-                )
-            tx.commit()
+        batch = [
+            {"id": tu.id, "payload": self._text_unit_to_properties(tu)}
+            for tu in text_units
+        ]
+        self._run(
+            """
+            UNWIND $batch AS row
+            MERGE (n:TextUnit {id: row.id})
+            SET n += row.payload
+            """,
+            {"batch": batch},
+        )
         return text_units
 
     def search_text_units(self, query: str, *, limit: int = 5) -> list[SearchTextUnit]:
@@ -512,7 +540,51 @@ class Neo4jMaterialsKGRepository:
                 "limit": limit,
             },
         )
+        text_results = [self._node_to_text_unit(row["n"]) for row in rows]
+        query_embedding = self._compute_query_embedding(query)
+        if query_embedding is None:
+            return text_results
+        try:
+            all_rows = self._run(
+                "MATCH (n:TextUnit) WHERE n.embedding IS NOT NULL RETURN n",
+                {},
+            )
+        except Exception:
+            return text_results
+        cosine_results: list[tuple[float, SearchTextUnit]] = []
+        for row in all_rows:
+            unit = self._node_to_text_unit(row["n"])
+            if unit.embedding is None:
+                continue
+            similarity = _cosine_similarity(query_embedding, unit.embedding)
+            if similarity > 0.1:
+                cosine_results.append((similarity, unit))
+        cosine_results.sort(key=lambda item: item[0], reverse=True)
+        seen_ids = {unit.id for unit in text_results}
+        for _sim, unit in cosine_results:
+            if unit.id not in seen_ids:
+                text_results.append(unit)
+                seen_ids.add(unit.id)
+        return text_results[:limit]
+
+    def list_text_units(self) -> list[SearchTextUnit]:
+        rows = self._run("MATCH (n:TextUnit) RETURN n", {})
         return [self._node_to_text_unit(row["n"]) for row in rows]
+
+    def _compute_query_embedding(self, query: str) -> list[float] | None:
+        try:
+            from kg_engine.config.settings import settings
+            from kg_engine.llm_core.provider import create_provider_from_settings
+
+            provider = create_provider_from_settings(settings)
+            if provider is None:
+                return None
+            embeddings = provider.embed([query])
+            if embeddings and embeddings[0]:
+                return embeddings[0]
+        except Exception:
+            pass
+        return None
 
     def _session(self) -> Any:
         if self._database:

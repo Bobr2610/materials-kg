@@ -40,6 +40,8 @@ class MaterialsKGRepository(Protocol):
 
     def list_evidence(self, evidence_ids: list[str]) -> list[Evidence]: ...
 
+    def list_all_evidence(self) -> list[Evidence]: ...
+
     def upsert_relation(self, relation: Relation) -> Relation: ...
 
     def list_relations(
@@ -78,6 +80,8 @@ class MaterialsKGRepository(Protocol):
     def search_text_units(
         self, query: str, *, limit: int = 5
     ) -> list[SearchTextUnit]: ...
+
+    def list_text_units(self) -> list[SearchTextUnit]: ...
 
     def clear_all(self) -> None:
         """Remove all data from the repository."""

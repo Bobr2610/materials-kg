@@ -705,6 +705,7 @@ def test_ingest_documents_writes_llm_extracted_graph_data_with_evidence() -> Non
     )
 
     assert result["llm_extracted_experiments"] == 1
+    assert result["deepagents_extracted_experiments"] == 1
     material_mode = service.query_material_mode(
         "CuCrZr",
         "Aging",
@@ -712,9 +713,14 @@ def test_ingest_documents_writes_llm_extracted_graph_data_with_evidence() -> Non
     )
     assert material_mode.observations
     assert material_mode.observations[0].value == 58.0
+    assert material_mode.evidence[0].extraction_method.startswith("deepagents_")
+    assert material_mode.evidence[0].metadata["agent_trace"][0]["event"] == (
+        "deepagents_extraction_started"
+    )
     related = service.query_related("CuCrZr", relation_filters=[RelationType.USES_MODE])
     assert related.relations
     assert related.relations[0].evidence_ids
     relation_evidence = service.repository.list_evidence(related.relations[0].evidence_ids)
     assert relation_evidence
     assert relation_evidence[0].metadata["source_file"] == "doc-llm.txt"
+    assert relation_evidence[0].extraction_method.startswith("deepagents_")

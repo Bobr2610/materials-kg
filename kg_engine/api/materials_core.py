@@ -6,6 +6,7 @@ import csv
 import io
 import json
 import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -58,7 +59,10 @@ if TYPE_CHECKING:
 
 _TEXT_SUFFIXES = {".txt", ".md"}
 _STRUCTURED_SUFFIXES = {".json", ".jsonl", ".csv", ".tsv"}
-_SAMPLE_DATA_DIR = Path(__file__).resolve().parents[2] / "data"
+_PARSER_SUFFIXES = {".docx", ".xlsx", ".xls", ".pdf", ".html", ".htm"}
+_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff", ".bmp"}
+_MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50 MB
+_SAMPLE_DATA_DIR = Path(__file__).resolve().parents[2] / "kg_engine" / "tests" / "data"
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _TASK_MATERIALS_DIRS = (
     _PROJECT_ROOT / "Задача 1",
@@ -96,9 +100,20 @@ def _parse_uploaded_file(name: str, content: bytes) -> object | None:
     except UnicodeDecodeError:
         text = content.decode("latin-1")
     if suffix == ".json":
-        return json.loads(text)
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            return None
     if suffix == ".jsonl":
-        return [json.loads(line) for line in text.splitlines() if line.strip()]
+        lines = []
+        for line in text.splitlines():
+            if not line.strip():
+                continue
+            try:
+                lines.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+        return lines
     if suffix in {".csv", ".tsv"}:
         delimiter = "\t" if suffix == ".tsv" else ","
         reader = csv.DictReader(io.StringIO(text), delimiter=delimiter)
@@ -119,6 +134,80 @@ def _parse_uploaded_file(name: str, content: bytes) -> object | None:
             }
         ]
     return None
+
+
+def _api_document_parser(
+    settings: Settings | None = None,
+    *,
+    enable_vision: bool = False,
+):
+    """Create a DocumentBlockParser with auto-VLM for the API layer."""
+    try:
+        if settings is None:
+            from kg_engine.config.settings import settings as app_settings
+
+            settings = app_settings
+        from kg_engine.ingestion.document_blocks import DocumentBlockParser
+        from kg_engine.ingestion.document_blocks import DocumentParseSettings
+        if not enable_vision:
+            return DocumentBlockParser(
+                settings=DocumentParseSettings(enable_vision=False),
+            )
+        from kg_engine.llm_core.provider import LLMProvider, resolve_openai_compatible_config
+        from kg_engine.llm_core.vision import OpenAICompatibleVisionConductor
+
+        conductor = None
+
+        vision_provider_name = (settings.materials_vision_provider or "").strip().lower()
+        vision_model = (settings.materials_vision_model or "").strip()
+        vision_api_key = (settings.materials_vision_api_key or "").strip()
+        vision_base_url = (settings.materials_vision_base_url or "").strip()
+
+        vision_provider = None
+        if vision_provider_name and vision_model:
+            if not vision_api_key:
+                vision_api_key = (
+                    getattr(settings, f"{vision_provider_name}_api_key", "")
+                    or ""
+                ).strip()
+            if not vision_base_url:
+                vision_base_url = (
+                    getattr(settings, f"{vision_provider_name}_base_url", "")
+                    or ""
+                ).strip()
+            if vision_api_key or vision_base_url:
+                extra = {}
+                if vision_provider_name == "yandex":
+                    extra["yandex_folder_id"] = getattr(settings, "yandex_folder_id", "")
+                vision_settings_proxy = type("VisionSettings", (), {
+                    "default_llm_provider": vision_provider_name,
+                    "default_model": vision_model,
+                    f"{vision_provider_name}_api_key": vision_api_key,
+                    f"{vision_provider_name}_base_url": vision_base_url,
+                    "llm_api_key": "",
+                    "llm_base_url": "",
+                    **extra,
+                })()
+                config = resolve_openai_compatible_config(vision_settings_proxy)
+                if config is not None:
+                    vision_provider = LLMProvider(
+                        base_url=config.base_url,
+                        api_key=config.api_key,
+                        chat_model=config.chat_model,
+                        embedding_model=config.embedding_model,
+                        reasoning_effort="none" if config.provider == "yandex" else None,
+                    )
+
+        if vision_provider is None:
+            return None
+
+        conductor = OpenAICompatibleVisionConductor(vision_provider, model=vision_model)
+        return DocumentBlockParser(
+            vision_conductor=conductor,
+            settings=DocumentParseSettings(enable_vision=True),
+        )
+    except Exception:
+        return None
 
 
 def _mark_uploaded_from(payload: object, name: str) -> None:
@@ -321,6 +410,30 @@ def _display_path(path: Path) -> str:
         return str(path.relative_to(_PROJECT_ROOT))
     except ValueError:
         return str(path)
+
+
+def _is_task_example_path(path: Path, task_dir: Path) -> bool:
+    try:
+        parts = path.relative_to(task_dir).parts
+    except ValueError:
+        return False
+    return bool(parts) and parts[0].casefold().startswith("пример")
+
+
+def _fallback_file_document(path: Path, task_dir: Path, reason: str) -> dict:
+    relative_name = str(path.relative_to(task_dir))
+    return {
+        "document_id": relative_name,
+        "title": path.stem,
+        "text": f"Файл сохранен как источник без извлеченного текста: {relative_name}. Причина: {reason}.",
+        "source_ref": relative_name,
+        "metadata": {
+            "source_file": relative_name,
+            "source_path": str(path),
+            "ingestion_role": "source_file_preserved",
+            "parse_status": reason,
+        },
+    }
 
 
 def _hypotheses_csv(result: HypothesisGenerationResult) -> str:
@@ -693,6 +806,11 @@ def create_materials_app(
         for upload in files:
             name = upload.filename or "unnamed"
             content = await upload.read()
+            if len(content) > _MAX_UPLOAD_SIZE:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"File '{name}' exceeds {_MAX_UPLOAD_SIZE // (1024 * 1024)} MB limit",
+                )
             parsed = _parse_uploaded_file(name, content)
             suffix = Path(name).suffix.lower()
             uploaded.append(
@@ -702,32 +820,143 @@ def create_materials_app(
                     "type": suffix.lstrip(".") or "unknown",
                 }
             )
-            if parsed is None:
-                ingestion_status["searchable_fallback_files"].append(name)
-                ingestion_status["fallback_reasons"][name] = "unsupported_or_binary_file"
-                doc_payload.append(
-                    {
-                        "document_id": name,
-                        "title": Path(name).stem,
-                        "text": content.decode("utf-8", errors="replace"),
-                        "metadata": {"source_file": name},
-                    }
-                )
+
+            # 1. DOCX/XLSX/PDF/HTML — document block parser (MarkItDown + VLM)
+            if suffix in _PARSER_SUFFIXES:
+                parser = _api_document_parser()
+                if parser is not None:
+                    tmp_path = None
+                    try:
+                        import tempfile
+
+                        with tempfile.NamedTemporaryFile(
+                            suffix=suffix, delete=False
+                        ) as tmp:
+                            tmp.write(content)
+                            tmp_path = Path(tmp.name)
+                        from kg_engine.ingestion.document_blocks import (
+                            parse_document_file,
+                        )
+
+                        document = parse_document_file(tmp_path, parser=parser)
+                        doc_payload.append(document.model_dump(mode="json"))
+                        ingestion_status["llm_structured_files"].append(name)
+                    except Exception:
+                        ingestion_status["searchable_fallback_files"].append(name)
+                        ingestion_status["fallback_reasons"][name] = (
+                            "document_parser_failed"
+                        )
+                        doc_payload.append(
+                            {
+                                "document_id": name,
+                                "title": Path(name).stem,
+                                "text": content.decode("utf-8", errors="replace"),
+                                "metadata": {"source_file": name},
+                            }
+                        )
+                    finally:
+                        if tmp_path is not None:
+                            tmp_path.unlink(missing_ok=True)
+                else:
+                    ingestion_status["searchable_fallback_files"].append(name)
+                    ingestion_status["fallback_reasons"][name] = "no_parser_available"
+                    doc_payload.append(
+                        {
+                            "document_id": name,
+                            "title": Path(name).stem,
+                            "text": content.decode("utf-8", errors="replace"),
+                            "metadata": {"source_file": name},
+                        }
+                    )
                 continue
+
+            # 1b. PNG/JPG/etc — image block parser (VL conductor)
+            if suffix in _IMAGE_SUFFIXES:
+                parser = _api_document_parser()
+                if parser is not None:
+                    tmp_path = None
+                    try:
+                        import tempfile
+
+                        with tempfile.NamedTemporaryFile(
+                            suffix=suffix, delete=False
+                        ) as tmp:
+                            tmp.write(content)
+                            tmp_path = Path(tmp.name)
+                        from kg_engine.ingestion.document_blocks import (
+                            parse_document_file,
+                        )
+
+                        document = parse_document_file(tmp_path, parser=parser)
+                        if document.text.strip() or document.text_units:
+                            doc_payload.append(document.model_dump(mode="json"))
+                            ingestion_status["llm_structured_files"].append(name)
+                        else:
+                            doc_payload.append(
+                                {
+                                    "document_id": name,
+                                    "title": Path(name).stem,
+                                    "text": f"Image {name} processed but no text extracted.",
+                                    "metadata": {"source_file": name},
+                                }
+                            )
+                            ingestion_status["searchable_fallback_files"].append(name)
+                    except Exception:
+                        ingestion_status["searchable_fallback_files"].append(name)
+                        ingestion_status["fallback_reasons"][name] = (
+                            "image_parser_failed"
+                        )
+                        doc_payload.append(
+                            {
+                                "document_id": name,
+                                "title": Path(name).stem,
+                                "text": f"Image {name} could not be processed.",
+                                "metadata": {"source_file": name},
+                            }
+                        )
+                    finally:
+                        if tmp_path is not None:
+                            tmp_path.unlink(missing_ok=True)
+                else:
+                    ingestion_status["searchable_fallback_files"].append(name)
+                    ingestion_status["fallback_reasons"][name] = "no_parser_available"
+                    doc_payload.append(
+                        {
+                            "document_id": name,
+                            "title": Path(name).stem,
+                            "text": f"Image {name} — no VL parser available.",
+                            "metadata": {"source_file": name},
+                        }
+                    )
+                continue
+
+            # 2. TXT/MD — raw text documents
             if suffix in _TEXT_SUFFIXES:
                 ingestion_status["text_document_files"].append(name)
-                items = parsed if isinstance(parsed, list) else [parsed]
-                for item in items:
-                    if isinstance(item, dict):
-                        _mark_uploaded_from(item, name)
-                if isinstance(parsed, list):
-                    doc_payload.extend(items)
+                if parsed is None:
+                    doc_payload.append(
+                        {
+                            "document_id": name,
+                            "title": Path(name).stem,
+                            "text": content.decode("utf-8", errors="replace"),
+                            "metadata": {"source_file": name},
+                        }
+                    )
                 else:
-                    doc_payload.append(parsed)
+                    items = parsed if isinstance(parsed, list) else [parsed]
+                    for item in items:
+                        if isinstance(item, dict):
+                            _mark_uploaded_from(item, name)
+                    if isinstance(parsed, list):
+                        doc_payload.extend(items)
+                    else:
+                        doc_payload.append(parsed)
                 continue
+
+            # 3. JSON/CSV/TSV — structured data with LLM structuring
             if suffix in _STRUCTURED_SUFFIXES:
                 structured_added = False
-                if runtime_service.llm_provider:
+                if runtime_service.llm_provider and parsed is not None:
                     try:
                         from kg_engine.llm_core.extraction import (
                             structure_upload_with_llm,
@@ -757,13 +986,25 @@ def create_materials_app(
                         if runtime_service.llm_provider
                         else "llm_provider_disabled"
                     )
-                    _append_as_searchable_documents(
-                        parsed=parsed,
-                        name=name,
-                        doc_payload=doc_payload,
-                    )
+                    if parsed is not None:
+                        _append_as_searchable_documents(
+                            parsed=parsed,
+                            name=name,
+                            doc_payload=doc_payload,
+                        )
+                    else:
+                        doc_payload.append(
+                            {
+                                "document_id": name,
+                                "title": Path(name).stem,
+                                "text": content.decode("utf-8", errors="replace"),
+                                "metadata": {"source_file": name},
+                            }
+                        )
                 continue
-            if isinstance(parsed, dict):
+
+            # 4. Fallback — treat as searchable document
+            if parsed is not None:
                 for key in (
                     "entities",
                     "materials",
@@ -844,8 +1085,9 @@ def create_materials_app(
                 ExperimentCatalogAdapter().from_payload(exp_payload)
             )
         if doc_payload:
-            results["documents"] = runtime_service.ingest_documents(
-                DocumentCorpusAdapter().from_payload(doc_payload)
+            results["documents"] = runtime_service.ingest_documents_parallel(
+                DocumentCorpusAdapter().from_payload(doc_payload),
+                parallel_workers=4,
             )
         results["ingestion"] = ingestion_status
         results["uploaded"] = uploaded
@@ -903,8 +1145,9 @@ def create_materials_app(
             "experiments": runtime_service.ingest_experiments(
                 ExperimentCatalogAdapter().from_payload(experiments_payload)
             ),
-            "documents": runtime_service.ingest_documents(
-                DocumentCorpusAdapter().from_payload(documents_payload)
+            "documents": runtime_service.ingest_documents_parallel(
+                DocumentCorpusAdapter().from_payload(documents_payload),
+                parallel_workers=4,
             ),
             "uploaded": [
                 {
@@ -930,7 +1173,15 @@ def create_materials_app(
         return results
 
     @app.post("/demo/load-task-materials")
-    def load_task_materials() -> dict:
+    def load_task_materials(
+        exclude_examples: bool = Query(default=False),
+        snapshot_path: str | None = Query(default=None),
+        enable_vision: bool = Query(default=None),
+        enable_llm_extraction: bool = Query(default=True, description="Run LLM extraction on document text units"),
+        enable_embeddings: bool = Query(default=False, description="Generate embeddings during bulk load"),
+        max_pdf_pages: int | None = Query(default=None, description="Limit PDF pages parsed per file"),
+        parallel_workers: int = Query(default=0, description="Parallel file parse workers (0=auto)"),
+    ) -> dict:
         task_dir, used_fallback, checked = _find_task_materials_dir()
         if task_dir is None:
             raise HTTPException(
@@ -941,17 +1192,67 @@ def create_materials_app(
                 ),
             )
 
+        if enable_vision is None:
+            from kg_engine.config.settings import settings as _cfg
+            enable_vision = getattr(_cfg, "materials_document_vision_enabled", False)
+
         ref_payload: dict = {}
         exp_payload: list = []
         doc_payload: list = []
         uploaded: list[dict] = []
         unsupported: list[str] = []
-        supported_suffixes = _TEXT_SUFFIXES | _STRUCTURED_SUFFIXES
+        skipped_examples: list[str] = []
+        supported_suffixes = (
+            _TEXT_SUFFIXES | _STRUCTURED_SUFFIXES | _PARSER_SUFFIXES | _IMAGE_SUFFIXES
+        )
+        document_parser = _api_document_parser(
+            runtime_settings,
+            enable_vision=enable_vision,
+        )
+        if document_parser is not None and max_pdf_pages is not None:
+            from dataclasses import replace
+            document_parser.settings = replace(
+                document_parser.settings,
+                max_pdf_pages=max_pdf_pages,
+            )
+        doc_queue: list = []
+        doc_count = 0
+
+        def _flush_docs():
+            nonlocal doc_count
+            if doc_queue:
+                runtime_service.ingest_documents_parallel(
+                    DocumentCorpusAdapter().from_payload(doc_queue),
+                    enable_llm_extraction=enable_llm_extraction,
+                    enable_embeddings=enable_embeddings,
+                    parallel_workers=parallel_workers if parallel_workers > 0 else 4,
+                )
+                doc_count += len(doc_queue)
+                doc_queue.clear()
+
+        def _parse_doc_file(path: Path, task_dir: Path) -> dict | None:
+            """Parse a single document file — runs in worker thread."""
+            try:
+                from kg_engine.ingestion.document_blocks import parse_document_file
+                doc = parse_document_file(path, parser=document_parser)
+                if doc.text.strip() or doc.text_units:
+                    return doc.model_dump(mode="json")
+                return _fallback_file_document(path, task_dir, "no_text_extracted")
+            except Exception:
+                return _fallback_file_document(path, task_dir, "parser_failed")
+
+        doc_file_paths: list[Path] = []
         for path in sorted(item for item in task_dir.rglob("*") if item.is_file()):
             relative_name = str(path.relative_to(task_dir))
+            if exclude_examples and _is_task_example_path(path, task_dir):
+                skipped_examples.append(relative_name)
+                continue
             suffix = path.suffix.lower()
             if suffix not in supported_suffixes:
                 unsupported.append(relative_name)
+                continue
+            if suffix in (_PARSER_SUFFIXES | _IMAGE_SUFFIXES):
+                doc_file_paths.append(path)
                 continue
             content = path.read_bytes()
             parsed = _parse_uploaded_file(relative_name, content)
@@ -964,20 +1265,87 @@ def create_materials_app(
                 suffix=suffix,
                 ref_payload=ref_payload,
                 exp_payload=exp_payload,
-                doc_payload=doc_payload,
+                doc_payload=doc_queue,
             )
-            uploaded.append(
-                {
+            uploaded.append({
+                "name": relative_name,
+                "size": path.stat().st_size,
+                "type": suffix.lstrip(".") or "unknown",
+            })
+            if doc_queue:
+                _flush_docs()
+
+        if doc_file_paths and document_parser is not None:
+            _cfg_workers = (
+                max(parallel_workers, 0)
+                or (
+                    getattr(runtime_settings, "materials_ingestion_parallel_workers", 4)
+                    if runtime_settings
+                    else 4
+                )
+            )
+            max_workers = min(_cfg_workers, len(doc_file_paths))
+            with ThreadPoolExecutor(max_workers=max_workers) as pool:
+                future_map = {
+                    pool.submit(_parse_doc_file, p, task_dir): p
+                    for p in doc_file_paths
+                }
+                for future in as_completed(future_map):
+                    p = future_map[future]
+                    relative_name = str(p.relative_to(task_dir))
+                    try:
+                        result = future.result()
+                        if result:
+                            doc_queue.append(result)
+                        uploaded.append({
+                            "name": relative_name,
+                            "size": p.stat().st_size,
+                            "type": p.suffix.lstrip(".") or "unknown",
+                        })
+                        _flush_docs()
+                    except Exception:
+                        doc_queue.append(
+                            _fallback_file_document(p, task_dir, "worker_failed")
+                        )
+                        uploaded.append({
+                            "name": relative_name,
+                            "size": p.stat().st_size,
+                            "type": p.suffix.lstrip(".") or "unknown",
+                        })
+                        _flush_docs()
+        else:
+            for path in doc_file_paths:
+                relative_name = str(path.relative_to(task_dir))
+                try:
+                    from kg_engine.ingestion.document_blocks import parse_document_file
+                    document = parse_document_file(path, parser=document_parser)
+                    if document.text.strip() or document.text_units:
+                        doc_queue.append(document.model_dump(mode="json"))
+                    else:
+                        doc_queue.append(
+                            _fallback_file_document(path, task_dir, "no_text_extracted")
+                        )
+                except Exception:
+                    doc_queue.append(
+                        _fallback_file_document(path, task_dir, "parser_failed")
+                    )
+                uploaded.append({
                     "name": relative_name,
                     "size": path.stat().st_size,
-                    "type": suffix.lstrip(".") or "unknown",
-                }
-            )
+                    "type": path.suffix.lstrip(".") or "unknown",
+                })
+                _flush_docs()
+
+        _flush_docs()
 
         results: dict = {
             "task_materials_dir": _display_path(task_dir),
             "used_fallback": used_fallback,
+            "excluded_examples": exclude_examples,
+            "vision_enabled": enable_vision,
             "uploaded": uploaded,
+            "documents_ingested": doc_count,
+            "skipped_example_files": skipped_examples,
             "unsupported_files": unsupported,
         }
         if used_fallback:
@@ -991,17 +1359,19 @@ def create_materials_app(
             results["reference"] = runtime_service.ingest_reference_data(
                 ReferenceDataAdapter().from_payload(ref_payload)
             )
+            ref_payload.clear()
         if exp_payload:
             results["experiments"] = runtime_service.ingest_experiments(
-                ExperimentCatalogAdapter().from_payload(exp_payload)
+                ExperimentCatalogAdapter().from_payload(exp_payload),
+                enable_embeddings=enable_embeddings,
             )
-        if doc_payload:
-            results["documents"] = runtime_service.ingest_documents(
-                DocumentCorpusAdapter().from_payload(doc_payload)
-            )
+            exp_payload.clear()
+        if uploaded:
+            _source_files.extend(uploaded)
         results["overview"] = runtime_service.get_source_overview()
         results["suggested_questions"] = runtime_service.get_suggested_questions()
-        _source_files.extend(uploaded)
+        if snapshot_path:
+            results["snapshot"] = runtime_service.save_graph_snapshot(snapshot_path)
         return results
 
     @app.post("/ingest/reference")
@@ -1014,7 +1384,7 @@ def create_materials_app(
 
     @app.post("/ingest/documents")
     def ingest_documents(batch: list[DocumentInput]) -> dict[str, int]:
-        return runtime_service.ingest_documents(batch)
+        return runtime_service.ingest_documents_parallel(batch, parallel_workers=4)
 
     @app.post("/query/answer")
     def query_answer(request: AnswerQueryRequest) -> dict:
@@ -1238,12 +1608,11 @@ def create_materials_app(
     @app.delete("/sources/{source_name}")
     def delete_source(source_name: str) -> dict:
         if not getattr(runtime_settings, "materials_enable_destructive_api", False):
-            return Response(
-                content='{"error": "Destructive API disabled. Set MATERIALS_ENABLE_DESTRUCTIVE_API=true."}',
+            raise HTTPException(
                 status_code=403,
-                media_type="application/json",
+                detail="Destructive API disabled. Set MATERIALS_ENABLE_DESTRUCTIVE_API=true.",
             )
-        removed = runtime_service._repository.delete_source(source_name)  # noqa: SLF001
+        removed = runtime_service.delete_source(source_name)
         _source_files[:] = [s for s in _source_files if s.get("name") != source_name]
         return {
             "deleted": source_name,
@@ -1254,12 +1623,11 @@ def create_materials_app(
     @app.delete("/sources")
     def clear_all_sources() -> dict:
         if not getattr(runtime_settings, "materials_enable_destructive_api", False):
-            return Response(
-                content='{"error": "Destructive API disabled. Set MATERIALS_ENABLE_DESTRUCTIVE_API=true."}',
+            raise HTTPException(
                 status_code=403,
-                media_type="application/json",
+                detail="Destructive API disabled. Set MATERIALS_ENABLE_DESTRUCTIVE_API=true.",
             )
-        runtime_service._repository.clear_all()  # noqa: SLF001
+        runtime_service.clear_all()
         _source_files.clear()
         return {
             "cleared": True,

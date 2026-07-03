@@ -1,4 +1,4 @@
-﻿
+
 <!doctype html>
 <html lang="ru">
 <head>
@@ -610,20 +610,6 @@
       gap: 10px;
       min-width: 0;
     }
-    .hypothesis-head {
-      display: flex;
-      justify-content: space-between;
-      gap: 12px;
-      align-items: center;
-      min-width: 0;
-    }
-    .hypothesis-title {
-      display: grid;
-      gap: 2px;
-      min-width: 0;
-    }
-    .hypothesis-title b { font-size: 13px; font-weight: 600; color: #202124; }
-    .hypothesis-title span { font-size: 12px; color: #5f6368; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .hypothesis-form {
       display: grid;
       grid-template-columns: minmax(0, 1fr) 116px 148px;
@@ -893,15 +879,8 @@
         </div>
       </main>
       <div class="hypothesis-panel" id="hypothesisPanel">
-        <div class="hypothesis-head">
-          <div class="hypothesis-title">
-            <b>KPI для фабрики гипотез</b>
-            <span id="hypothesisSourceHint">Загрузите базу знаний и задайте целевой показатель</span>
-          </div>
-          <span class="source-summary" id="hypothesisKbSummary">0 источников</span>
-        </div>
         <div class="hypothesis-form">
-          <input id="targetKpi" type="text" placeholder="Например: снизить пористость, повысить прочность" aria-label="Целевой KPI">
+          <input id="targetKpi" type="text" placeholder="Введите целевой показатель..." aria-label="Целевой KPI">
           <input id="hypothesisLimit" type="number" min="1" max="20" value="5" aria-label="Количество гипотез">
           <button class="hypothesis-btn" id="generateHypotheses" type="button">Гипотезы</button>
         </div>
@@ -1044,8 +1023,6 @@
       const selectedText = selectedCount + " выбрано";
       if ($("sourceNote")) $("sourceNote").textContent = state.total ? selectedText : "0 источников";
       if ($("sourceSummary")) $("sourceSummary").textContent = state.total ? selectedText + " из " + state.total : "0 выбрано";
-      if ($("hypothesisKbSummary")) $("hypothesisKbSummary").textContent = state.total ? selectedText + " из " + state.total : "0 источников";
-      if ($("hypothesisSourceHint")) $("hypothesisSourceHint").textContent = state.total ? "Гипотезы будут строиться по выбранным источникам" : "Загрузите базу знаний и задайте целевой показатель";
     }
     function closeGraphPanel() {
       $("graphPanel")?.classList.remove("open");
