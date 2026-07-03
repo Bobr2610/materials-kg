@@ -85,7 +85,7 @@ class Settings(BaseSettings):
     # Hypothesis Factory orchestration
     materials_hypothesis_engine: str = "deepagents"
     materials_deepagents_enabled: bool = True
-    materials_deepagents_max_tool_steps: int = 12
+    materials_deepagents_max_tool_steps: int = 40
 
     # Document parsing / Vision-Language interpretation
     materials_document_vision_enabled: bool = False

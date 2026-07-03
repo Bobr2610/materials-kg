@@ -9,7 +9,6 @@ from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from statistics import fmean
-from threading import Lock
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -942,7 +941,6 @@ class MaterialsKGService:
         all_errors: list[str] = []
         trace_count = 0
         llm_extracted_count = 0
-        merge_lock = Lock()
 
         def _process_one_document(document: DocumentInput) -> dict:
             """Process a single document — runs in worker thread."""
@@ -1334,7 +1332,7 @@ class MaterialsKGService:
             return text_units
         try:
             results = self._llm.embed(texts)
-            for idx, emb in zip(indices, results):
+            for idx, emb in zip(indices, results, strict=False):
                 if emb:
                     text_units[idx].embedding = emb
         except Exception:
@@ -3280,6 +3278,9 @@ class MaterialsKGService:
         return entity
 
     def _resolve_any_entity(self, raw_name: str) -> Entity:
+        entity = self._repository.get_entity(raw_name)
+        if entity is not None:
+            return entity
         for kind in EntityKind:
             entity = self._repository.resolve_entity(kind, raw_name)
             if entity is not None:
