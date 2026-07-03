@@ -131,7 +131,7 @@ class _SettingsProxy:
     def __getattr__(self, name: str):
         return getattr(_get_settings(), name)
 
-    def __setattr__(self, name: str, value):
+    def __setattr__(self, name: str, value: Any) -> None:
         setattr(_get_settings(), name, value)
 
     def __repr__(self) -> str:
