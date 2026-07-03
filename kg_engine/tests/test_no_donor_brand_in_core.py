@@ -131,3 +131,11 @@ def test_no_forbidden_references_in_active_package() -> None:
             "Forbidden references found in active package/surfaces:\n"
             + "\n".join(detail_lines)
         )
+
+
+def test_docker_compose_passes_deepagents_runtime_settings() -> None:
+    compose_text = (_REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+
+    assert "MATERIALS_HYPOTHESIS_ENGINE:" in compose_text
+    assert "MATERIALS_DEEPAGENTS_ENABLED:" in compose_text
+    assert "MATERIALS_DEEPAGENTS_MAX_TOOL_STEPS:" in compose_text

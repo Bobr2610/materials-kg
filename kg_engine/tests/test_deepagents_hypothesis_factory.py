@@ -94,6 +94,21 @@ def _settings() -> Settings:
     )
 
 
+def test_hypothesis_tools_return_structured_error_for_missing_property() -> None:
+    service = _build_service()
+    trace: list[dict[str, Any]] = []
+    tools = create_hypothesis_tools(service, agent_trace=trace)
+    query_property = next(
+        tool for tool in tools if tool.__name__ == "kg_query_property"
+    )
+
+    result = query_property("Nonexistent Property")
+
+    assert result["error"] == "Property 'Nonexistent Property' not found"
+    assert result["tool"] == "kg_query_property"
+    assert trace[-1]["event"] == "tool_warning"
+
+
 def test_deep_agent_factory_validates_result_and_records_trace() -> None:
     service = _build_service()
     baseline = service.generate_hypotheses(

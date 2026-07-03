@@ -29,6 +29,11 @@ def create_hypothesis_tools(
             raise RuntimeError(msg)
         trace.append({"event": "tool_call", "tool": name, **metadata})
 
+    def tool_error(name: str, error: ValueError) -> dict[str, Any]:
+        message = str(error)
+        trace.append({"event": "tool_warning", "tool": name, "warning": message})
+        return {"tool": name, "error": message}
+
     def kg_build_context(
         target_kpi: str,
         question: str = "",
@@ -140,11 +145,14 @@ def create_hypothesis_tools(
             mode=mode,
             property_name=property_name,
         )
-        return service.query_material_mode(
-            material,
-            mode=mode,
-            property_name=property_name,
-        ).model_dump(mode="json")
+        try:
+            return service.query_material_mode(
+                material,
+                mode=mode,
+                property_name=property_name,
+            ).model_dump(mode="json")
+        except ValueError as exc:
+            return tool_error("kg_query_material_mode", exc)
 
     def kg_query_property(
         property_name: str,
@@ -160,15 +168,18 @@ def create_hypothesis_tools(
             material_name=material_name,
             mode_name=mode_name,
         )
-        return service.query_property(
-            property_name,
-            PropertyFilters(
-                material_name=material_name,
-                mode_name=mode_name,
-                min_value=min_value,
-                max_value=max_value,
-            ),
-        ).model_dump(mode="json")
+        try:
+            return service.query_property(
+                property_name,
+                PropertyFilters(
+                    material_name=material_name,
+                    mode_name=mode_name,
+                    min_value=min_value,
+                    max_value=max_value,
+                ),
+            ).model_dump(mode="json")
+        except ValueError as exc:
+            return tool_error("kg_query_property", exc)
 
     def kg_query_related(
         entity: str,
@@ -191,11 +202,14 @@ def create_hypothesis_tools(
                             "warning": f"unknown relation type skipped: {rel_type}",
                         }
                     )
-        return service.query_related(
-            entity,
-            depth=max(1, min(depth, 4)),
-            relation_filters=filters,
-        ).model_dump(mode="json")
+        try:
+            return service.query_related(
+                entity,
+                depth=max(1, min(depth, 4)),
+                relation_filters=filters,
+            ).model_dump(mode="json")
+        except ValueError as exc:
+            return tool_error("kg_query_related", exc)
 
     def kg_query_decision_history(entity_or_experiment: str) -> dict[str, Any]:
         """Return decision traces and evidence for a canonical entity or experiment."""
@@ -203,9 +217,12 @@ def create_hypothesis_tools(
             "kg_query_decision_history",
             entity_or_experiment=entity_or_experiment,
         )
-        return service.query_decision_history(entity_or_experiment).model_dump(
-            mode="json"
-        )
+        try:
+            return service.query_decision_history(entity_or_experiment).model_dump(
+                mode="json"
+            )
+        except ValueError as exc:
+            return tool_error("kg_query_decision_history", exc)
 
     return [
         kg_build_context,

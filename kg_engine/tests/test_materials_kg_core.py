@@ -306,6 +306,44 @@ def test_incremental_reingestion_does_not_duplicate_canonical_entities() -> None
     assert len(related.related_entities) >= 1
 
 
+def test_query_related_accepts_canonical_entity_id() -> None:
+    service = build_service()
+    service.ingest_reference_data(
+        ReferenceDataBatch(
+            entities=[
+                CanonicalEntityInput(
+                    kind=EntityKind.MATERIAL,
+                    name="CuCrZr",
+                    canonical_id="mat-cucrzr",
+                )
+            ]
+        )
+    )
+    service.ingest_experiments(
+        [
+            ExperimentInput(
+                experiment_id="exp-cucrzr-aged",
+                title="CuCrZr aged baseline",
+                material_name="CuCrZr",
+                mode_name="Aged",
+                observations=[
+                    ObservationInput(
+                        property_name="Electrical Conductivity",
+                        value=58.0,
+                        unit="%IACS",
+                    )
+                ],
+            )
+        ]
+    )
+
+    related = service.query_related("mat-cucrzr", depth=1)
+
+    assert related.root_entity.id == "mat-cucrzr"
+    assert related.related_entities
+    assert related.relations
+
+
 def test_hypothesis_factory_generates_ranked_graph_grounded_candidates() -> None:
     service = build_service()
     service.ingest_reference_data(
