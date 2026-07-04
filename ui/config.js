@@ -9,7 +9,6 @@ var UI_CONFIG = {
   acceptAttribute: ".json,.jsonl,.csv,.tsv,.txt,.md,.docx,.xlsx,.xls,.pdf,.html,.htm,.png,.jpg,.jpeg,.webp,.tif,.tiff,.bmp",
   endpoints: {
     upload: "/ingest/upload",
-    urlIngest: "/ingest/url",
     queryAnswer: "/query/answer",
     sourceSuggestions: "/source/suggestions",
     hypothesesGenerate: "/hypotheses/generate",

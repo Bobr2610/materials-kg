@@ -71,20 +71,17 @@ function renderExpertControls(h) {
   const adj = adjustmentFor(id);
   const checked = adj.reject ? "checked" : "";
   return '<div class="expert-panel" data-hypothesis-id="' + escapeHtml(id) + '">' +
-    '<div><b style="font-size:13px">Экспертная корректировка</b></div>' +
     '<div class="expert-controls">' +
       '<label>Риск<input class="expert-input" data-field="risk_adjustment" type="number" min="-1" max="1" step="0.05" value="' + escapeHtml(adj.risk_adjustment ?? "") + '"></label>' +
       '<label>Ценность<input class="expert-input" data-field="value_adjustment" type="number" min="-1" max="1" step="0.05" value="' + escapeHtml(adj.value_adjustment ?? "") + '"></label>' +
       '<label>Новизна<input class="expert-input" data-field="novelty_adjustment" type="number" min="-1" max="1" step="0.05" value="' + escapeHtml(adj.novelty_adjustment ?? "") + '"></label>' +
       '<label>Данные<input class="expert-input" data-field="evidence_strength_adjustment" type="number" min="-1" max="1" step="0.05" value="' + escapeHtml(adj.evidence_strength_adjustment ?? "") + '"></label>' +
     '</div>' +
-    '<label style="display:grid;gap:4px;font-size:11px;color:#5f6368">Заметка<input class="expert-input" data-field="note" type="text" value="' + escapeHtml(adj.note ?? "") + '"></label>' +
-    '<label style="display:grid;gap:4px;font-size:11px;color:#5f6368">Оценка 1-5<input class="feedback-input" data-field="rating" type="number" min="1" max="5" step="1" value="4"></label>' +
-    '<label style="display:grid;gap:4px;font-size:11px;color:#5f6368">Комментарий<input class="feedback-input" data-field="comment" type="text" value=""></label>' +
+    '<label style="display:grid;gap:4px;font-size:11px;color:#5f6368">Комментарий эксперта<input class="expert-input" data-field="note" type="text" value="' + escapeHtml(adj.note ?? "") + '"></label>' +
     '<div class="expert-actions">' +
       '<label style="font-size:12px;color:#5f6368"><input class="expert-input" data-field="reject" type="checkbox" ' + checked + '> отклонить</label>' +
       '<button class="primary apply-expert" type="button">Пересчитать</button>' +
-      '<button class="primary save-feedback" type="button">Сохранить feedback</button>' +
+      '<button class="save-feedback" type="button">Сохранить</button>' +
       '<button class="danger clear-expert" type="button">Сбросить</button>' +
     '</div>' +
   '</div>';
@@ -158,12 +155,14 @@ async function generateHypothesesFromKpi() {
   try {
     const sourceIds = getSelectedSources();
     const maxHypotheses = Math.max(1, Math.min(20, Number($("hypothesisLimit").value || 5)));
+    const constraintsText = $("constraints").value.trim();
     const payload = {
       target_kpi: targetKpi,
       question: targetKpi,
       max_hypotheses: maxHypotheses
     };
     if (sourceIds) payload.source_ids = sourceIds;
+    if (constraintsText) payload.domain_constraints = [constraintsText];
     state.lastHypothesisRequest = payload;
     state.expertAdjustments = {};
     const data = await runHypothesisJob(payload);
@@ -219,17 +218,16 @@ async function saveExpertFeedback(panel) {
   const id = panel?.dataset?.hypothesisId;
   const hypothesis = hypothesisById(id);
   if (!id || !hypothesis?.score) return;
-  const ratingInput = panel.querySelector('.feedback-input[data-field="rating"]');
-  const commentInput = panel.querySelector('.feedback-input[data-field="comment"]');
+  const noteInput = panel.querySelector('.expert-input[data-field="note"]');
   const rejectInput = panel.querySelector('.expert-input[data-field="reject"]');
-  const rating = rejectInput?.checked ? 1 : Math.max(1, Math.min(5, Number(ratingInput?.value || 4)));
+  const rating = rejectInput?.checked ? 1 : 4;
   try {
     const data = await postJson(UI_CONFIG.endpoints.feedback, {
       hypothesis_id: id,
       rating,
       score: hypothesis.score,
       expert_id: "ui",
-      comment: commentInput?.value || ""
+      comment: noteInput?.value || ""
     });
     addMsg("assistant", '<div class="bubble">Feedback сохранён. Записей: ' + escapeHtml(data.sample_size) + ".</div>");
   } catch(e) {

@@ -21,16 +21,12 @@
       gap: 8px;
       min-width: 0;
     }
-    .app.sources-collapsed { grid-template-columns: 0 minmax(0, 1fr); }
     .panel {
       background: #fff;
       border-radius: 16px;
       box-shadow: 0 1px 3px rgba(60,64,67,0.08), 0 1px 2px rgba(60,64,67,0.04);
       min-width: 0; min-height: 0;
       overflow: hidden;
-    }
-    .app.sources-collapsed .sources {
-      overflow: hidden; min-width: 0; opacity: 0; pointer-events: none;
     }
     .sources {
       display: grid;
@@ -166,13 +162,13 @@
       color: #fff;
       overflow: hidden;
     }
-    .source-icon.json { background: #1a73e8; }
-    .source-icon.jsonl { background: #1a73e8; }
-    .source-icon.csv { background: #34a853; }
-    .source-icon.tsv { background: #34a853; }
-    .source-icon.txt { background: #9aa0a6; }
-    .source-icon.md { background: #9334e6; }
-    .source-icon.unknown { background: #5f6368; }
+    .source-icon.json { background: #e8f0fe; color: #1a73e8; }
+    .source-icon.jsonl { background: #e8f0fe; color: #1a73e8; }
+    .source-icon.csv { background: #e6f4ea; color: #34a853; }
+    .source-icon.tsv { background: #e6f4ea; color: #34a853; }
+    .source-icon.txt { background: #f1f3f4; color: #5f6368; }
+    .source-icon.md { background: #f3e8fd; color: #9334e6; }
+    .source-icon.unknown { background: #f1f3f4; color: #5f6368; }
     .source-info { min-width: 0; }
     .source-info b { display: block; font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .source-info span { font-size: 11px; color: #9aa0a6; }
@@ -261,16 +257,6 @@
     }
     .chat-top button:hover { background: #f1f3f4; }
     .top-actions { position: relative; display: flex; gap: 4px; align-items: center; min-width: 0; }
-    .restore-sources {
-      display: none;
-      width: auto !important;
-      padding: 0 10px !important;
-      border: 1px solid #dadce0 !important;
-      border-radius: 16px !important;
-      font-size: 13px !important;
-      gap: 6px;
-    }
-    .app.sources-collapsed .restore-sources { display: inline-flex; }
     .graph-toggle {
       width: 32px; height: 32px;
       border: none; background: none;
@@ -338,9 +324,8 @@
     .graph-vis-wrap #graphVis { width: 100%; height: calc(100vh - 200px); min-height: 360px; }
     .graph-stats { font-size: 12px; color: #9aa0a6; text-align: center; }
     @media (max-width: 960px) {
-      .app, .app.sources-collapsed { grid-template-columns: 1fr; }
+      .app { grid-template-columns: 1fr; }
       .sources { max-height: 280px; }
-      .app.sources-collapsed .sources { display: none; }
       .graph-panel { width: 100%; }
       .chat-top { padding-left: 14px; }
       .msg { padding: 12px 14px; }
@@ -589,218 +574,10 @@
       font-size: 14px; color: #3c4043; line-height: 1.55;
       overflow-wrap: anywhere;
     }
-    .hypothesis-panel {
-      margin: 8px 20px 0;
-      border: 1px solid #dadce0;
-      border-radius: 14px;
-      background: #f8fafd;
-      padding: 12px;
-      display: grid;
-      gap: 10px;
-      min-width: 0;
-    }
-    .hypothesis-form {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) 116px 148px;
-      gap: 8px;
-      align-items: center;
-      min-width: 0;
-    }
-    .hypothesis-form input {
-      height: 38px;
-      border: 1px solid #dadce0;
-      border-radius: 10px;
-      background: #fff;
-      color: #202124;
-      font: inherit;
-      font-size: 13px;
-      padding: 0 11px;
-      min-width: 0;
-      outline: none;
-    }
-    .hypothesis-form input:focus { border-color: #1a73e8; }
-    .hypothesis-btn {
-      height: 38px;
-      border: none;
-      border-radius: 10px;
-      background: #1a73e8;
-      color: #fff;
-      font: inherit;
-      font-size: 13px;
-      font-weight: 600;
-      cursor: pointer;
-      padding: 0 12px;
-      white-space: nowrap;
-    }
-    .hypothesis-btn:hover { background: #1557b0; }
-    .hypothesis-btn:disabled { background: #dadce0; cursor: default; }
-    .hypothesis-actions {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      min-width: 0;
-    }
-    .hypothesis-action {
-      height: 32px;
-      border: 1px solid #dadce0;
-      border-radius: 8px;
-      background: #fff;
-      color: #1a73e8;
-      font: inherit;
-      font-size: 12px;
-      font-weight: 600;
-      cursor: pointer;
-      padding: 0 10px;
-      white-space: nowrap;
-    }
-    .hypothesis-action:disabled {
-      color: #9aa0a6;
-      cursor: default;
-      background: #f8f9fa;
-    }
-    .score-grid {
-      display: grid;
-      grid-template-columns: repeat(5, minmax(72px, 1fr));
-      gap: 6px;
-    }
-    .score-pill {
-      border: 1px solid #e8eaed;
-      border-radius: 8px;
-      background: #fff;
-      padding: 7px 8px;
-      display: grid;
-      gap: 2px;
-      min-width: 0;
-    }
-    .score-pill span { font-size: 10px; color: #5f6368; text-transform: uppercase; letter-spacing: 0.2px; }
-    .score-pill b { font-size: 13px; color: #202124; font-weight: 600; }
-    .hypothesis-rank {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      min-width: 28px;
-      height: 24px;
-      border-radius: 12px;
-      background: #e8f0fe;
-      color: #1a73e8;
-      font-size: 12px;
-      font-weight: 700;
-    }
-    .hypothesis-type {
-      display: inline-flex;
-      height: 24px;
-      align-items: center;
-      padding: 0 8px;
-      border: 1px solid #dadce0;
-      border-radius: 12px;
-      background: #fff;
-      color: #5f6368;
-      font-size: 11px;
-      font-weight: 600;
-    }
-    .hypothesis-meta {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 6px;
-      align-items: center;
-    }
-    .id-chip-list {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 6px;
-      margin-top: 6px;
-    }
-    .id-chip {
-      max-width: 100%;
-      border: 1px solid #dadce0;
-      border-radius: 8px;
-      background: #fff;
-      padding: 4px 7px;
-      font-size: 11px;
-      color: #3c4043;
-      overflow-wrap: anywhere;
-    }
-    .agent-trace {
-      display: grid;
-      gap: 6px;
-      font-size: 12px;
-      color: #5f6368;
-    }
-    .trace-row {
-      border: 1px solid #e8eaed;
-      border-radius: 8px;
-      background: #f8f9fa;
-      padding: 7px 9px;
-      overflow-wrap: anywhere;
-    }
-    .expert-panel {
-      border: 1px solid #e8eaed;
-      border-radius: 10px;
-      background: #f8f9fa;
-      padding: 10px;
-      display: grid;
-      gap: 8px;
-    }
-    .expert-controls {
-      display: grid;
-      grid-template-columns: repeat(4, minmax(82px, 1fr));
-      gap: 8px;
-      align-items: end;
-    }
-    .expert-controls label {
-      display: grid;
-      gap: 4px;
-      font-size: 11px;
-      color: #5f6368;
-    }
-    .expert-controls input {
-      width: 100%;
-      height: 32px;
-      border: 1px solid #dadce0;
-      border-radius: 8px;
-      background: #fff;
-      padding: 0 8px;
-      font: inherit;
-      font-size: 12px;
-      color: #202124;
-      min-width: 0;
-    }
-    .expert-actions {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      align-items: center;
-    }
-    .expert-actions button {
-      height: 32px;
-      border: 1px solid #dadce0;
-      border-radius: 8px;
-      background: #fff;
-      color: #202124;
-      font: inherit;
-      font-size: 12px;
-      font-weight: 600;
-      cursor: pointer;
-      padding: 0 10px;
-    }
-    .expert-actions button.primary {
-      border-color: #1a73e8;
-      background: #1a73e8;
-      color: #fff;
-    }
-    .expert-actions button.danger {
-      border-color: #fce8e6;
-      color: #d93025;
-    }
     @media (max-width: 420px) {
       .top-actions { gap: 2px; }
       .chat-top button { width: 30px; height: 30px; }
       .bubble { border-radius: 14px; padding: 10px 12px; }
       .answer-card { padding: 10px; border-radius: 10px; }
       table.data { font-size: 12px; }
-      .hypothesis-panel { margin: 8px 12px 0; }
-      .hypothesis-head { align-items: start; flex-direction: column; }
-      .hypothesis-form { grid-template-columns: minmax(0, 1fr); }
-      .score-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .expert-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }

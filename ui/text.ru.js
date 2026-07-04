@@ -2,10 +2,8 @@ var UI_TEXT = {
   noData: "Нет данных",
   noMeasurements: "Измерения не найдены",
   noExperiments: "Эксперименты не найдены",
-  noDecisionHistory: "История решений не найдена",
-  noGaps: "Пробелы не найдены",
   answerMissing: "Ответ не сформирован.",
-  citationsTitle: "Источники цитат",
+  citationsTitle: "Источники",
   sourceEmptyTitle: "Здесь появятся загруженные источники",
   sourceEmptyBody: "Нажмите &laquo;Добавить источники&raquo; или перетащите файлы: JSON, JSONL, CSV, TSV, TXT, MD",
   sourceNotFoundTitle: "Источники не найдены",
@@ -17,5 +15,6 @@ var UI_TEXT = {
   allSourcesRemoved: "Все источники удалены. Граф пуст.",
   filesAccepted: "источники приняты",
   hypothesisMissingKpi: "Введите целевой KPI для генерации гипотез.",
-  noHypotheses: "Гипотезы не сформированы"
+  noHypotheses: "Гипотезы не сформированы",
+  constraintsLabel: "Ограничения: сырьё, бюджет, оборудование, нормативы"
 };

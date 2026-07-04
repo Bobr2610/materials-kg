@@ -4,10 +4,7 @@ var state = {
   sourceFilter: "",
   sourceLimit: UI_CONFIG.sourcePageSize,
   total: 0,
-  overview: null,
-  lastHypothesisRequest: null,
-  lastHypothesisResult: null,
-  expertAdjustments: {}
+  overview: null
 };
 
 function $(id) {
@@ -62,13 +59,10 @@ function renderAnswer(data) {
   addMsg("assistant",
     '<div class="bubble">' + escapeHtml(data.answer||UI_TEXT.answerMissing) + "</div>" +
     (w ? '<div class="answer-card"><h3>Предупреждения</h3><div class="chips">' + w + "</div></div>" : "") +
-    '<div class="answer-card"><h3>Найденные сущности</h3>' + chipList(data.matched_entities) + "</div>" +
-    '<div class="answer-card"><h3>Что уже делали</h3>' + listBlock(data.experiments, r => "<b>" + escapeHtml(r.canonical_name) + "</b><span>" + escapeHtml(r.id) + "</span>", UI_TEXT.noExperiments) + "</div>" +
-    '<div class="answer-card"><h3>Эффект и измерения</h3>' + tableBlock(data.observations) + "</div>" +
-    (citations ? '<div class="answer-card">' + citations + "</div>" : "") +
-    '<div class="answer-card"><h3>Связанные сущности</h3>' + chipList(data.related_entities) + "</div>" +
-    '<div class="answer-card"><h3>История решений</h3>' + listBlock(data.decision_history, r => "<b>" + escapeHtml(r.summary) + "</b><span>" + escapeHtml(r.decision||"вывод") + "</span>", UI_TEXT.noDecisionHistory) + "</div>" +
-    '<div class="answer-card"><h3>Пробелы данных</h3>' + listBlock(data.data_gaps, r => "<b>" + escapeHtml(r.reason) + "</b><span>" + escapeHtml(r.scope) + "</span>", UI_TEXT.noGaps) + "</div>"
+    '<div class="answer-card"><h3>Сущности</h3>' + chipList(data.matched_entities) + "</div>" +
+    '<div class="answer-card"><h3>Эксперименты</h3>' + listBlock(data.experiments, r => "<b>" + escapeHtml(r.canonical_name) + "</b><span>" + escapeHtml(r.id) + "</span>", UI_TEXT.noExperiments) + "</div>" +
+    '<div class="answer-card"><h3>Измерения</h3>' + tableBlock(data.observations) + "</div>" +
+    (citations ? '<div class="answer-card">' + citations + "</div>" : "")
   );
 }
 
@@ -101,13 +95,6 @@ function clearChat() {
   $("chatBody").innerHTML =
     '<div class="hero" id="hero"><div class="hero-inner"><div class="hero-icon">&#9883;</div><h1>Фабрика гипотез</h1><p id="notebookMeta">Добавьте источники слева и задавайте вопросы в чате. Граф знаний строится только из загруженных данных.</p></div></div>';
   if ($("suggestions")) $("suggestions").innerHTML = "";
-  state.lastHypothesisResult = null;
-  $("exportHypothesesJson").disabled = true;
-  $("exportHypothesesCsv").disabled = true;
-  $("exportHypothesesXlsx").disabled = true;
-  $("exportHypothesesDocx").disabled = true;
-  $("exportHypothesesPdf").disabled = true;
-  fetch(UI_CONFIG.endpoints.sourceSuggestions).then(r => r.json()).then(q => { if (state.total) renderSuggestions(q); }).catch(() => {});
 }
 
 async function loadInitialState() {
@@ -133,17 +120,8 @@ function registerEventListeners() {
   $("addSources").addEventListener("click", () => $("fileInput").click());
   $("fileInput").addEventListener("change", e => { uploadFiles(Array.from(e.target.files)); e.target.value = ""; });
   $("sendQuestion").addEventListener("click", ask);
-  $("generateHypotheses").addEventListener("click", generateHypothesesFromKpi);
-  $("exportHypothesesJson").addEventListener("click", () => exportHypotheses("json"));
-  $("exportHypothesesCsv").addEventListener("click", () => exportHypotheses("csv"));
-  $("exportHypothesesXlsx").addEventListener("click", () => exportHypotheses("xlsx"));
-  $("exportHypothesesDocx").addEventListener("click", () => exportHypotheses("docx"));
-  $("exportHypothesesPdf").addEventListener("click", () => exportHypotheses("pdf"));
-  $("targetKpi").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); generateHypothesesFromKpi(); } });
   $("question").addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ask(); } });
   $("question").addEventListener("input", function() { this.style.height = "auto"; this.style.height = Math.min(this.scrollHeight, 120) + "px"; });
-  $("collapseSources").addEventListener("click", () => $("appShell").classList.add("sources-collapsed"));
-  $("restoreSources").addEventListener("click", () => $("appShell").classList.remove("sources-collapsed"));
   $("graphToggle").addEventListener("click", () => {
     $("graphPanel").classList.toggle("open");
     if ($("graphPanel").classList.contains("open")) { buildLegendForNodes([]); loadGraph(); }
@@ -171,38 +149,6 @@ function registerEventListeners() {
   $("sources").addEventListener("click", e => {
     const btn = e.target.closest(".source-delete");
     if (btn?.dataset.name) deleteSource(btn.dataset.name);
-  });
-  $("chatBody").addEventListener("input", e => {
-    const input = e.target.closest(".expert-input");
-    if (!input) return;
-    updateExpertAdjustment(input.closest(".expert-panel"), input);
-  });
-  $("chatBody").addEventListener("change", e => {
-    const input = e.target.closest(".expert-input");
-    if (!input) return;
-    updateExpertAdjustment(input.closest(".expert-panel"), input);
-  });
-  $("chatBody").addEventListener("click", e => {
-    const applyBtn = e.target.closest(".apply-expert");
-    if (applyBtn) {
-      applyExpertAdjustments();
-      return;
-    }
-    const saveBtn = e.target.closest(".save-feedback");
-    if (saveBtn) {
-      saveExpertFeedback(saveBtn.closest(".expert-panel"));
-      return;
-    }
-    const clearBtn = e.target.closest(".clear-expert");
-    if (!clearBtn) return;
-    const panel = clearBtn.closest(".expert-panel");
-    const id = panel?.dataset?.hypothesisId;
-    if (!id) return;
-    delete state.expertAdjustments[id];
-    panel.querySelectorAll(".expert-input").forEach(input => {
-      if (input.type === "checkbox") input.checked = false;
-      else input.value = "";
-    });
   });
   document.addEventListener("click", e => { if (!$("menuPopover").contains(e.target) && e.target !== $("menuButton")) $("menuPopover").classList.remove("open"); });
   let dragTimer;
