@@ -13,7 +13,11 @@ from kg_engine.config.settings import settings
 
 
 def main() -> None:
+    import logging
     import uvicorn
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+    logging.getLogger("kg_engine").setLevel(logging.INFO)
 
     app = create_materials_app(ensure_schema=settings.materials_api_ensure_schema)
     uvicorn.run(

@@ -543,26 +543,14 @@ def select_extraction_strategy(title: str, text: str) -> str:
     stripped = text.strip()
     if not stripped:
         return "empty"
-    if len(stripped) > 12000:
+    try:
+        from kg_engine.config.settings import settings
+        budget = int(getattr(settings, "llm_embedding_truncation_chars", 25000))
+    except Exception:
+        budget = 25000
+    if len(stripped) > budget:
         return "chunked_phased"
-    has_numeric_signal = bool(
-        re.search(
-            r"\d+(?:[.,]\d+)?\s*(MPa|GPa|HRC|HV|%IACS|%)\b",
-            stripped,
-            re.IGNORECASE,
-        )
-    )
-    has_table_signal = "\t" in stripped or stripped.count("|") >= 4
-    has_relation_signal = bool(
-        re.search(
-            r"\b(anneal|aging|aged|weld|sinter|measured|evaluated|uses|performed|documented)\b",
-            stripped,
-            re.IGNORECASE,
-        )
-    )
-    if has_numeric_signal or has_table_signal or has_relation_signal:
-        return "phased"
-    return "entity_first"
+    return "phased"
 
 
 def _json_messages(role: str, prompt: str) -> list[dict[str, str]]:
@@ -771,10 +759,11 @@ def _extract_chunked_phased(
     parent_trace: list[dict[str, Any]],
 ) -> DocumentExtractionResult:
     """Chunk a long document and run phased extraction on each chunk."""
-    chunks = _chunk_text(full_text, chunk_size=_CHUNK_SIZE, overlap=_CHUNK_OVERLAP)
+    chunk_size, overlap = _get_chunk_config()
+    chunks = _chunk_text(full_text, chunk_size=chunk_size, overlap=overlap)
     logger.info(
         "Document '%s' chunked into %d segments (size=%d, overlap=%d) for extraction",
-        title, len(chunks), _CHUNK_SIZE, _CHUNK_OVERLAP,
+        title, len(chunks), chunk_size, overlap,
     )
     chunk_results: list[DocumentExtractionResult] = []
     for idx, chunk in enumerate(chunks):
@@ -908,13 +897,6 @@ def extract_entities_from_document(
     )
     entity_result = _validate_extraction({"entities": entities_raw.get("entities") or []})
 
-    if strategy == "entity_first" and not entity_result.entities:
-        return DocumentExtractionResult(
-            warnings=["LLM returned no entities"],
-            extraction_engine="llm_entity_first",
-            agent_trace=trace,
-        )
-
     entities_payload = _entities_json(entity_result.entities)
     relationships_raw: dict[str, Any] = {"relationships": []}
     if entity_result.entities:
@@ -937,8 +919,7 @@ def extract_entities_from_document(
     )
 
     measurements_raw: dict[str, Any] = {"experiments": []}
-    if strategy in {"phased", "chunked_phased"} or re.search(r"\d", truncated):
-        measurements_raw = _call_json_phase(
+    measurements_raw = _call_json_phase(
             provider,
             role="a materials science measurement extractor",
             prompt=_MEASUREMENT_PROMPT.format(

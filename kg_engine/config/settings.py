@@ -79,6 +79,7 @@ class Settings(BaseSettings):
     llm_context_window: int = 128000
     llm_safety_margin_tokens: int = 500
     llm_embedding_truncation_chars: int = 8000
+    llm_timeout_seconds: float = 60.0
     llm_max_retries: int = 3
     llm_retry_base_delay: float = 1.0
 
@@ -98,6 +99,10 @@ class Settings(BaseSettings):
 
     # Ingestion limits
     materials_llm_extraction_max_chars: int = 80_000
+    materials_llm_extraction_batch_chars: int = 6_000
+    materials_llm_extraction_max_batches_per_document: int = 1
+    materials_ingestion_llm_timeout_seconds: float = 20.0
+    materials_ingestion_llm_max_retries: int = 1
     materials_llm_extraction_chunk_size: int = 3000
     materials_llm_extraction_chunk_overlap: int = 500
     materials_ingestion_doc_batch_size: int = 1

@@ -7,7 +7,6 @@ import json
 import logging
 import os
 import random
-import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -147,9 +146,8 @@ def resolve_openai_compatible_config(
 class LLMProvider:
     """Thin client for OpenAI-compatible chat and embedding endpoints.
 
-    Supports both sync and async operations. Async methods use a lazily
-    initialized ``httpx.AsyncClient`` that shares configuration with the
-    sync client.
+    Async-first client. Legacy sync methods are thin compatibility wrappers
+    around the async implementation.
     """
 
     def __init__(
@@ -172,23 +170,66 @@ class LLMProvider:
         self.max_retries = max_retries
         self.retry_base_delay = retry_base_delay
         self.reasoning_effort = reasoning_effort
-        self._client = httpx.Client(
-            timeout=self.timeout,
-            headers={"Authorization": f"Bearer {self.api_key}"},
-        )
         self._async_client: httpx.AsyncClient | None = None
 
     def _get_async_client(self) -> httpx.AsyncClient:
-        if self._async_client is None or self._async_client.is_closed:
-            self._async_client = httpx.AsyncClient(
-                timeout=self.timeout,
-                headers={"Authorization": f"Bearer {self.api_key}"},
-            )
-        return self._async_client
+        return httpx.AsyncClient(
+            timeout=self.timeout,
+            headers={"Authorization": f"Bearer {self.api_key}"},
+        )
 
-    # ── Sync methods ──────────────────────────────────────────────
+    def _run_async_compat(self, coroutine: Any) -> Any:
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(coroutine)
+        msg = "LLMProvider sync compatibility method called inside an async loop"
+        raise RuntimeError(msg)
+
+    # ── Legacy sync compatibility methods ────────────────────────
 
     def chat(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        model: str | None = None,
+        temperature: float = 0.3,
+        max_tokens: int = 2048,
+        response_format: dict | None = None,
+    ) -> str:
+        return self._run_async_compat(
+            self.chat_async(
+                messages,
+                model=model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                response_format=response_format,
+            )
+        )
+
+    def chat_json(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        model: str | None = None,
+        temperature: float = 0.1,
+        max_tokens: int = 2048,
+    ) -> dict[str, Any]:
+        return self._run_async_compat(
+            self.chat_json_async(
+                messages,
+                model=model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+        )
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        return self._run_async_compat(self.embed_async(texts))
+
+    # ── Async methods ─────────────────────────────────────────────
+
+    async def chat_async(
         self,
         messages: list[dict[str, str]],
         *,
@@ -207,9 +248,10 @@ class LLMProvider:
             payload["reasoning_effort"] = self.reasoning_effort
         if response_format:
             payload["response_format"] = response_format
+        client = self._get_async_client()
         for attempt in range(self.max_retries):
             try:
-                resp = self._client.post(
+                resp = await client.post(
                     f"{self.base_url}/v1/chat/completions",
                     json=payload,
                 )
@@ -238,13 +280,13 @@ class LLMProvider:
                     exc,
                     delay,
                 )
-                time.sleep(delay)
+                await asyncio.sleep(delay)
             except Exception:
                 logger.exception("LLM chat call failed with unexpected error")
                 return ""
         return ""
 
-    def chat_json(
+    async def chat_json_async(
         self,
         messages: list[dict[str, str]],
         *,
@@ -252,7 +294,7 @@ class LLMProvider:
         temperature: float = 0.1,
         max_tokens: int = 2048,
     ) -> dict[str, Any]:
-        raw = self.chat(
+        raw = await self.chat_async(
             messages,
             model=model,
             temperature=temperature,
@@ -286,112 +328,6 @@ class LLMProvider:
                 pass
         logger.warning("Failed to parse LLM JSON response (%d chars)", len(raw))
         return {}
-
-    def embed(self, texts: list[str]) -> list[list[float]]:
-        if not texts:
-            return []
-        results: list[list[float]] = []
-        batch_size = 5
-        for i in range(0, len(texts), batch_size):
-            chunk = texts[i : i + batch_size]
-            batch_result = self._embed_batch(chunk)
-            if batch_result is not None:
-                results.extend(batch_result)
-            else:
-                for text in chunk:
-                    emb = self._embed_one(text)
-                    results.append(emb)
-                    time.sleep(0.5)
-        return results
-
-    def _embed_batch(self, texts: list[str]) -> list[list[float]] | None:
-        payload = {"model": self.embedding_model, "input": texts}
-        for attempt in range(self.max_retries):
-            try:
-                resp = self._client.post(
-                    f"{self.base_url}/v1/embeddings", json=payload
-                )
-                if resp.status_code == 400:
-                    return None  # provider doesn't support batch
-                if resp.status_code == 429:
-                    delay = (2**attempt) * 5 + random.uniform(0, 2)
-                    logger.warning(
-                        "Batch embedding rate-limited, retrying in %.1fs",
-                        delay,
-                    )
-                    time.sleep(delay)
-                    continue
-                resp.raise_for_status()
-                data = resp.json()
-                return [item["embedding"] for item in data["data"]]
-            except (
-                httpx.TimeoutException,
-                httpx.HTTPStatusError,
-                httpx.ConnectError,
-            ) as exc:
-                if attempt == self.max_retries - 1:
-                    logger.exception(
-                        "Batch embedding call failed after %d attempts",
-                        self.max_retries,
-                    )
-                    return None
-                delay = self.retry_base_delay * (2**attempt) + random.uniform(0, 0.5)
-                logger.warning(
-                    "Batch embedding attempt %d/%d failed (%s), retrying in %.1fs",
-                    attempt + 1,
-                    self.max_retries,
-                    exc,
-                    delay,
-                )
-                time.sleep(delay)
-            except Exception:
-                logger.exception("Batch embedding call failed with unexpected error")
-                return None
-        return None
-
-    def _embed_one(self, text: str) -> list[float]:
-        payload = {"model": self.embedding_model, "input": text}
-        for attempt in range(self.max_retries):
-            try:
-                resp = self._client.post(
-                    f"{self.base_url}/v1/embeddings", json=payload
-                )
-                if resp.status_code == 429:
-                    delay = (2**attempt) * 5 + random.uniform(0, 2)
-                    logger.warning(
-                        "Individual embedding rate-limited, retrying in %.1fs",
-                        delay,
-                    )
-                    time.sleep(delay)
-                    continue
-                resp.raise_for_status()
-                data = resp.json()
-                return data["data"][0]["embedding"]
-            except (
-                httpx.TimeoutException,
-                httpx.HTTPStatusError,
-                httpx.ConnectError,
-            ) as exc:
-                if attempt == self.max_retries - 1:
-                    logger.exception(
-                        "Embedding call failed after %d attempts", self.max_retries
-                    )
-                    return []
-                delay = self.retry_base_delay * (2**attempt) + random.uniform(0, 0.5)  # noqa: S311
-                logger.warning(
-                    "Embedding attempt %d/%d failed (%s), retrying in %.1fs",
-                    attempt + 1,
-                    self.max_retries,
-                    exc,
-                    delay,
-                )
-                time.sleep(delay)
-            except Exception:
-                logger.exception("Embedding call failed with unexpected error")
-                return []
-        return []
-
-    # ── Async methods ─────────────────────────────────────────────
 
     async def chat_stream(
         self,
@@ -587,11 +523,12 @@ class LLMProvider:
     # ── Lifecycle ─────────────────────────────────────────────────
 
     def close(self) -> None:
-        self._client.close()
+        self._run_async_compat(self.aclose())
 
     async def aclose(self) -> None:
         if self._async_client and not self._async_client.is_closed:
             await self._async_client.aclose()
+        self._async_client = None
 
 
 def create_provider_from_settings(settings: Any) -> LLMProvider | None:
@@ -605,6 +542,7 @@ def create_provider_from_settings(settings: Any) -> LLMProvider | None:
     kwargs: dict[str, Any] = {
         "chat_model": "",
         "embedding_model": "",
+        "timeout": getattr(settings, "llm_timeout_seconds", _DEFAULT_TIMEOUT),
         "max_retries": getattr(settings, "llm_max_retries", _MAX_RETRIES),
         "retry_base_delay": getattr(
             settings, "llm_retry_base_delay", _RETRY_BASE_DELAY
@@ -620,6 +558,7 @@ def create_provider_from_settings(settings: Any) -> LLMProvider | None:
             api_key=config.api_key,
             chat_model=config.chat_model,
             embedding_model=config.embedding_model,
+            timeout=kwargs["timeout"],
             max_retries=kwargs["max_retries"],
             retry_base_delay=kwargs["retry_base_delay"],
             reasoning_effort=reasoning_effort,
@@ -661,7 +600,7 @@ def create_langchain_chat_model_from_settings(settings: Any) -> tuple[Any, str]:
         api_key=config.api_key,
         base_url=_openai_compatible_api_base(config.base_url),
         temperature=getattr(settings, "llm_temperature", 0.7),
-        timeout=_DEFAULT_TIMEOUT,
+        timeout=getattr(settings, "llm_timeout_seconds", _DEFAULT_TIMEOUT),
         max_retries=getattr(settings, "llm_max_retries", _MAX_RETRIES),
     )
     return model, f"{config.provider}:{config.chat_model}"

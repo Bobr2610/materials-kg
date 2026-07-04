@@ -403,8 +403,12 @@ class DocumentCorpusAdapter:
             ]
             document_id = _first(item, "document_id", "id", "path", "file")
             text = _first(item, "text", "content", "body", default="")
-            if not document_id or not text:
+            if not document_id:
                 continue
+            if not text and text_units:
+                text = f"Source document {document_id} with {len(text_units)} text units."
+            elif not text:
+                text = f"Source document {document_id} — no text extracted."
             documents.append(
                 DocumentInput(
                     document_id=document_id,

@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import csv
+import asyncio
 import io
 import json
 import tempfile
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
+from datetime import timezone
 from pathlib import Path
+from threading import Lock
 from typing import TYPE_CHECKING
+from uuid import uuid4
 
 from fastapi import FastAPI
 from fastapi import Header
@@ -91,6 +95,39 @@ _EXPERIMENT_KEYS = {
     "observations",
 }
 _DOCUMENT_KEYS = {"document_id", "text", "content", "body"}
+
+
+class _TemporaryProviderTimeout:
+    """Temporarily tune the shared LLM provider for bounded bulk ingestion."""
+
+    def __init__(self, provider: object | None, settings: Settings | None) -> None:
+        self.provider = provider
+        self.settings = settings
+        self._old_timeout: object | None = None
+        self._old_retries: object | None = None
+
+    def __enter__(self):
+        if self.provider is None or self.settings is None:
+            return None
+        timeout = getattr(self.settings, "materials_ingestion_llm_timeout_seconds", None)
+        retries = getattr(self.settings, "materials_ingestion_llm_max_retries", None)
+        if timeout is None and retries is None:
+            return None
+        self._old_timeout = getattr(self.provider, "timeout", None)
+        self._old_retries = getattr(self.provider, "max_retries", None)
+        if timeout is not None and hasattr(self.provider, "timeout"):
+            self.provider.timeout = timeout
+        if retries is not None and hasattr(self.provider, "max_retries"):
+            self.provider.max_retries = retries
+        return None
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        if self.provider is None:
+            return
+        if self._old_timeout is not None and hasattr(self.provider, "timeout"):
+            self.provider.timeout = self._old_timeout
+        if self._old_retries is not None and hasattr(self.provider, "max_retries"):
+            self.provider.max_retries = self._old_retries
 
 
 def _parse_uploaded_file(name: str, content: bytes) -> object | None:
@@ -195,6 +232,16 @@ def _api_document_parser(
                         api_key=config.api_key,
                         chat_model=config.chat_model,
                         embedding_model=config.embedding_model,
+                        timeout=getattr(
+                            settings,
+                            "materials_ingestion_llm_timeout_seconds",
+                            getattr(settings, "llm_timeout_seconds", 60.0),
+                        ),
+                        max_retries=getattr(
+                            settings,
+                            "materials_ingestion_llm_max_retries",
+                            getattr(settings, "llm_max_retries", 3),
+                        ),
                         reasoning_effort="none" if config.provider == "yandex" else None,
                     )
 
@@ -624,9 +671,110 @@ def create_materials_app(
     )
     app = FastAPI(title=api_title)
     _source_files: list[dict] = []
+    _task_load_jobs: dict[str, dict] = {}
+    _task_load_jobs_lock = Lock()
+    _hypothesis_jobs: dict[str, dict] = {}
+    _hypothesis_jobs_lock = Lock()
     feedback_store = ExpertFeedbackStore(
         _PROJECT_ROOT / ".scratch" / "metrics" / "expert_feedback.jsonl"
     )
+
+    def _utc_now() -> str:
+        return datetime.now(timezone.utc).isoformat()
+
+    def _get_task_load_job(job_id: str) -> dict:
+        with _task_load_jobs_lock:
+            job = _task_load_jobs.get(job_id)
+            if job is None:
+                raise HTTPException(status_code=404, detail="Task load job not found")
+            return dict(job)
+
+    def _update_task_load_job(job_id: str, **changes) -> None:
+        with _task_load_jobs_lock:
+            job = _task_load_jobs.get(job_id)
+            if job is None:
+                return
+            job.update(changes)
+            job["updated_at"] = _utc_now()
+
+    def _finish_task_load_job(job_id: str, result: dict) -> None:
+        with _task_load_jobs_lock:
+            job = _task_load_jobs.get(job_id)
+            if job is None:
+                return
+            job.update(
+                {
+                    "status": "completed",
+                    "stage": "completed",
+                    "finished_at": _utc_now(),
+                    "updated_at": _utc_now(),
+                    "result": result,
+                    "error": None,
+                    "total_files": max(
+                        job.get("total_files", 0),
+                        len(result.get("uploaded") or []),
+                    ),
+                    "processed_files": max(
+                        job.get("total_files", 0),
+                        len(result.get("uploaded") or []),
+                    ),
+                    "uploaded": result.get("uploaded") or [],
+                    "skipped_example_files": result.get("skipped_example_files") or [],
+                    "unsupported_files": result.get("unsupported_files") or [],
+                }
+            )
+
+    def _fail_task_load_job(job_id: str, error: str) -> None:
+        _update_task_load_job(
+            job_id,
+            status="failed",
+            stage="failed",
+            finished_at=_utc_now(),
+            error=error,
+        )
+
+    def _get_hypothesis_job(job_id: str) -> dict:
+        with _hypothesis_jobs_lock:
+            job = _hypothesis_jobs.get(job_id)
+            if job is None:
+                raise HTTPException(status_code=404, detail="Hypothesis job not found")
+            return dict(job)
+
+    def _update_hypothesis_job(job_id: str, **changes) -> None:
+        with _hypothesis_jobs_lock:
+            job = _hypothesis_jobs.get(job_id)
+            if job is None:
+                return
+            job.update(changes)
+            job["updated_at"] = _utc_now()
+
+    def _finish_hypothesis_job(job_id: str, result: dict) -> None:
+        with _hypothesis_jobs_lock:
+            job = _hypothesis_jobs.get(job_id)
+            if job is None:
+                return
+            job.update(
+                {
+                    "status": "completed",
+                    "stage": "completed",
+                    "message": "Hypotheses generated",
+                    "finished_at": _utc_now(),
+                    "updated_at": _utc_now(),
+                    "result": result,
+                    "error": None,
+                }
+            )
+
+    def _fail_hypothesis_job(job_id: str, error: str, *, status_code: int = 500) -> None:
+        _update_hypothesis_job(
+            job_id,
+            status="failed",
+            stage="failed",
+            message="Hypothesis generation failed",
+            finished_at=_utc_now(),
+            error=error,
+            status_code=status_code,
+        )
 
     def require_writer(role: str | None) -> None:
         if role not in {"admin", "researcher", "expert"}:
@@ -1172,8 +1320,284 @@ def create_materials_app(
         _source_files.extend(results["uploaded"])
         return results
 
-    @app.post("/demo/load-task-materials")
-    def load_task_materials(
+    async def _run_task_materials_pipeline(
+        *,
+        job_id: str,
+        exclude_examples: bool,
+        snapshot_path: str | None,
+        enable_vision: bool | None,
+        enable_llm_extraction: bool,
+        enable_embeddings: bool,
+        max_pdf_pages: int | None,
+        parallel_workers: int,
+    ) -> dict:
+        started_at = _utc_now()
+        _update_task_load_job(
+            job_id,
+            status="running",
+            stage="discovering",
+            started_at=started_at,
+            message="Discovering Task 1 files",
+        )
+
+        task_dir, used_fallback, checked = _find_task_materials_dir()
+        if task_dir is None:
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    "No Task 1 corpus or packaged fallback corpus is present. "
+                    f"Checked: {', '.join(checked)}"
+                ),
+            )
+
+        if enable_vision is None:
+            from kg_engine.config.settings import settings as _cfg
+
+            enable_vision = getattr(_cfg, "materials_document_vision_enabled", False)
+
+        ref_payload: dict = {}
+        exp_payload: list = []
+        doc_payload: list = []
+        uploaded: list[dict] = []
+        unsupported: list[str] = []
+        skipped_examples: list[str] = []
+        supported_suffixes = (
+            _TEXT_SUFFIXES | _STRUCTURED_SUFFIXES | _PARSER_SUFFIXES | _IMAGE_SUFFIXES
+        )
+        worker_count = (
+            max(parallel_workers, 0)
+            or (
+                getattr(runtime_settings, "materials_ingestion_parallel_workers", 4)
+                if runtime_settings
+                else 4
+            )
+        )
+
+        candidates: list[Path] = []
+        for path in sorted(item for item in task_dir.rglob("*") if item.is_file()):
+            relative_name = str(path.relative_to(task_dir))
+            if exclude_examples and _is_task_example_path(path, task_dir):
+                skipped_examples.append(relative_name)
+                continue
+            suffix = path.suffix.lower()
+            if suffix not in supported_suffixes:
+                unsupported.append(relative_name)
+                continue
+            candidates.append(path)
+
+        _update_task_load_job(
+            job_id,
+            stage="parsing",
+            total_files=len(candidates),
+            processed_files=0,
+            skipped_example_files=list(skipped_examples),
+            unsupported_files=list(unsupported),
+            message=f"Parsing {len(candidates)} files",
+        )
+
+        shared_parser = _api_document_parser(
+            runtime_settings,
+            enable_vision=False,
+        )
+        if shared_parser is not None and max_pdf_pages is not None:
+            from dataclasses import replace
+
+            shared_parser.settings = replace(
+                shared_parser.settings,
+                max_pdf_pages=max_pdf_pages,
+            )
+
+        parsed_files = 0
+
+        def _record_upload(path: Path) -> dict:
+            item = {
+                "name": str(path.relative_to(task_dir)),
+                "size": path.stat().st_size,
+                "type": path.suffix.lstrip(".") or "unknown",
+            }
+            uploaded.append(item)
+            return item
+
+        def _mark_parsed(path: Path) -> None:
+            nonlocal parsed_files
+            parsed_files += 1
+            _update_task_load_job(
+                job_id,
+                processed_files=parsed_files,
+                uploaded=list(uploaded),
+                message=f"Parsed {parsed_files} of {len(candidates)} files",
+            )
+
+        def _parse_doc_file(path: Path) -> dict:
+            try:
+                from kg_engine.ingestion.document_blocks import parse_document_file
+
+                doc = parse_document_file(path, parser=shared_parser)
+                if doc.text.strip() or doc.text_units:
+                    return doc.model_dump(mode="json")
+                return _fallback_file_document(path, task_dir, "no_text_extracted")
+            except Exception:
+                return _fallback_file_document(path, task_dir, "parser_failed")
+
+        async def _parse_task_file(path: Path, semaphore: asyncio.Semaphore) -> dict:
+            async with semaphore:
+                suffix = path.suffix.lower()
+                relative_name = str(path.relative_to(task_dir))
+                if suffix in (_PARSER_SUFFIXES | _IMAGE_SUFFIXES):
+                    doc = await asyncio.to_thread(_parse_doc_file, path)
+                    return {"path": path, "kind": "document", "payload": doc}
+                content = await asyncio.to_thread(path.read_bytes)
+                parsed = _parse_uploaded_file(relative_name, content)
+                if parsed is None:
+                    return {
+                        "path": path,
+                        "kind": "unsupported",
+                        "relative_name": relative_name,
+                    }
+                return {
+                    "path": path,
+                    "kind": "parsed",
+                    "relative_name": relative_name,
+                    "suffix": suffix,
+                    "payload": parsed,
+                }
+
+        semaphore = asyncio.Semaphore(max(worker_count, 1))
+        tasks = [
+            asyncio.create_task(_parse_task_file(path, semaphore))
+            for path in candidates
+        ]
+        for task in asyncio.as_completed(tasks):
+            parsed_result = await task
+            path = parsed_result["path"]
+            suffix = path.suffix.lower()
+            relative_name = str(path.relative_to(task_dir))
+            if parsed_result["kind"] == "unsupported":
+                unsupported.append(parsed_result["relative_name"])
+                _mark_parsed(path)
+                continue
+            if parsed_result["kind"] == "document":
+                doc_payload.append(parsed_result["payload"])
+            else:
+                _append_parsed_payload_without_llm(
+                    parsed=parsed_result["payload"],
+                    name=relative_name,
+                    suffix=suffix,
+                    ref_payload=ref_payload,
+                    exp_payload=exp_payload,
+                    doc_payload=doc_payload,
+                )
+            _record_upload(path)
+            _mark_parsed(path)
+
+        doc_count = 0
+        doc_results: dict | None = None
+        if doc_payload:
+            import logging as _diag_log
+            _diag = _diag_log.getLogger("materials_core.ingest_diag")
+            _diag.info("doc_payload count=%d", len(doc_payload))
+            for _i, _item in enumerate(doc_payload):
+                _diag.info("  doc_payload[%d]: document_id=%s text_len=%d units=%d source_ref=%s",
+                    _i,
+                    _item.get("document_id", "MISSING"),
+                    len(_item.get("text") or ""),
+                    len(_item.get("text_units") or []),
+                    _item.get("source_ref", "NONE"),
+                )
+            document_batch = DocumentCorpusAdapter().from_payload(doc_payload)
+            _diag.info("adapter produced %d documents", len(document_batch))
+            for _i, _doc in enumerate(document_batch):
+                _diag.info("  batch[%d]: document_id=%s title=%s text_len=%d units=%d source_ref=%s",
+                    _i,
+                    _doc.document_id,
+                    _doc.title,
+                    len(_doc.text or ""),
+                    len(_doc.text_units or []),
+                    _doc.source_ref or "NONE",
+                )
+            _update_task_load_job(
+                job_id,
+                stage="ingesting",
+                message=f"Ingesting {len(document_batch)} parsed documents",
+            )
+            with _TemporaryProviderTimeout(
+                runtime_service.llm_provider,
+                runtime_settings,
+            ):
+                doc_results = await runtime_service.ingest_documents_async(
+                    document_batch,
+                    enable_llm_extraction=enable_llm_extraction,
+                    enable_embeddings=enable_embeddings,
+                    parallel_workers=max(worker_count, 1),
+                )
+            doc_count = len(document_batch)
+
+        results: dict = {
+            "job_id": job_id,
+            "task_materials_dir": _display_path(task_dir),
+            "used_fallback": used_fallback,
+            "excluded_examples": exclude_examples,
+            "vision_enabled": enable_vision,
+            "llm_extraction_enabled": enable_llm_extraction,
+            "embeddings_enabled": enable_embeddings,
+            "parallel_workers": max(worker_count, 1),
+            "uploaded": uploaded,
+            "documents_ingested": doc_count,
+            "skipped_example_files": skipped_examples,
+            "unsupported_files": unsupported,
+        }
+        if doc_results is not None:
+            results["documents"] = doc_results
+        if used_fallback:
+            results["warnings"] = [
+                (
+                    "Task 1 corpus directory is not present; loaded packaged "
+                    "sample_sources fallback instead."
+                )
+            ]
+
+        if ref_payload:
+            _update_task_load_job(
+                job_id,
+                stage="ingesting_reference",
+                message="Ingesting structured reference records",
+            )
+            results["reference"] = await asyncio.to_thread(
+                runtime_service.ingest_reference_data,
+                ReferenceDataAdapter().from_payload(ref_payload),
+            )
+        if exp_payload:
+            _update_task_load_job(
+                job_id,
+                stage="ingesting_experiments",
+                message="Ingesting structured experiment records",
+            )
+            results["experiments"] = await asyncio.to_thread(
+                runtime_service.ingest_experiments,
+                ExperimentCatalogAdapter().from_payload(exp_payload),
+                enable_embeddings=enable_embeddings,
+            )
+        if uploaded:
+            _source_files.extend(uploaded)
+
+        _update_task_load_job(
+            job_id,
+            stage="summarizing",
+            message="Refreshing source overview",
+        )
+        results["overview"] = await asyncio.to_thread(runtime_service.get_source_overview)
+        results["suggested_questions"] = await asyncio.to_thread(
+            runtime_service.get_suggested_questions
+        )
+        if snapshot_path:
+            results["snapshot"] = await asyncio.to_thread(
+                runtime_service.save_graph_snapshot,
+                snapshot_path,
+            )
+        return results
+
+    @app.post("/demo/load-task-materials", status_code=202)
+    async def load_task_materials(
         exclude_examples: bool = Query(default=False),
         snapshot_path: str | None = Query(default=None),
         enable_vision: bool = Query(default=None),
@@ -1191,204 +1615,76 @@ def create_materials_app(
                     f"Checked: {', '.join(checked)}"
                 ),
             )
-
-        if enable_vision is None:
-            from kg_engine.config.settings import settings as _cfg
-            enable_vision = getattr(_cfg, "materials_document_vision_enabled", False)
-
-        ref_payload: dict = {}
-        exp_payload: list = []
-        doc_payload: list = []
-        uploaded: list[dict] = []
-        unsupported: list[str] = []
-        skipped_examples: list[str] = []
-        supported_suffixes = (
-            _TEXT_SUFFIXES | _STRUCTURED_SUFFIXES | _PARSER_SUFFIXES | _IMAGE_SUFFIXES
-        )
-        document_parser = _api_document_parser(
-            runtime_settings,
-            enable_vision=enable_vision,
-        )
-        if document_parser is not None and max_pdf_pages is not None:
-            from dataclasses import replace
-            document_parser.settings = replace(
-                document_parser.settings,
-                max_pdf_pages=max_pdf_pages,
-            )
-        doc_queue: list = []
-        doc_count = 0
-
-        def _flush_docs():
-            nonlocal doc_count
-            if doc_queue:
-                runtime_service.ingest_documents_parallel(
-                    DocumentCorpusAdapter().from_payload(doc_queue),
-                    enable_llm_extraction=enable_llm_extraction,
-                    enable_embeddings=enable_embeddings,
-                    parallel_workers=parallel_workers if parallel_workers > 0 else 4,
-                )
-                doc_count += len(doc_queue)
-                doc_queue.clear()
-
-        def _parse_doc_file(path: Path, task_dir: Path) -> dict | None:
-            """Parse a single document file — runs in worker thread."""
-            try:
-                from kg_engine.ingestion.document_blocks import parse_document_file
-                doc = parse_document_file(path, parser=document_parser)
-                if doc.text.strip() or doc.text_units:
-                    return doc.model_dump(mode="json")
-                return _fallback_file_document(path, task_dir, "no_text_extracted")
-            except Exception:
-                return _fallback_file_document(path, task_dir, "parser_failed")
-
-        doc_file_paths: list[Path] = []
-        for path in sorted(item for item in task_dir.rglob("*") if item.is_file()):
-            relative_name = str(path.relative_to(task_dir))
-            if exclude_examples and _is_task_example_path(path, task_dir):
-                skipped_examples.append(relative_name)
-                continue
-            suffix = path.suffix.lower()
-            if suffix not in supported_suffixes:
-                unsupported.append(relative_name)
-                continue
-            if suffix in (_PARSER_SUFFIXES | _IMAGE_SUFFIXES):
-                doc_file_paths.append(path)
-                continue
-            content = path.read_bytes()
-            parsed = _parse_uploaded_file(relative_name, content)
-            if parsed is None:
-                unsupported.append(relative_name)
-                continue
-            _append_parsed_payload_without_llm(
-                parsed=parsed,
-                name=relative_name,
-                suffix=suffix,
-                ref_payload=ref_payload,
-                exp_payload=exp_payload,
-                doc_payload=doc_queue,
-            )
-            uploaded.append({
-                "name": relative_name,
-                "size": path.stat().st_size,
-                "type": suffix.lstrip(".") or "unknown",
-            })
-            if doc_queue:
-                _flush_docs()
-
-        if doc_file_paths and document_parser is not None:
-            _cfg_workers = (
-                max(parallel_workers, 0)
-                or (
-                    getattr(runtime_settings, "materials_ingestion_parallel_workers", 4)
-                    if runtime_settings
-                    else 4
-                )
-            )
-            max_workers = min(_cfg_workers, len(doc_file_paths))
-            with ThreadPoolExecutor(max_workers=max_workers) as pool:
-                future_map = {
-                    pool.submit(_parse_doc_file, p, task_dir): p
-                    for p in doc_file_paths
-                }
-                for future in as_completed(future_map):
-                    p = future_map[future]
-                    relative_name = str(p.relative_to(task_dir))
-                    try:
-                        result = future.result()
-                        if result:
-                            doc_queue.append(result)
-                        uploaded.append({
-                            "name": relative_name,
-                            "size": p.stat().st_size,
-                            "type": p.suffix.lstrip(".") or "unknown",
-                        })
-                        _flush_docs()
-                    except Exception:
-                        doc_queue.append(
-                            _fallback_file_document(p, task_dir, "worker_failed")
-                        )
-                        uploaded.append({
-                            "name": relative_name,
-                            "size": p.stat().st_size,
-                            "type": p.suffix.lstrip(".") or "unknown",
-                        })
-                        _flush_docs()
-        else:
-            for path in doc_file_paths:
-                relative_name = str(path.relative_to(task_dir))
-                try:
-                    from kg_engine.ingestion.document_blocks import parse_document_file
-                    document = parse_document_file(path, parser=document_parser)
-                    if document.text.strip() or document.text_units:
-                        doc_queue.append(document.model_dump(mode="json"))
-                    else:
-                        doc_queue.append(
-                            _fallback_file_document(path, task_dir, "no_text_extracted")
-                        )
-                except Exception:
-                    doc_queue.append(
-                        _fallback_file_document(path, task_dir, "parser_failed")
-                    )
-                uploaded.append({
-                    "name": relative_name,
-                    "size": path.stat().st_size,
-                    "type": path.suffix.lstrip(".") or "unknown",
-                })
-                _flush_docs()
-
-        _flush_docs()
-
-        results: dict = {
+        job_id = uuid4().hex
+        now = _utc_now()
+        job = {
+            "job_id": job_id,
+            "status": "queued",
+            "stage": "queued",
+            "message": "Queued Task 1 materials load",
+            "created_at": now,
+            "updated_at": now,
+            "started_at": None,
+            "finished_at": None,
+            "total_files": 0,
+            "processed_files": 0,
             "task_materials_dir": _display_path(task_dir),
             "used_fallback": used_fallback,
             "excluded_examples": exclude_examples,
             "vision_enabled": enable_vision,
-            "uploaded": uploaded,
-            "documents_ingested": doc_count,
-            "skipped_example_files": skipped_examples,
-            "unsupported_files": unsupported,
+            "llm_extraction_enabled": enable_llm_extraction,
+            "embeddings_enabled": enable_embeddings,
+            "parallel_workers": parallel_workers,
+            "uploaded": [],
+            "skipped_example_files": [],
+            "unsupported_files": [],
+            "result": None,
+            "error": None,
         }
-        if used_fallback:
-            results["warnings"] = [
-                (
-                    "Task 1 corpus directory is not present; loaded packaged "
-                    "sample_sources fallback instead."
+        with _task_load_jobs_lock:
+            _task_load_jobs[job_id] = job
+
+        async def _worker() -> None:
+            try:
+                result = await _run_task_materials_pipeline(
+                    job_id=job_id,
+                    exclude_examples=exclude_examples,
+                    snapshot_path=snapshot_path,
+                    enable_vision=enable_vision,
+                    enable_llm_extraction=enable_llm_extraction,
+                    enable_embeddings=enable_embeddings,
+                    max_pdf_pages=max_pdf_pages,
+                    parallel_workers=parallel_workers,
                 )
-            ]
-        if ref_payload:
-            results["reference"] = runtime_service.ingest_reference_data(
-                ReferenceDataAdapter().from_payload(ref_payload)
-            )
-            ref_payload.clear()
-        if exp_payload:
-            results["experiments"] = runtime_service.ingest_experiments(
-                ExperimentCatalogAdapter().from_payload(exp_payload),
-                enable_embeddings=enable_embeddings,
-            )
-            exp_payload.clear()
-        if uploaded:
-            _source_files.extend(uploaded)
-        results["overview"] = runtime_service.get_source_overview()
-        results["suggested_questions"] = runtime_service.get_suggested_questions()
-        if snapshot_path:
-            results["snapshot"] = runtime_service.save_graph_snapshot(snapshot_path)
-        return results
+                _finish_task_load_job(job_id, result)
+            except HTTPException as exc:
+                _fail_task_load_job(job_id, str(exc.detail))
+            except Exception as exc:
+                _fail_task_load_job(job_id, str(exc))
+
+        asyncio.create_task(_worker())
+        return _get_task_load_job(job_id)
+
+    @app.get("/demo/load-task-materials/jobs/{job_id}")
+    def get_task_materials_load_job(job_id: str) -> dict:
+        return _get_task_load_job(job_id)
 
     @app.post("/ingest/reference")
-    def ingest_reference(batch: ReferenceDataBatch) -> dict[str, int]:
-        return runtime_service.ingest_reference_data(batch)
+    async def ingest_reference(batch: ReferenceDataBatch) -> dict[str, int]:
+        return await asyncio.to_thread(runtime_service.ingest_reference_data, batch)
 
     @app.post("/ingest/experiments")
-    def ingest_experiments(batch: list[ExperimentInput]) -> dict[str, int]:
-        return runtime_service.ingest_experiments(batch)
+    async def ingest_experiments(batch: list[ExperimentInput]) -> dict[str, int]:
+        return await asyncio.to_thread(runtime_service.ingest_experiments, batch)
 
     @app.post("/ingest/documents")
-    def ingest_documents(batch: list[DocumentInput]) -> dict[str, int]:
-        return runtime_service.ingest_documents_parallel(batch, parallel_workers=4)
+    async def ingest_documents(batch: list[DocumentInput]) -> dict[str, int]:
+        return await runtime_service.ingest_documents_async(batch, parallel_workers=4)
 
     @app.post("/query/answer")
-    def query_answer(request: AnswerQueryRequest) -> dict:
-        return runtime_service.answer_question(
+    async def query_answer(request: AnswerQueryRequest) -> dict:
+        return await asyncio.to_thread(
+            runtime_service.answer_question,
             question=request.question,
             material=request.material,
             mode=request.mode,
@@ -1415,13 +1711,30 @@ def create_materials_app(
 
         return StreamingResponse(generate(), media_type="text/event-stream")
 
-    @app.post("/hypotheses/generate")
-    def generate_hypotheses(request: HypothesisInput) -> dict:
+    def _run_hypothesis_generation(
+        request: HypothesisInput,
+        *,
+        job_id: str | None = None,
+    ) -> dict:
         from kg_engine.config.settings import settings as app_settings
 
         effective_settings = runtime_settings or app_settings
         engine = effective_settings.materials_hypothesis_engine.strip().lower()
+        if job_id is not None:
+            _update_hypothesis_job(
+                job_id,
+                status="running",
+                stage="preparing",
+                started_at=_utc_now(),
+                message=f"Preparing {engine} hypothesis generation",
+            )
         if engine == "deterministic":
+            if job_id is not None:
+                _update_hypothesis_job(
+                    job_id,
+                    stage="generating",
+                    message="Generating deterministic hypotheses",
+                )
             return runtime_service.generate_hypotheses(request).model_dump(mode="json")
         if engine != "deepagents":
             raise HTTPException(
@@ -1433,6 +1746,12 @@ def create_materials_app(
             from kg_engine.agents import DeepAgentsResultError
             from kg_engine.agents import generate_hypotheses_with_deep_agent
 
+            if job_id is not None:
+                _update_hypothesis_job(
+                    job_id,
+                    stage="deepagents",
+                    message="Running Deep Agents hypothesis factory",
+                )
             result = generate_hypotheses_with_deep_agent(
                 runtime_service,
                 request,
@@ -1443,6 +1762,51 @@ def create_materials_app(
         except DeepAgentsResultError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         return result.model_dump(mode="json")
+
+    @app.post("/hypotheses/generate", status_code=202)
+    async def generate_hypotheses(request: HypothesisInput) -> dict:
+        job_id = uuid4().hex
+        now = _utc_now()
+        job = {
+            "job_id": job_id,
+            "status": "queued",
+            "stage": "queued",
+            "message": "Queued hypothesis generation",
+            "created_at": now,
+            "updated_at": now,
+            "started_at": None,
+            "finished_at": None,
+            "request": request.model_dump(mode="json"),
+            "result": None,
+            "error": None,
+            "status_code": None,
+        }
+        with _hypothesis_jobs_lock:
+            _hypothesis_jobs[job_id] = job
+
+        async def _worker() -> None:
+            try:
+                result = await asyncio.to_thread(
+                    _run_hypothesis_generation,
+                    request,
+                    job_id=job_id,
+                )
+                _finish_hypothesis_job(job_id, result)
+            except HTTPException as exc:
+                _fail_hypothesis_job(
+                    job_id,
+                    str(exc.detail),
+                    status_code=exc.status_code,
+                )
+            except Exception as exc:
+                _fail_hypothesis_job(job_id, str(exc))
+
+        asyncio.create_task(_worker())
+        return _get_hypothesis_job(job_id)
+
+    @app.get("/hypotheses/jobs/{job_id}")
+    def get_hypothesis_job(job_id: str) -> dict:
+        return _get_hypothesis_job(job_id)
 
     @app.post("/hypotheses/export")
     def export_hypotheses(

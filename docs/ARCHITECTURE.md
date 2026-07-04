@@ -39,7 +39,7 @@ kg_engine/domain/models.py
 | `TEAM_STATUS.md` | Shared task board: ML/NLP, Data Science, System Analyst tracks |
 | `pyproject.toml` | Package config: name, deps (fastapi, neo4j, langchain, pydantic), ruff settings |
 | `requirements_core.txt` | Minimal deps for graph-first core (fastapi, pydantic, neo4j, pytest) |
-| `packages.txt` | System packages: `tesseract-ocr` |
+| `packages.txt` | Optional system packages list; empty for the Docker runtime |
 | `lint.py` | Colored ruff check/format wrapper with summary |
 | `Dockerfile` | Python 3.11-slim build, exposes 8090 |
 | `docker-compose.yml` | Two services: `materials-neo4j` (Neo4j 5) + `materials-api` (FastAPI) |

@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import asyncio
 import json
 import logging
 from collections import deque
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from statistics import fmean
 from typing import TYPE_CHECKING, Any
@@ -79,6 +79,7 @@ _FALLBACK_IMPORTANT_TERMS = (
     "твердость",
     "твёрдость",
 )
+_SOURCE_DOCUMENT_TAG = "source_document"
 
 
 def _stable_id(prefix: str, *parts: Any) -> str:
@@ -200,9 +201,24 @@ def _document_extraction_batches(
     max_chars: int,
 ) -> list[tuple[str, str, dict[str, Any]]]:
     """Split large semantic documents into bounded agent extraction prompts."""
+    try:
+        from kg_engine.config.settings import settings
+
+        batch_chars = int(
+            getattr(settings, "materials_llm_extraction_batch_chars", 6_000)
+        )
+        max_batches = int(
+            getattr(settings, "materials_llm_extraction_max_batches_per_document", 3)
+        )
+    except Exception:
+        batch_chars = 6_000
+        max_batches = 3
+    batch_chars = max(1_000, min(max_chars, batch_chars))
+    max_batches = max(1, max_batches)
+
     if not document.text:
         return []
-    if len(document.text) <= max_chars:
+    if len(document.text) <= batch_chars:
         return [
             (
                 document.title,
@@ -238,12 +254,14 @@ def _document_extraction_batches(
     current_parts: list[str] = []
     current_pages: list[int] = []
     current_chars = 0
-    # Leave room for title/instructions added by extraction prompts downstream.
-    target_chars = max(4_000, int(max_chars * 0.75))
+    processed_units = 0
+    total_units = len(document.text_units)
+    # Keep each LLM request small enough to avoid provider read timeouts on books.
+    target_chars = batch_chars
 
     def flush() -> None:
         nonlocal current_parts, current_pages, current_chars
-        if not current_parts:
+        if not current_parts or len(batches) >= max_batches:
             return
         pages = sorted(set(current_pages))
         batch_number = len(batches) + 1
@@ -252,6 +270,7 @@ def _document_extraction_batches(
             "batch_index": batch_number,
             "batch_source": "semantic_text_units",
             "text_units": len(current_parts),
+            "llm_extraction_scope": "bounded_semantic_sample",
         }
         if pages:
             metadata["pages"] = pages
@@ -263,6 +282,8 @@ def _document_extraction_batches(
         current_chars = 0
 
     for index, text_unit in enumerate(document.text_units, start=1):
+        if len(batches) >= max_batches:
+            break
         metadata = text_unit.metadata
         page = metadata.get("page")
         source_file = metadata.get("source_file") or metadata.get("source_id") or document.document_id
@@ -274,10 +295,13 @@ def _document_extraction_batches(
         part = f"{prefix}\n{text_unit.content}"
         if current_parts and current_chars + len(part) > target_chars:
             flush()
+            if len(batches) >= max_batches:
+                break
         if len(part) > target_chars:
             part = part[: target_chars - 3].rstrip() + "..."
         current_parts.append(part)
         current_chars += len(part)
+        processed_units = index
         if isinstance(page, int):
             current_pages.append(page)
 
@@ -290,6 +314,9 @@ def _document_extraction_batches(
             {
                 **metadata,
                 "batch_count": batch_count,
+                "total_text_units": total_units,
+                "processed_text_units": min(processed_units, total_units),
+                "omitted_text_units": max(total_units - processed_units, 0),
             },
         )
         for title, text, metadata in batches
@@ -347,6 +374,44 @@ def _relation_matches_sources(
         if ev is not None and _evidence_matches_sources(ev, source_set):
             return True
     return False
+
+
+def _add_document_provenance_relation(
+    *,
+    document_entity: Entity,
+    tag_entity: Entity,
+    doc_src: str,
+    pending_evidence: list[Evidence],
+    pending_relations: list[Relation],
+    create_evidence,
+) -> None:
+    evidence = create_evidence(
+        source_kind=SourceKind.DOCUMENT,
+        source_id=doc_src,
+        fragment=document_entity.canonical_name,
+        extraction_method="document_provenance",
+        confidence=1.0,
+        metadata={"source_file": doc_src, "system_relation": True},
+    )
+    pending_evidence.append(evidence)
+    pending_relations.append(
+        Relation(
+            id=_stable_id(
+                "rel",
+                RelationType.TAGGED_WITH.value,
+                document_entity.id,
+                tag_entity.id,
+            ),
+            relation_type=RelationType.TAGGED_WITH,
+            source_entity_id=document_entity.id,
+            target_entity_id=tag_entity.id,
+            evidence_ids=[evidence.id],
+            properties={
+                "extraction_method": "document_provenance",
+                "system_relation": True,
+            },
+        )
+    )
 
 
 def _trace_matches_sources(
@@ -602,6 +667,19 @@ class MaterialsKGService:
                 aliases=[document.document_id],
                 source_ref=doc_src,
                 properties=document.metadata,
+            )
+            source_tag = self._ensure_entity(
+                EntityKind.TAG,
+                _SOURCE_DOCUMENT_TAG,
+                source_ref=doc_src,
+            )
+            _add_document_provenance_relation(
+                document_entity=document_entity,
+                tag_entity=source_tag,
+                doc_src=doc_src,
+                pending_evidence=pending_evidence,
+                pending_relations=pending_relations,
+                create_evidence=self._create_evidence,
             )
             linked_entity_ids: list[str] = [document_entity.id]
 
@@ -908,7 +986,7 @@ class MaterialsKGService:
             "llm_extraction_errors": llm_extraction_errors,
         }
 
-    def ingest_documents_parallel(
+    async def ingest_documents_async(
         self,
         batch: list[DocumentInput],
         *,
@@ -916,13 +994,10 @@ class MaterialsKGService:
         enable_embeddings: bool = True,
         parallel_workers: int = 4,
     ) -> dict[str, int]:
-        """Ingest documents with parallel LLM extraction for speed.
-
-        Each document's LLM extraction + entity creation runs in its own thread.
-        Final batch Neo4j writes happen after all threads complete.
-        """
+        """Ingest documents concurrently without blocking the FastAPI event loop."""
         if not batch or parallel_workers <= 1:
-            return self.ingest_documents(
+            return await asyncio.to_thread(
+                self.ingest_documents,
                 batch,
                 enable_llm_extraction=enable_llm_extraction,
                 enable_embeddings=enable_embeddings,
@@ -943,7 +1018,8 @@ class MaterialsKGService:
         llm_extracted_count = 0
 
         def _process_one_document(document: DocumentInput) -> dict:
-            """Process a single document — runs in worker thread."""
+            """Process a single document; called through asyncio.to_thread."""
+            logger.info("Processing document: id=%s title=%s", document.document_id, document.title)
             local_evidence: list[Evidence] = []
             local_relations: list[Relation] = []
             local_traces: list[DecisionTrace] = []
@@ -953,13 +1029,33 @@ class MaterialsKGService:
             local_llm_count = 0
 
             doc_src = document.source_ref or document.document_id
-            document_entity = self._ensure_entity(
-                EntityKind.DOCUMENT,
-                document.title,
-                entity_id=document.document_id,
-                aliases=[document.document_id],
+            logger.info("Processing doc_src=%s document_id=%s title=%s", doc_src, document.document_id, document.title)
+            try:
+                document_entity = self._ensure_entity(
+                    EntityKind.DOCUMENT,
+                    document.title,
+                    entity_id=document.document_id,
+                    aliases=[document.document_id],
+                    source_ref=doc_src,
+                    properties=document.metadata,
+                )
+                logger.info("Entity created: id=%s name=%s", document_entity.id, document_entity.canonical_name)
+            except Exception:
+                logger.exception("FAILED _ensure_entity for doc_src=%s document_id=%s", doc_src, document.document_id)
+                raise
+            source_tag = self._ensure_entity(
+                EntityKind.TAG,
+                _SOURCE_DOCUMENT_TAG,
                 source_ref=doc_src,
-                properties=document.metadata,
+            )
+            logger.info("Provenance for %s: tag_id=%s", document.document_id, source_tag.id)
+            _add_document_provenance_relation(
+                document_entity=document_entity,
+                tag_entity=source_tag,
+                doc_src=doc_src,
+                pending_evidence=local_evidence,
+                pending_relations=local_relations,
+                create_evidence=self._create_evidence,
             )
             linked_entity_ids: list[str] = [document_entity.id]
             llm_extracted_entity_names: set[tuple[str, str]] = set()
@@ -1254,37 +1350,38 @@ class MaterialsKGService:
 
         max_workers = min(parallel_workers, len(batch))
         logger.info(
-            "Parallel ingestion: %d documents across %d workers",
+            "Async ingestion: %d documents across %d workers",
             len(batch),
             max_workers,
         )
 
-        with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            futures = {
-                pool.submit(_process_one_document, doc): doc
-                for doc in batch
-            }
-            for future in as_completed(futures):
-                doc = futures[future]
-                try:
-                    result = future.result()
-                    all_evidence.extend(result["evidence"])
-                    all_relations.extend(result["relations"])
-                    all_traces.extend(result["traces"])
-                    all_text_units.extend(result["text_units"])
-                    all_errors.extend(result["errors"])
-                    trace_count += result["trace_count"]
-                    llm_extracted_count += result["llm_count"]
-                except Exception:
-                    logger.exception("Worker failed for document %s", doc.document_id)
-                    all_errors.append(f"{doc.document_id}: worker_failed")
+        semaphore = asyncio.Semaphore(max_workers)
 
-        self._repository.batch_upsert_evidence(all_evidence)
-        self._repository.batch_upsert_relations(all_relations)
-        self._repository.batch_upsert_traces(all_traces)
+        async def _process_with_limit(document: DocumentInput) -> dict:
+            async with semaphore:
+                return await asyncio.to_thread(_process_one_document, document)
+
+        tasks = [asyncio.create_task(_process_with_limit(doc)) for doc in batch]
+        for task, doc in zip(tasks, batch, strict=False):
+            try:
+                result = await task
+                all_evidence.extend(result["evidence"])
+                all_relations.extend(result["relations"])
+                all_traces.extend(result["traces"])
+                all_text_units.extend(result["text_units"])
+                all_errors.extend(result["errors"])
+                trace_count += result["trace_count"]
+                llm_extracted_count += result["llm_count"]
+            except Exception:
+                logger.exception("Worker failed for document %s", doc.document_id)
+                all_errors.append(f"{doc.document_id}: worker_failed")
+
+        await asyncio.to_thread(self._repository.batch_upsert_evidence, all_evidence)
+        await asyncio.to_thread(self._repository.batch_upsert_relations, all_relations)
+        await asyncio.to_thread(self._repository.batch_upsert_traces, all_traces)
         if enable_embeddings:
-            all_text_units = self._batch_compute_embeddings(all_text_units)
-        self._repository.batch_upsert_text_units(all_text_units)
+            all_text_units = await self._batch_compute_embeddings_async(all_text_units)
+        await asyncio.to_thread(self._repository.batch_upsert_text_units, all_text_units)
 
         return {
             "documents": len(batch),
@@ -1293,6 +1390,29 @@ class MaterialsKGService:
             "deepagents_extracted_experiments": llm_extracted_count,
             "llm_extraction_errors": all_errors,
         }
+
+    def ingest_documents_parallel(
+        self,
+        batch: list[DocumentInput],
+        *,
+        enable_llm_extraction: bool = True,
+        enable_embeddings: bool = True,
+        parallel_workers: int = 4,
+    ) -> dict[str, int]:
+        """Compatibility wrapper; API code uses ``ingest_documents_async``."""
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(
+                self.ingest_documents_async(
+                    batch,
+                    enable_llm_extraction=enable_llm_extraction,
+                    enable_embeddings=enable_embeddings,
+                    parallel_workers=parallel_workers,
+                )
+            )
+        msg = "ingest_documents_parallel cannot be called from an async event loop"
+        raise RuntimeError(msg)
 
     def _build_text_unit(
         self,
@@ -1337,6 +1457,35 @@ class MaterialsKGService:
                     text_units[idx].embedding = emb
         except Exception:
             logger.debug("Batch embedding failed for %d text units", len(texts))
+        return text_units
+
+    async def _batch_compute_embeddings_async(
+        self, text_units: list[SearchTextUnit]
+    ) -> list[SearchTextUnit]:
+        if not text_units or not self._llm:
+            return text_units
+        texts: list[str] = []
+        indices: list[int] = []
+        from kg_engine.config.settings import settings
+        embed_budget = settings.llm_embedding_truncation_chars
+        for idx, unit in enumerate(text_units):
+            content = (unit.content or "").strip()
+            if not content:
+                continue
+            texts.append(content[:embed_budget])
+            indices.append(idx)
+        if not texts:
+            return text_units
+        try:
+            if hasattr(self._llm, "embed_async"):
+                results = await self._llm.embed_async(texts)
+            else:
+                results = await asyncio.to_thread(self._llm.embed, texts)
+            for idx, emb in zip(indices, results, strict=False):
+                if emb:
+                    text_units[idx].embedding = emb
+        except Exception:
+            logger.debug("Async batch embedding failed for %d text units", len(texts))
         return text_units
 
     def _upsert_text_unit_with_embedding(
@@ -3178,7 +3327,14 @@ class MaterialsKGService:
         upload_file: str | None = None,
         properties: dict[str, Any] | None = None,
     ) -> Entity:
-        existing = self._repository.resolve_entity(kind, name)
+        existing = self._repository.get_entity(entity_id) if entity_id else None
+        if existing is not None and existing.kind != kind:
+            existing = None
+        # When entity_id is explicit and not found, always create new.
+        # Only fall back to name resolution when no entity_id is given
+        # (i.e. the caller relies on name-based deduplication).
+        if existing is None and entity_id is None:
+            existing = self._repository.resolve_entity(kind, name)
         if existing is not None:
             updates: dict[str, Any] = {
                 "aliases": list({*existing.aliases, *(aliases or [])}),

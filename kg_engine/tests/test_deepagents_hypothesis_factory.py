@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import anyio
 from fastapi.testclient import TestClient
 import pytest
 
@@ -27,6 +28,15 @@ from kg_engine.llm_core.extraction import extract_entities_from_document
 from kg_engine.llm_core.extraction import select_extraction_strategy
 from kg_engine.repositories.memory import InMemoryMaterialsKGRepository
 from kg_engine.services.materials_kg import MaterialsKGService
+
+
+def _wait_hypothesis_job(client: TestClient, job_id: str) -> dict:
+    for _ in range(100):
+        job = client.get(f"/hypotheses/jobs/{job_id}").json()
+        if job["status"] not in {"queued", "running"}:
+            return job
+        anyio.run(anyio.sleep, 0.01)
+    return client.get(f"/hypotheses/jobs/{job_id}").json()
 
 
 class _Message:
@@ -487,8 +497,10 @@ def test_api_uses_deepagents_engine_with_injected_runner(monkeypatch) -> None:
         json={"target_kpi": "Electrical Conductivity", "material": "CuCrZr"},
     )
 
-    assert response.status_code == 200
-    body = response.json()
+    assert response.status_code == 202
+    job = _wait_hypothesis_job(client, response.json()["job_id"])
+    assert job["status"] == "completed"
+    body = job["result"]
     assert body["generation_engine"] == "deepagents"
     assert body["llm_used"] == "openai:gpt-test"
     assert body["agent_trace"] == [{"event": "fake"}]
@@ -512,8 +524,11 @@ def test_api_returns_explicit_error_when_llm_config_is_missing() -> None:
         json={"target_kpi": "Electrical Conductivity", "material": "CuCrZr"},
     )
 
-    assert response.status_code == 503
-    assert response.json()["detail"]
+    assert response.status_code == 202
+    job = _wait_hypothesis_job(client, response.json()["job_id"])
+    assert job["status"] == "failed"
+    assert job["status_code"] == 503
+    assert job["error"]
 
 
 def test_expert_adjustments_apply_to_deep_agent_result() -> None:

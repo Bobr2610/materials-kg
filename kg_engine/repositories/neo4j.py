@@ -541,15 +541,17 @@ class Neo4jMaterialsKGRepository:
             },
         )
         text_results = [self._node_to_text_unit(row["n"]) for row in rows]
-        query_embedding = self._compute_query_embedding(query)
-        if query_embedding is None:
-            return text_results
         try:
             all_rows = self._run(
                 "MATCH (n:TextUnit) WHERE n.embedding IS NOT NULL RETURN n",
                 {},
             )
         except Exception:
+            return text_results
+        if not all_rows:
+            return text_results
+        query_embedding = self._compute_query_embedding(query)
+        if query_embedding is None:
             return text_results
         cosine_results: list[tuple[float, SearchTextUnit]] = []
         for row in all_rows:
