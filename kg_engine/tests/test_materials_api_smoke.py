@@ -103,6 +103,47 @@ def test_materials_api_health_and_ingest_query_flow() -> None:
     assert len(body["observations"]) == 1
 
 
+def test_ingest_url_downloads_and_ingests_document(monkeypatch) -> None:
+    async def fake_download(url: str, max_bytes: int) -> tuple[bytes, str | None]:
+        assert url == "https://example.test/report.md"
+        assert max_bytes > 0
+        return (
+            b"# URL report\nCuCrZr aging reached conductivity 78 %IACS.",
+            "text/markdown; charset=utf-8",
+        )
+
+    monkeypatch.setattr(
+        materials_core,
+        "_download_url_bytes",
+        fake_download,
+        raising=False,
+    )
+    app = create_materials_app(
+        settings=deterministic_settings(),
+        service=MaterialsKGService(InMemoryMaterialsKGRepository()),
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/ingest/url",
+        json={"url": "https://example.test/report.md"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["uploaded"][0]["name"] == "report.md"
+    assert body["uploaded"][0]["url"] == "https://example.test/report.md"
+    assert body["documents"]["documents"] == 1
+    assert "https://example.test/report.md" in body["overview"]["source_files"]
+
+    graph = client.get(
+        "/graph/data",
+        params={"sources": "https://example.test/report.md"},
+    )
+    assert graph.status_code == 200
+    assert graph.json()["nodes"]
+
+
 def test_dashboard_and_sample_data_flow() -> None:
     from unittest.mock import MagicMock
 
