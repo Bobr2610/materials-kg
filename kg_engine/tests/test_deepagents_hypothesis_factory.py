@@ -16,13 +16,11 @@ from kg_engine.config.settings import Settings
 from kg_engine.domain.models import CanonicalEntityInput
 from kg_engine.domain.models import CoverageRuleInput
 from kg_engine.domain.models import DocumentInput
-from kg_engine.domain.models import EntityKind
 from kg_engine.domain.models import ExperimentInput
 from kg_engine.domain.models import FindingInput
 from kg_engine.domain.models import HypothesisInput
 from kg_engine.domain.models import ObservationInput
 from kg_engine.domain.models import ReferenceDataBatch
-from kg_engine.domain.models import RelationType
 from kg_engine.domain.models import TextUnitInput
 from kg_engine.llm_core.extraction import extract_entities_from_document
 from kg_engine.llm_core.extraction import select_extraction_strategy
@@ -63,10 +61,10 @@ def _build_service() -> MaterialsKGService:
     service.ingest_reference_data(
         ReferenceDataBatch(
             entities=[
-                CanonicalEntityInput(kind=EntityKind.MATERIAL, name="CuCrZr"),
-                CanonicalEntityInput(kind=EntityKind.MODE, name="Aged"),
+                CanonicalEntityInput(kind="material", name="CuCrZr"),
+                CanonicalEntityInput(kind="mode", name="Aged"),
                 CanonicalEntityInput(
-                    kind=EntityKind.PROPERTY,
+                    kind="property",
                     name="Electrical Conductivity",
                 ),
             ],
@@ -368,37 +366,37 @@ def test_hypothesis_tools_filter_by_source_ids() -> None:
         ReferenceDataBatch(
             entities=[
                 CanonicalEntityInput(
-                    kind=EntityKind.MATERIAL,
+                    kind="material",
                     name="Material-A",
                     source_ref="file-a.json",
                 ),
                 CanonicalEntityInput(
-                    kind=EntityKind.MODE,
+                    kind="mode",
                     name="Mode-A",
                     source_ref="file-a.json",
                 ),
                 CanonicalEntityInput(
-                    kind=EntityKind.PROPERTY,
+                    kind="property",
                     name="KPI-A",
                     source_ref="file-a.json",
                 ),
                 CanonicalEntityInput(
-                    kind=EntityKind.PROPERTY,
+                    kind="property",
                     name="KPI-A-Missing",
                     source_ref="file-a.json",
                 ),
                 CanonicalEntityInput(
-                    kind=EntityKind.MATERIAL,
+                    kind="material",
                     name="Material-B",
                     source_ref="file-b.json",
                 ),
                 CanonicalEntityInput(
-                    kind=EntityKind.MODE,
+                    kind="mode",
                     name="Mode-B",
                     source_ref="file-b.json",
                 ),
                 CanonicalEntityInput(
-                    kind=EntityKind.PROPERTY,
+                    kind="property",
                     name="KPI-B-Missing",
                     source_ref="file-b.json",
                 ),
@@ -747,7 +745,7 @@ def test_ingest_documents_writes_llm_extracted_graph_data_with_evidence() -> Non
     assert material_mode.evidence[0].metadata["agent_trace"][0]["event"] == (
         "deepagents_extraction_started"
     )
-    related = service.query_related("CuCrZr", relation_filters=[RelationType.USES_MODE])
+    related = service.query_related("CuCrZr", relation_filters=["uses_mode"])
     assert related.relations
     assert related.relations[0].evidence_ids
     relation_evidence = service.repository.list_evidence(related.relations[0].evidence_ids)

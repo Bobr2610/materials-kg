@@ -11,7 +11,6 @@ from kg_engine.domain.models import DocumentExtractionResult
 from kg_engine.domain.models import ExtractedEntity
 from kg_engine.domain.models import ExtractedExperiment
 from kg_engine.domain.models import ExtractedRelationship
-from kg_engine.domain.models import EntityKind
 from kg_engine.domain.models import ObservationInput
 from kg_engine.domain.models import FindingInput
 from kg_engine.llm_core.provider import LLMProvider
@@ -182,14 +181,14 @@ Document text:
 Return a JSON object with:
 {{
   "entities": [
-    {{"kind": "material|property|mode|equipment|team|document|tag", "name": "...", "aliases": [...], "properties": {{}}}}
+    {{"kind": "<lowercase snake_case string describing the entity type, e.g. material, property, mode, equipment, team, process, alloy, mineral, method, condition, analysis_type, or any other type you discover in the text>", "name": "...", "aliases": [...], "properties": {{}}}}
   ]
 }}
 
 Rules:
 - Extract at most {max_entities} entities.
 - Every entity MUST have a non-empty "name" field.
-- Prefer canonical material names, alloy names, process/mode names, measured properties, equipment, teams, documents, and tags.
+- Use descriptive kind strings that best capture what each entity IS.
 - Preserve aliases exactly when the document gives abbreviations or alternate spellings.
 - If no entities are found, return {{"entities": []}}.
 - Return ONLY valid JSON, no markdown."""
@@ -209,7 +208,7 @@ Document text:
 Return a JSON object with:
 {{
   "relationships": [
-    {{"source": "entity_name", "target": "entity_name", "type": "evaluates_material|uses_mode|measures_property|uses_equipment|performed_by|documented_in|tagged_with|references|related_to"}}
+    {{"source": "entity_name", "target": "entity_name", "type": "<snake_case string describing the relationship, e.g. evaluates_material, uses_mode, measures_property, produces, requires, contains, related_to, or any other type that accurately describes the connection>"}}
   ]
 }}
 
@@ -217,7 +216,7 @@ Rules:
 - Extract at most {max_relationships} relationships.
 - Every relationship source and target MUST match an entity name from Known entities.
 - Do not create new entities in this step.
-- Use "related_to" when the relation is useful but does not fit a stricter type.
+- Use "related_to" when the relation is useful but does not fit a more specific type.
 - If no relationships are found, return {{"relationships": []}}.
 - Return ONLY valid JSON, no markdown."""
 
@@ -286,7 +285,7 @@ Return ONLY a JSON object with this schema:
 {{
   "reference": {{
     "entities": [
-      {{"kind": "material|property|mode|equipment|team|document|tag", "name": "...", "aliases": [], "properties": {{}}}}
+      {{"kind": "<lowercase snake_case string describing the entity type>", "name": "...", "aliases": [], "properties": {{}}}}
     ],
     "coverage_rules": [
       {{"rule_id": "...", "name": "...", "material_names": [], "mode_names": [], "property_names": [], "scope": "material-mode-property", "metadata": {{}}}}
@@ -338,10 +337,6 @@ def _validate_entity(raw: dict[str, Any]) -> ExtractedEntity | None:
     if not name:
         return None
     kind_str = (raw.get("kind") or "document").strip().lower()
-    try:
-        kind = EntityKind(kind_str)
-    except ValueError:
-        kind = EntityKind.DOCUMENT
     aliases = [
         str(a).strip()
         for a in (raw.get("aliases") or [])
@@ -351,7 +346,7 @@ def _validate_entity(raw: dict[str, Any]) -> ExtractedEntity | None:
     if not isinstance(properties, dict):
         properties = {}
     return ExtractedEntity(
-        kind=kind,
+        kind=kind_str,
         name=name,
         aliases=aliases,
         properties=properties,
@@ -585,7 +580,7 @@ def _entities_json(entities: list[ExtractedEntity]) -> str:
     return json.dumps(
         [
             {
-                "kind": entity.kind.value,
+                "kind": entity.kind,
                 "name": entity.name,
                 "aliases": entity.aliases,
             }

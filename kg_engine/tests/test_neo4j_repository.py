@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Self
 
 from kg_engine.domain.models import Entity
-from kg_engine.domain.models import EntityKind
 from kg_engine.repositories.neo4j import Neo4jMaterialsKGRepository
 from kg_engine.repositories.neo4j import create_neo4j_repository
 
@@ -74,7 +73,7 @@ def test_neo4j_repository_round_trips_entity_with_fake_driver() -> None:
     repository = Neo4jMaterialsKGRepository(driver, database="neo4j")
     entity = Entity(
         id="mat_cucrzr",
-        kind=EntityKind.MATERIAL,
+        kind="material",
         canonical_name="CuCrZr",
         aliases=["Cu-Cr-Zr"],
         source_refs=["sample"],

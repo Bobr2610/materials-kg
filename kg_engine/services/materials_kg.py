@@ -21,7 +21,7 @@ from kg_engine.domain.models import DecisionHistoryQueryResult
 from kg_engine.domain.models import DecisionTrace
 from kg_engine.domain.models import DocumentInput
 from kg_engine.domain.models import Entity
-from kg_engine.domain.models import EntityKind
+from kg_engine.domain.models import DocumentInput
 from kg_engine.domain.models import Evidence
 from kg_engine.domain.models import EvidencePath
 from kg_engine.domain.models import ExperimentInput
@@ -38,7 +38,7 @@ from kg_engine.domain.models import QueryFilters
 from kg_engine.domain.models import ReferenceDataBatch
 from kg_engine.domain.models import RelatedEntitiesQueryResult
 from kg_engine.domain.models import Relation
-from kg_engine.domain.models import RelationType
+from kg_engine.domain.models import ExperimentInput
 from kg_engine.domain.models import ResearchHypothesis
 from kg_engine.domain.models import SearchTextUnit
 from kg_engine.domain.models import SourceKind
@@ -398,11 +398,11 @@ def _add_document_provenance_relation(
         Relation(
             id=_stable_id(
                 "rel",
-                RelationType.TAGGED_WITH.value,
+                "tagged_with",
                 document_entity.id,
                 tag_entity.id,
             ),
-            relation_type=RelationType.TAGGED_WITH,
+            relation_type="tagged_with",
             source_entity_id=document_entity.id,
             target_entity_id=tag_entity.id,
             evidence_ids=[evidence.id],
@@ -486,7 +486,7 @@ class MaterialsKGService:
                 "_uploaded_from"
             )
             experiment_entity = self._ensure_entity(
-                EntityKind.EXPERIMENT,
+                "experiment",
                 experiment.title,
                 entity_id=experiment.experiment_id,
                 aliases=[experiment.experiment_id],
@@ -495,7 +495,7 @@ class MaterialsKGService:
                 properties=experiment.metadata,
             )
             material = self._ensure_entity(
-                EntityKind.MATERIAL,
+                "material",
                 experiment.material_name,
                 source_ref=provenance_ref,
                 upload_file=upload_file,
@@ -503,14 +503,14 @@ class MaterialsKGService:
             self._link_entities(
                 experiment_entity.id,
                 material.id,
-                RelationType.EVALUATES_MATERIAL,
+                "evaluates_material",
                 evidence_ids=[],
                 properties={"source": provenance_ref},
             )
             mode_entity = None
             if experiment.mode_name:
                 mode_entity = self._ensure_entity(
-                    EntityKind.MODE,
+                    "mode",
                     experiment.mode_name,
                     source_ref=provenance_ref,
                     upload_file=upload_file,
@@ -518,12 +518,12 @@ class MaterialsKGService:
                 self._link_entities(
                     experiment_entity.id,
                     mode_entity.id,
-                    RelationType.USES_MODE,
+                    "uses_mode",
                     evidence_ids=[],
                 )
             if experiment.team_name:
                 team = self._ensure_entity(
-                    EntityKind.TEAM,
+                    "team",
                     experiment.team_name,
                     source_ref=provenance_ref,
                     upload_file=upload_file,
@@ -531,12 +531,12 @@ class MaterialsKGService:
                 self._link_entities(
                     experiment_entity.id,
                     team.id,
-                    RelationType.PERFORMED_BY,
+                    "performed_by",
                     evidence_ids=[],
                 )
             for equipment_name in experiment.equipment_names:
                 equipment = self._ensure_entity(
-                    EntityKind.EQUIPMENT,
+                    "equipment",
                     equipment_name,
                     source_ref=provenance_ref,
                     upload_file=upload_file,
@@ -544,12 +544,12 @@ class MaterialsKGService:
                 self._link_entities(
                     experiment_entity.id,
                     equipment.id,
-                    RelationType.USES_EQUIPMENT,
+                    "uses_equipment",
                     evidence_ids=[],
                 )
             if experiment.document_id:
                 document = self._ensure_entity(
-                    EntityKind.DOCUMENT,
+                    "document",
                     experiment.document_id,
                     entity_id=experiment.document_id,
                     aliases=[experiment.document_id],
@@ -559,7 +559,7 @@ class MaterialsKGService:
                 self._link_entities(
                     experiment_entity.id,
                     document.id,
-                    RelationType.DOCUMENTED_IN,
+                    "documented_in",
                     evidence_ids=[],
                 )
 
@@ -661,7 +661,7 @@ class MaterialsKGService:
         for document in batch:
             doc_src = document.source_ref or document.document_id
             document_entity = self._ensure_entity(
-                EntityKind.DOCUMENT,
+                "document",
                 document.title,
                 entity_id=document.document_id,
                 aliases=[document.document_id],
@@ -669,7 +669,7 @@ class MaterialsKGService:
                 properties=document.metadata,
             )
             source_tag = self._ensure_entity(
-                EntityKind.TAG,
+                "tag",
                 _SOURCE_DOCUMENT_TAG,
                 source_ref=doc_src,
             )
@@ -728,7 +728,7 @@ class MaterialsKGService:
                             name_to_id[ent.name] = entity.id
                             linked_entity_ids.append(entity.id)
                             llm_extracted_entity_names.add(
-                                (ent.kind.value, ent.name.lower().strip())
+                                (ent.kind, ent.name.lower().strip())
                             )
                             evidence = self._create_evidence(
                                 source_kind=SourceKind.DOCUMENT,
@@ -742,11 +742,11 @@ class MaterialsKGService:
                             pending_relations.append(Relation(
                                 id=_stable_id(
                                     "rel",
-                                    RelationType.REFERENCES.value,
+                                    "references",
                                     document_entity.id,
                                     entity.id,
                                 ),
-                                relation_type=RelationType.REFERENCES,
+                                relation_type="references",
                                 source_entity_id=document_entity.id,
                                 target_entity_id=entity.id,
                                 evidence_ids=[evidence.id],
@@ -810,7 +810,7 @@ class MaterialsKGService:
                             evidence = self._create_evidence(
                                 source_kind=SourceKind.DOCUMENT,
                                 source_id=doc_src,
-                                fragment=f"{rel.source} {relation_type.value} {rel.target}",
+                                fragment=f"{rel.source} {relation_type} {rel.target}",
                                 extraction_method=f"{extraction_method}_relationship",
                                 confidence=0.8,
                                 metadata=extraction_context,
@@ -819,7 +819,7 @@ class MaterialsKGService:
                             pending_relations.append(Relation(
                                 id=_stable_id(
                                     "rel",
-                                    relation_type.value,
+                                    relation_type,
                                     source_id,
                                     target_id,
                                 ),
@@ -848,17 +848,17 @@ class MaterialsKGService:
                     )
 
             for kind, values in (
-                (EntityKind.MATERIAL, document.material_names),
-                (EntityKind.MODE, document.mode_names),
-                (EntityKind.PROPERTY, document.property_names),
-                (EntityKind.EQUIPMENT, document.equipment_names),
-                (EntityKind.TEAM, document.team_names),
+                ("material", document.material_names),
+                ("mode", document.mode_names),
+                ("property", document.property_names),
+                ("equipment", document.equipment_names),
+                ("team", document.team_names),
             ):
                 for value in values:
                     entity = self._ensure_entity(kind, value, source_ref=doc_src)
                     linked_entity_ids.append(entity.id)
                     already_linked = (
-                        kind.value,
+                        kind,
                         value.lower().strip(),
                     ) in llm_extracted_entity_names
                     if not already_linked:
@@ -873,33 +873,33 @@ class MaterialsKGService:
                         pending_relations.append(Relation(
                             id=_stable_id(
                                 "rel",
-                                RelationType.REFERENCES.value,
+                                "references",
                                 document_entity.id,
                                 entity.id,
                             ),
-                            relation_type=RelationType.REFERENCES,
+                            relation_type="references",
                             source_entity_id=document_entity.id,
                             target_entity_id=entity.id,
                             evidence_ids=[evidence.id],
                         ))
             for tag_name in document.tag_names:
-                tag = self._ensure_entity(EntityKind.TAG, tag_name, source_ref=doc_src)
+                tag = self._ensure_entity("tag", tag_name, source_ref=doc_src)
                 linked_entity_ids.append(tag.id)
                 pending_relations.append(Relation(
                     id=_stable_id(
                         "rel",
-                        RelationType.TAGGED_WITH.value,
+                        "tagged_with",
                         document_entity.id,
                         tag.id,
                     ),
-                    relation_type=RelationType.TAGGED_WITH,
+                    relation_type="tagged_with",
                     source_entity_id=document_entity.id,
                     target_entity_id=tag.id,
                     evidence_ids=[],
                 ))
             for experiment_id in document.experiment_ids:
                 experiment_entity = self._ensure_entity(
-                    EntityKind.EXPERIMENT,
+                    "experiment",
                     experiment_id,
                     entity_id=experiment_id,
                     aliases=[experiment_id],
@@ -909,11 +909,11 @@ class MaterialsKGService:
                 pending_relations.append(Relation(
                     id=_stable_id(
                         "rel",
-                        RelationType.DOCUMENTED_IN.value,
+                        "documented_in",
                         experiment_entity.id,
                         document_entity.id,
                     ),
-                    relation_type=RelationType.DOCUMENTED_IN,
+                    relation_type="documented_in",
                     source_entity_id=experiment_entity.id,
                     target_entity_id=document_entity.id,
                     evidence_ids=[],
@@ -1032,7 +1032,7 @@ class MaterialsKGService:
             logger.info("Processing doc_src=%s document_id=%s title=%s", doc_src, document.document_id, document.title)
             try:
                 document_entity = self._ensure_entity(
-                    EntityKind.DOCUMENT,
+                    "document",
                     document.title,
                     entity_id=document.document_id,
                     aliases=[document.document_id],
@@ -1044,7 +1044,7 @@ class MaterialsKGService:
                 logger.exception("FAILED _ensure_entity for doc_src=%s document_id=%s", doc_src, document.document_id)
                 raise
             source_tag = self._ensure_entity(
-                EntityKind.TAG,
+                "tag",
                 _SOURCE_DOCUMENT_TAG,
                 source_ref=doc_src,
             )
@@ -1094,7 +1094,7 @@ class MaterialsKGService:
                             name_to_id[ent.name] = entity.id
                             linked_entity_ids.append(entity.id)
                             llm_extracted_entity_names.add(
-                                (ent.kind.value, ent.name.lower().strip())
+                                (ent.kind, ent.name.lower().strip())
                             )
                             evidence = self._create_evidence(
                                 source_kind=SourceKind.DOCUMENT,
@@ -1108,11 +1108,11 @@ class MaterialsKGService:
                             local_relations.append(Relation(
                                 id=_stable_id(
                                     "rel",
-                                    RelationType.REFERENCES.value,
+                                    "references",
                                     document_entity.id,
                                     entity.id,
                                 ),
-                                relation_type=RelationType.REFERENCES,
+                                relation_type="references",
                                 source_entity_id=document_entity.id,
                                 target_entity_id=entity.id,
                                 evidence_ids=[evidence.id],
@@ -1175,7 +1175,7 @@ class MaterialsKGService:
                             evidence = self._create_evidence(
                                 source_kind=SourceKind.DOCUMENT,
                                 source_id=doc_src,
-                                fragment=f"{rel.source} {relation_type.value} {rel.target}",
+                                fragment=f"{rel.source} {relation_type} {rel.target}",
                                 extraction_method=f"{extraction_method}_relationship",
                                 confidence=0.8,
                                 metadata=extraction_context,
@@ -1184,7 +1184,7 @@ class MaterialsKGService:
                             local_relations.append(Relation(
                                 id=_stable_id(
                                     "rel",
-                                    relation_type.value,
+                                    relation_type,
                                     source_id,
                                     target_id,
                                 ),
@@ -1213,17 +1213,17 @@ class MaterialsKGService:
                     )
 
             for kind, values in (
-                (EntityKind.MATERIAL, document.material_names),
-                (EntityKind.MODE, document.mode_names),
-                (EntityKind.PROPERTY, document.property_names),
-                (EntityKind.EQUIPMENT, document.equipment_names),
-                (EntityKind.TEAM, document.team_names),
+                ("material", document.material_names),
+                ("mode", document.mode_names),
+                ("property", document.property_names),
+                ("equipment", document.equipment_names),
+                ("team", document.team_names),
             ):
                 for value in values:
                     entity = self._ensure_entity(kind, value, source_ref=doc_src)
                     linked_entity_ids.append(entity.id)
                     already_linked = (
-                        kind.value,
+                        kind,
                         value.lower().strip(),
                     ) in llm_extracted_entity_names
                     if not already_linked:
@@ -1238,33 +1238,33 @@ class MaterialsKGService:
                         local_relations.append(Relation(
                             id=_stable_id(
                                 "rel",
-                                RelationType.REFERENCES.value,
+                                "references",
                                 document_entity.id,
                                 entity.id,
                             ),
-                            relation_type=RelationType.REFERENCES,
+                            relation_type="references",
                             source_entity_id=document_entity.id,
                             target_entity_id=entity.id,
                             evidence_ids=[evidence.id],
                         ))
             for tag_name in document.tag_names:
-                tag = self._ensure_entity(EntityKind.TAG, tag_name, source_ref=doc_src)
+                tag = self._ensure_entity("tag", tag_name, source_ref=doc_src)
                 linked_entity_ids.append(tag.id)
                 local_relations.append(Relation(
                     id=_stable_id(
                         "rel",
-                        RelationType.TAGGED_WITH.value,
+                        "tagged_with",
                         document_entity.id,
                         tag.id,
                     ),
-                    relation_type=RelationType.TAGGED_WITH,
+                    relation_type="tagged_with",
                     source_entity_id=document_entity.id,
                     target_entity_id=tag.id,
                     evidence_ids=[],
                 ))
             for experiment_id in document.experiment_ids:
                 experiment_entity = self._ensure_entity(
-                    EntityKind.EXPERIMENT,
+                    "experiment",
                     experiment_id,
                     entity_id=experiment_id,
                     aliases=[experiment_id],
@@ -1274,11 +1274,11 @@ class MaterialsKGService:
                 local_relations.append(Relation(
                     id=_stable_id(
                         "rel",
-                        RelationType.DOCUMENTED_IN.value,
+                        "documented_in",
                         experiment_entity.id,
                         document_entity.id,
                     ),
-                    relation_type=RelationType.DOCUMENTED_IN,
+                    relation_type="documented_in",
                     source_entity_id=experiment_entity.id,
                     target_entity_id=document_entity.id,
                     evidence_ids=[],
@@ -1514,13 +1514,13 @@ class MaterialsKGService:
         mode: str | None = None,
         property_name: str | None = None,
     ) -> MaterialModeQueryResult:
-        material_entity = self._require_entity(EntityKind.MATERIAL, material)
+        material_entity = self._require_entity("material", material)
         mode_entity = (
-            None if mode is None else self._require_entity(EntityKind.MODE, mode)
+            None if mode is None else self._require_entity("mode", mode)
         )
         property_entity = None
         if property_name is not None:
-            property_entity = self._require_entity(EntityKind.PROPERTY, property_name)
+            property_entity = self._require_entity("property", property_name)
         observations = self._repository.list_observations(
             material_id=material_entity.id
         )
@@ -1577,13 +1577,13 @@ class MaterialsKGService:
         filters: PropertyFilters | None = None,
     ) -> PropertyQueryResult:
         filters = filters or PropertyFilters()
-        property_entity = self._require_entity(EntityKind.PROPERTY, property_name)
+        property_entity = self._require_entity("property", property_name)
         observations = self._repository.list_observations(
             property_id=property_entity.id
         )
         if filters.material_name:
             material_entity = self._require_entity(
-                EntityKind.MATERIAL,
+                "material",
                 filters.material_name,
             )
             observations = [
@@ -1592,7 +1592,7 @@ class MaterialsKGService:
                 if observation.material_id == material_entity.id
             ]
         if filters.mode_name:
-            mode_entity = self._require_entity(EntityKind.MODE, filters.mode_name)
+            mode_entity = self._require_entity("mode", filters.mode_name)
             observations = [
                 observation
                 for observation in observations
@@ -1638,7 +1638,7 @@ class MaterialsKGService:
         self,
         entity: str,
         depth: int = 2,
-        relation_filters: list[RelationType] | None = None,
+        relation_filters: list[str] | None = None,
     ) -> RelatedEntitiesQueryResult:
         root = self._resolve_any_entity(entity)
         visited = {root.id}
@@ -1701,7 +1701,7 @@ class MaterialsKGService:
     ) -> DecisionHistoryQueryResult:
         root = self._resolve_any_entity(entity_or_experiment)
         traces = self._repository.list_decision_traces(entity_id=root.id)
-        if root.kind == EntityKind.EXPERIMENT:
+        if root.kind == "experiment":
             traces.extend(self._repository.list_decision_traces(experiment_id=root.id))
         deduped: dict[str, DecisionTrace] = {trace.id: trace for trace in traces}
         evidence_ids: list[str] = []
@@ -1729,11 +1729,11 @@ class MaterialsKGService:
             if scope is not None and rule.scope != scope:
                 continue
             materials = self._resolve_rule_entities(
-                EntityKind.MATERIAL, rule.material_names
+                "material", rule.material_names
             )
-            modes = self._resolve_rule_entities(EntityKind.MODE, rule.mode_names)
+            modes = self._resolve_rule_entities("mode", rule.mode_names)
             properties = self._resolve_rule_entities(
-                EntityKind.PROPERTY,
+                "property",
                 rule.property_names,
             )
             for material_entity in materials:
@@ -1836,19 +1836,19 @@ class MaterialsKGService:
         matched_entities = self._match_entities_from_question(question)
 
         material_entity = self._resolve_filter_entity(
-            EntityKind.MATERIAL,
+            "material",
             material,
             matched_entities,
             warnings,
         )
         mode_entity = self._resolve_filter_entity(
-            EntityKind.MODE,
+            "mode",
             mode,
             matched_entities,
             warnings,
         )
         property_entity = self._resolve_filter_entity(
-            EntityKind.PROPERTY,
+            "property",
             property_name,
             matched_entities,
             warnings,
@@ -2025,7 +2025,7 @@ class MaterialsKGService:
 
         entity_lookup = {
             entity.id: {
-                "kind": entity.kind.value,
+                "kind": entity.kind,
                 "canonical_name": entity.canonical_name,
                 "aliases": entity.aliases,
             }
@@ -2260,26 +2260,26 @@ class MaterialsKGService:
         )
         matched_entities = self._match_entities_from_question(lookup_text)
         material_entity = self._resolve_filter_entity(
-            EntityKind.MATERIAL,
+            "material",
             request.material,
             matched_entities,
             warnings,
         )
         mode_entity = self._resolve_filter_entity(
-            EntityKind.MODE,
+            "mode",
             request.mode,
             matched_entities,
             warnings,
         )
         property_entity = self._resolve_filter_entity(
-            EntityKind.PROPERTY,
+            "property",
             request.property_name,
             matched_entities,
             warnings,
         )
         if property_entity is None:
             property_entity = self._resolve_filter_entity(
-                EntityKind.PROPERTY,
+                "property",
                 request.target_kpi,
                 matched_entities,
                 warnings=[],
@@ -2793,7 +2793,7 @@ class MaterialsKGService:
                 {
                     "id": item.id,
                     "source_id": item.source_id,
-                    "source_kind": item.source_kind.value,
+                    "source_kind": item.source_kind,
                     "fragment": item.span.fragment or item.extraction_method,
                     "section": item.span.section,
                     "row_reference": item.span.row_reference,
@@ -2809,7 +2809,7 @@ class MaterialsKGService:
                 {
                     "id": hit.id,
                     "source_id": hit.source_entity_id,
-                    "source_kind": hit.source_kind.value,
+                    "source_kind": hit.source_kind,
                     "fragment": hit.content[:200],
                     "section": None,
                     "row_reference": None,
@@ -2854,7 +2854,7 @@ class MaterialsKGService:
             "nodes": [
                 {
                     "id": entity.id,
-                    "kind": entity.kind.value,
+                    "kind": entity.kind,
                     "name": entity.canonical_name,
                 }
                 for entity in entities
@@ -2862,7 +2862,7 @@ class MaterialsKGService:
             "edges": [
                 {
                     "id": relation.id,
-                    "type": relation.relation_type.value,
+                    "type": relation.relation_type,
                     "source": relation.source_entity_id,
                     "target": relation.target_entity_id,
                 }
@@ -2881,7 +2881,7 @@ class MaterialsKGService:
         )
         by_kind: dict[str, int] = {}
         for e in entities:
-            by_kind[e.kind.value] = by_kind.get(e.kind.value, 0) + 1
+            by_kind[e.kind] = by_kind.get(e.kind, 0) + 1
         source_files: set[str] = set()
         for e in entities:
             for ref in e.source_refs:
@@ -2917,15 +2917,15 @@ class MaterialsKGService:
     def get_suggested_questions(self) -> list[str]:
         """Suggest follow-up questions based on loaded data."""
         entities = self._repository.find_entities()
-        by_kind: dict[EntityKind, list[Entity]] = {}
+        by_kind: dict[str, list[Entity]] = {}
         for e in entities:
             by_kind.setdefault(e.kind, []).append(e)
         suggestions: list[str] = []
-        materials = by_kind.get(EntityKind.MATERIAL, [])
-        properties = by_kind.get(EntityKind.PROPERTY, [])
-        modes = by_kind.get(EntityKind.MODE, [])
-        teams = by_kind.get(EntityKind.TEAM, [])
-        equipment = by_kind.get(EntityKind.EQUIPMENT, [])
+        materials = by_kind.get("material", [])
+        properties = by_kind.get("property", [])
+        modes = by_kind.get("mode", [])
+        teams = by_kind.get("team", [])
+        equipment = by_kind.get("equipment", [])
         if materials and modes:
             m = materials[0]
             mo = modes[0]
@@ -2973,12 +2973,12 @@ class MaterialsKGService:
                     score = max(score, len(normalized_name))
             if score:
                 scored.append((score, entity))
-        scored.sort(key=lambda item: (item[0], item[1].kind.value), reverse=True)
+        scored.sort(key=lambda item: (item[0], item[1].kind), reverse=True)
         return [entity for _, entity in scored]
 
     def _resolve_filter_entity(
         self,
-        kind: EntityKind,
+        kind: str,
         explicit_name: str | None,
         matched_entities: list[Entity],
         warnings: list[str],
@@ -2987,7 +2987,7 @@ class MaterialsKGService:
             entity = self._repository.resolve_entity(kind, explicit_name)
             if entity is None:
                 warnings.append(
-                    f"Фильтр '{explicit_name}' не найден среди сущностей типа {kind.value}."
+                    f"Фильтр '{explicit_name}' не найден среди сущностей типа {kind}."
                 )
             return entity
         for entity in matched_entities:
@@ -3152,7 +3152,7 @@ class MaterialsKGService:
         """Construct an observation, its evidence, and relations without writing."""
         src = provenance_ref or experiment.source_ref or experiment.experiment_id
         property_entity = self._ensure_entity(
-            EntityKind.PROPERTY,
+            "property",
             observation_input.property_name,
             source_ref=src,
             upload_file=upload_file,
@@ -3193,11 +3193,11 @@ class MaterialsKGService:
         prop_relation = Relation(
             id=_stable_id(
                 "rel",
-                RelationType.MEASURES_PROPERTY.value,
+                "measures_property",
                 experiment_entity.id,
                 property_entity.id,
             ),
-            relation_type=RelationType.MEASURES_PROPERTY,
+            relation_type="measures_property",
             source_entity_id=experiment_entity.id,
             target_entity_id=property_entity.id,
             evidence_ids=[evidence.id],
@@ -3298,7 +3298,7 @@ class MaterialsKGService:
         return trace
 
     def _upsert_reference_entity(self, record: CanonicalEntityInput) -> Entity:
-        entity_id = record.canonical_id or _stable_id(record.kind.value, record.name)
+        entity_id = record.canonical_id or _stable_id(record.kind, record.name)
         source_refs: list[str] = []
         if record.source_ref:
             source_refs.append(record.source_ref)
@@ -3318,7 +3318,7 @@ class MaterialsKGService:
 
     def _ensure_entity(
         self,
-        kind: EntityKind,
+        kind: str,
         name: str,
         *,
         entity_id: str | None = None,
@@ -3347,7 +3347,7 @@ class MaterialsKGService:
             }
             return self._repository.upsert_entity(existing.model_copy(update=updates))
         entity = Entity(
-            id=entity_id or _stable_id(kind.value, name),
+            id=entity_id or _stable_id(kind, name),
             kind=kind,
             canonical_name=name,
             aliases=aliases or [],
@@ -3375,7 +3375,7 @@ class MaterialsKGService:
         evidence = Evidence(
             id=_stable_id(
                 "evidence",
-                source_kind.value,
+                source_kind,
                 source_id,
                 fragment,
                 extraction_method,
@@ -3395,7 +3395,7 @@ class MaterialsKGService:
         self,
         source_entity_id: str,
         target_entity_id: str,
-        relation_type: RelationType,
+        relation_type: str,
         *,
         evidence_ids: list[str],
         properties: dict[str, Any] | None = None,
@@ -3403,7 +3403,7 @@ class MaterialsKGService:
         relation = Relation(
             id=_stable_id(
                 "rel",
-                relation_type.value,
+                relation_type,
                 source_entity_id,
                 target_entity_id,
             ),
@@ -3417,7 +3417,7 @@ class MaterialsKGService:
 
     def _resolve_rule_entities(
         self,
-        kind: EntityKind,
+        kind: str,
         names: list[str],
     ) -> list[Entity]:
         entities: list[Entity] = []
@@ -3427,17 +3427,17 @@ class MaterialsKGService:
                 entities.append(entity)
         return entities
 
-    def _require_entity(self, kind: EntityKind, raw_name: str) -> Entity:
+    def _require_entity(self, kind: str, raw_name: str) -> Entity:
         entity = self._repository.resolve_entity(kind, raw_name)
         if entity is None:
-            raise ValueError(f"{kind.value.title()} '{raw_name}' not found")
+            raise ValueError(f"{kind.title()} '{raw_name}' not found")
         return entity
 
     def _resolve_any_entity(self, raw_name: str) -> Entity:
         entity = self._repository.get_entity(raw_name)
         if entity is not None:
             return entity
-        for kind in EntityKind:
+        for kind in ("material", "experiment", "property", "mode", "equipment", "team", "document", "tag"):
             entity = self._repository.resolve_entity(kind, raw_name)
             if entity is not None:
                 return entity

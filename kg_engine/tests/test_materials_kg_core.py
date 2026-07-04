@@ -5,7 +5,6 @@ import asyncio
 from kg_engine.domain.models import CanonicalEntityInput
 from kg_engine.domain.models import CoverageRuleInput
 from kg_engine.domain.models import DocumentInput
-from kg_engine.domain.models import EntityKind
 from kg_engine.domain.models import ExperimentInput
 from kg_engine.domain.models import FindingInput
 from kg_engine.domain.models import HypothesisInput
@@ -29,7 +28,7 @@ def test_graph_data_matches_relative_filter_to_absolute_source_path() -> None:
         ReferenceDataBatch(
             entities=[
                 CanonicalEntityInput(
-                    kind=EntityKind.DOCUMENT,
+                    kind="document",
                     name="Регламент 1.png",
                     canonical_id="doc_abs",
                     source_ref="/app/Задача 1/Регламенты/Регламент 1.png",
@@ -52,12 +51,12 @@ def test_graph_data_without_source_filter_returns_all_entities() -> None:
         ReferenceDataBatch(
             entities=[
                 CanonicalEntityInput(
-                    kind=EntityKind.MATERIAL,
+                    kind="material",
                     name="CuCrZr",
                     canonical_id="mat_cucrzr",
                 ),
                 CanonicalEntityInput(
-                    kind=EntityKind.PROPERTY,
+                    kind="property",
                     name="Conductivity",
                     canonical_id="prop_conductivity",
                 ),
@@ -79,17 +78,17 @@ def test_reference_resolution_handles_aliases_and_noisy_names() -> None:
         ReferenceDataBatch(
             entities=[
                 CanonicalEntityInput(
-                    kind=EntityKind.MATERIAL,
+                    kind="material",
                     name="Ti-6Al-4V",
                     aliases=["Ti6Al4V", "ti 6al 4v"],
                 ),
                 CanonicalEntityInput(
-                    kind=EntityKind.MODE,
+                    kind="mode",
                     name="Annealing",
                     aliases=["anneal", "annealing"],
                 ),
                 CanonicalEntityInput(
-                    kind=EntityKind.PROPERTY,
+                    kind="property",
                     name="Hardness",
                     aliases=["hardness", "твердость"],
                 ),
@@ -127,10 +126,10 @@ def test_relation_and_observation_preserve_provenance_and_units() -> None:
     service.ingest_reference_data(
         ReferenceDataBatch(
             entities=[
-                CanonicalEntityInput(kind=EntityKind.MATERIAL, name="IN718"),
-                CanonicalEntityInput(kind=EntityKind.MODE, name="Aging"),
+                CanonicalEntityInput(kind="material", name="IN718"),
+                CanonicalEntityInput(kind="mode", name="Aging"),
                 CanonicalEntityInput(
-                    kind=EntityKind.PROPERTY,
+                    kind="property",
                     name="Yield strength",
                     aliases=["yield_strength"],
                 ),
@@ -175,11 +174,11 @@ def test_gap_analysis_uses_coverage_rules_instead_of_cartesian_noise() -> None:
     service.ingest_reference_data(
         ReferenceDataBatch(
             entities=[
-                CanonicalEntityInput(kind=EntityKind.MATERIAL, name="Ti-6Al-4V"),
-                CanonicalEntityInput(kind=EntityKind.MODE, name="Annealing"),
-                CanonicalEntityInput(kind=EntityKind.PROPERTY, name="Hardness"),
+                CanonicalEntityInput(kind="material", name="Ti-6Al-4V"),
+                CanonicalEntityInput(kind="mode", name="Annealing"),
+                CanonicalEntityInput(kind="property", name="Hardness"),
                 CanonicalEntityInput(
-                    kind=EntityKind.PROPERTY,
+                    kind="property",
                     name="Tensile strength",
                 ),
             ],
@@ -223,10 +222,10 @@ def test_material_mode_query_returns_experiments_findings_and_evidence_paths() -
     service.ingest_reference_data(
         ReferenceDataBatch(
             entities=[
-                CanonicalEntityInput(kind=EntityKind.MATERIAL, name="Al6061"),
-                CanonicalEntityInput(kind=EntityKind.MODE, name="Solution treatment"),
+                CanonicalEntityInput(kind="material", name="Al6061"),
+                CanonicalEntityInput(kind="mode", name="Solution treatment"),
                 CanonicalEntityInput(
-                    kind=EntityKind.PROPERTY,
+                    kind="property",
                     name="Tensile strength",
                 ),
             ]
@@ -283,7 +282,7 @@ def test_incremental_reingestion_does_not_duplicate_canonical_entities() -> None
     service = build_service()
     service.ingest_reference_data(
         ReferenceDataBatch(
-            entities=[CanonicalEntityInput(kind=EntityKind.MATERIAL, name="WC-Co")]
+            entities=[CanonicalEntityInput(kind="material", name="WC-Co")]
         )
     )
     batch = [
@@ -312,7 +311,7 @@ def test_query_related_accepts_canonical_entity_id() -> None:
         ReferenceDataBatch(
             entities=[
                 CanonicalEntityInput(
-                    kind=EntityKind.MATERIAL,
+                    kind="material",
                     name="CuCrZr",
                     canonical_id="mat-cucrzr",
                 )
@@ -349,11 +348,11 @@ def test_hypothesis_factory_generates_ranked_graph_grounded_candidates() -> None
     service.ingest_reference_data(
         ReferenceDataBatch(
             entities=[
-                CanonicalEntityInput(kind=EntityKind.MATERIAL, name="CuCrZr"),
-                CanonicalEntityInput(kind=EntityKind.MODE, name="Solution Treated"),
-                CanonicalEntityInput(kind=EntityKind.MODE, name="Aged"),
+                CanonicalEntityInput(kind="material", name="CuCrZr"),
+                CanonicalEntityInput(kind="mode", name="Solution Treated"),
+                CanonicalEntityInput(kind="mode", name="Aged"),
                 CanonicalEntityInput(
-                    kind=EntityKind.PROPERTY,
+                    kind="property",
                     name="Electrical Conductivity",
                 ),
             ],
@@ -457,10 +456,10 @@ class TestSourceGrounding:
         service.ingest_reference_data(
             ReferenceDataBatch(
                 entities=[
-                    CanonicalEntityInput(kind=EntityKind.MATERIAL, name="Ti-6Al-4V"),
-                    CanonicalEntityInput(kind=EntityKind.MODE, name="Annealing"),
+                    CanonicalEntityInput(kind="material", name="Ti-6Al-4V"),
+                    CanonicalEntityInput(kind="mode", name="Annealing"),
                     CanonicalEntityInput(
-                        kind=EntityKind.PROPERTY,
+                        kind="property",
                         name="Hardness",
                         aliases=["hardness", "твердость"],
                     ),
@@ -608,12 +607,12 @@ class TestSourceIdsIsolation:
         service.ingest_reference_data(
             ReferenceDataBatch(
                 entities=[
-                    CanonicalEntityInput(kind=EntityKind.MATERIAL, name="Material-A"),
-                    CanonicalEntityInput(kind=EntityKind.PROPERTY, name="KPI-A"),
-                    CanonicalEntityInput(kind=EntityKind.MODE, name="Mode-A"),
-                    CanonicalEntityInput(kind=EntityKind.MATERIAL, name="Material-B"),
-                    CanonicalEntityInput(kind=EntityKind.PROPERTY, name="KPI-B"),
-                    CanonicalEntityInput(kind=EntityKind.MODE, name="Mode-B"),
+                    CanonicalEntityInput(kind="material", name="Material-A"),
+                    CanonicalEntityInput(kind="property", name="KPI-A"),
+                    CanonicalEntityInput(kind="mode", name="Mode-A"),
+                    CanonicalEntityInput(kind="material", name="Material-B"),
+                    CanonicalEntityInput(kind="property", name="KPI-B"),
+                    CanonicalEntityInput(kind="mode", name="Mode-B"),
                 ],
                 coverage_rules=[
                     CoverageRuleInput(
@@ -827,7 +826,7 @@ class TestSourceIdsIsolation:
             all_supporting.update(hyp.supporting_evidence_ids)
             all_supporting.update(hyp.supporting_observation_ids)
         material_b_entity = service._repository.resolve_entity(  # noqa: SLF001
-            EntityKind.MATERIAL, "Material-B"
+            "material", "Material-B"
         )
         if material_b_entity:
             assert material_b_entity.id not in all_supporting
@@ -883,9 +882,9 @@ class TestExpertAdjustments:
         service.ingest_reference_data(
             ReferenceDataBatch(
                 entities=[
-                    CanonicalEntityInput(kind=EntityKind.MATERIAL, name="TestMat"),
-                    CanonicalEntityInput(kind=EntityKind.MODE, name="TestMode"),
-                    CanonicalEntityInput(kind=EntityKind.PROPERTY, name="TestKPI"),
+                    CanonicalEntityInput(kind="material", name="TestMat"),
+                    CanonicalEntityInput(kind="mode", name="TestMode"),
+                    CanonicalEntityInput(kind="property", name="TestKPI"),
                 ],
                 coverage_rules=[
                     CoverageRuleInput(
@@ -939,9 +938,9 @@ class TestExpertAdjustments:
         service.ingest_reference_data(
             ReferenceDataBatch(
                 entities=[
-                    CanonicalEntityInput(kind=EntityKind.MATERIAL, name="TestMat"),
-                    CanonicalEntityInput(kind=EntityKind.MODE, name="TestMode"),
-                    CanonicalEntityInput(kind=EntityKind.PROPERTY, name="TestKPI"),
+                    CanonicalEntityInput(kind="material", name="TestMat"),
+                    CanonicalEntityInput(kind="mode", name="TestMode"),
+                    CanonicalEntityInput(kind="property", name="TestKPI"),
                 ],
                 coverage_rules=[
                     CoverageRuleInput(
@@ -995,9 +994,9 @@ class TestExpertAdjustments:
         service.ingest_reference_data(
             ReferenceDataBatch(
                 entities=[
-                    CanonicalEntityInput(kind=EntityKind.MATERIAL, name="TestMat"),
-                    CanonicalEntityInput(kind=EntityKind.MODE, name="TestMode"),
-                    CanonicalEntityInput(kind=EntityKind.PROPERTY, name="TestKPI"),
+                    CanonicalEntityInput(kind="material", name="TestMat"),
+                    CanonicalEntityInput(kind="mode", name="TestMode"),
+                    CanonicalEntityInput(kind="property", name="TestKPI"),
                 ],
             )
         )

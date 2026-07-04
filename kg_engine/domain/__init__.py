@@ -8,7 +8,6 @@ from kg_engine.domain.models import DecisionTrace
 from kg_engine.domain.models import DocumentExtractionResult
 from kg_engine.domain.models import DocumentInput
 from kg_engine.domain.models import Entity
-from kg_engine.domain.models import EntityKind
 from kg_engine.domain.models import Evidence
 from kg_engine.domain.models import EvidencePath
 from kg_engine.domain.models import ExperimentInput
@@ -22,11 +21,9 @@ from kg_engine.domain.models import ObservationInput
 from kg_engine.domain.models import PropertyFilters
 from kg_engine.domain.models import PropertyQueryResult
 from kg_engine.domain.models import QueryFilters
-from kg_engine.domain.models import RELATION_TYPE_MAP
 from kg_engine.domain.models import ReferenceDataBatch
 from kg_engine.domain.models import RelatedEntitiesQueryResult
 from kg_engine.domain.models import Relation
-from kg_engine.domain.models import RelationType
 from kg_engine.domain.models import SearchTextUnit
 from kg_engine.domain.models import SourceKind
 from kg_engine.domain.models import SourceSpan
@@ -43,7 +40,6 @@ __all__ = [
     "DocumentExtractionResult",
     "DocumentInput",
     "Entity",
-    "EntityKind",
     "Evidence",
     "EvidencePath",
     "ExperimentInput",
@@ -57,12 +53,10 @@ __all__ = [
     "PropertyFilters",
     "PropertyQueryResult",
     "QueryFilters",
-    "RELATION_TYPE_MAP",
     "ReferenceDataBatch",
     "ReferenceResolver",
     "RelatedEntitiesQueryResult",
     "Relation",
-    "RelationType",
     "SearchTextUnit",
     "SourceKind",
     "SourceSpan",

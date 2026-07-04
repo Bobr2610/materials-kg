@@ -11,11 +11,9 @@ from typing import Any
 from kg_engine.domain.models import CoverageRuleInput
 from kg_engine.domain.models import DecisionTrace
 from kg_engine.domain.models import Entity
-from kg_engine.domain.models import EntityKind
 from kg_engine.domain.models import Evidence
 from kg_engine.domain.models import Observation
 from kg_engine.domain.models import Relation
-from kg_engine.domain.models import RelationType
 from kg_engine.domain.models import SearchTextUnit
 from kg_engine.domain.models import SourceSpan
 from kg_engine.domain.resolution import normalize_name
@@ -121,7 +119,7 @@ class Neo4jMaterialsKGRepository:
     def find_entities(
         self,
         *,
-        kind: EntityKind | None = None,
+        kind: str | None = None,
         name: str | None = None,
         ids: list[str] | None = None,
     ) -> list[Entity]:
@@ -129,7 +127,7 @@ class Neo4jMaterialsKGRepository:
         params: dict[str, Any] = {}
         if kind is not None:
             where_clauses.append("n.kind = $kind")
-            params["kind"] = kind.value
+            params["kind"] = kind
         if ids is not None:
             where_clauses.append("n.id IN $ids")
             params["ids"] = ids
@@ -148,7 +146,7 @@ class Neo4jMaterialsKGRepository:
             ]
         return entities
 
-    def resolve_entity(self, kind: EntityKind, raw_name: str) -> Entity | None:
+    def resolve_entity(self, kind: str, raw_name: str) -> Entity | None:
         normalized = normalize_name(raw_name)
         rows = self._run(
             """
@@ -158,7 +156,7 @@ class Neo4jMaterialsKGRepository:
             RETURN n
             LIMIT 1
             """,
-            {"kind": kind.value, "normalized": normalized},
+            {"kind": kind, "normalized": normalized},
         )
         if rows:
             return self._node_to_entity(rows[0]["n"])
@@ -235,7 +233,7 @@ class Neo4jMaterialsKGRepository:
         self,
         *,
         entity_id: str | None = None,
-        relation_types: list[RelationType] | None = None,
+        relation_types: list[str] | None = None,
     ) -> list[Relation]:
         if entity_id is None:
             query = "MATCH (s:Entity)-[r:KG_RELATION]->(t:Entity) RETURN r, s.id AS source_id, t.id AS target_id"
@@ -614,7 +612,7 @@ class Neo4jMaterialsKGRepository:
         return _neo4j_properties(
             {
                 **_jsonable(entity.model_dump(mode="json")),
-                "kind": entity.kind.value,
+                "kind": entity.kind,
                 "normalized_name": normalize_name(entity.canonical_name),
                 "normalized_aliases": [
                     normalize_name(alias) for alias in entity.aliases

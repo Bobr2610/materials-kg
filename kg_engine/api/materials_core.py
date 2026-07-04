@@ -31,7 +31,6 @@ from kg_engine.domain.models import HypothesisInput
 from kg_engine.domain.models import PropertyFilters
 from kg_engine.domain.models import QueryFilters
 from kg_engine.domain.models import ReferenceDataBatch
-from kg_engine.domain.models import RelationType
 from kg_engine.domain.product import Constraint
 from kg_engine.domain.product import HypothesisRun
 from kg_engine.domain.product import ExpertReview
@@ -1942,7 +1941,7 @@ def create_materials_app(
     @app.post("/query/related")
     def query_related(request: RelatedQueryRequest) -> dict:
         relation_filters = (
-            [RelationType(item) for item in request.relation_filters]
+            [str(item) for item in request.relation_filters]
             if request.relation_filters
             else None
         )

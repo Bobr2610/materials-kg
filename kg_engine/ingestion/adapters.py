@@ -8,7 +8,6 @@ from typing import Any
 from kg_engine.domain.models import CanonicalEntityInput
 from kg_engine.domain.models import CoverageRuleInput
 from kg_engine.domain.models import DocumentInput
-from kg_engine.domain.models import EntityKind
 from kg_engine.domain.models import ExperimentInput
 from kg_engine.domain.models import FindingInput
 from kg_engine.domain.models import ObservationInput
@@ -95,22 +94,18 @@ def _record_list(payload: Any, *keys: str) -> list[dict[str, Any]]:
     return []
 
 
-def _entity_kind(value: Any) -> EntityKind | None:
-    if isinstance(value, EntityKind):
-        return value
-    if not isinstance(value, str):
-        return None
-    normalized = value.strip().lower()
-    try:
-        return EntityKind(normalized)
-    except ValueError:
-        return None
+def _entity_kind(value: Any) -> str | None:
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized:
+            return normalized
+    return None
 
 
 def _entity_from_item(
     item: dict[str, Any],
     *,
-    default_kind: EntityKind | None = None,
+    default_kind: str | None = None,
 ) -> CanonicalEntityInput | None:
     kind = _entity_kind(_first(item, "kind", "entity_kind", "type")) or default_kind
     name = _first(item, "name", "title", "label", "canonical_name")
@@ -167,13 +162,13 @@ class ReferenceDataAdapter:
             if entity is not None:
                 entities.append(entity)
         for section, entity_kind in (
-            ("materials", EntityKind.MATERIAL),
-            ("equipment", EntityKind.EQUIPMENT),
-            ("properties", EntityKind.PROPERTY),
-            ("modes", EntityKind.MODE),
-            ("teams", EntityKind.TEAM),
-            ("documents", EntityKind.DOCUMENT),
-            ("tags", EntityKind.TAG),
+            ("materials", "material"),
+            ("equipment", "equipment"),
+            ("properties", "property"),
+            ("modes", "mode"),
+            ("teams", "team"),
+            ("documents", "document"),
+            ("tags", "tag"),
         ):
             for item in _record_list(payload.get(section), section):
                 entity = _entity_from_item(item, default_kind=entity_kind)
@@ -447,7 +442,7 @@ class StaffDirectoryAdapter:
     def from_payload(self, payload: Any) -> ReferenceDataBatch:
         entities = [
             CanonicalEntityInput(
-                kind=EntityKind.TEAM,
+                kind="team",
                 name=_first(item, "name", "team", "lab", "laboratory"),
                 canonical_id=_first(item, "canonical_id", "id", "code"),
                 aliases=_as_list(item.get("aliases")),
@@ -469,7 +464,7 @@ class TagCatalogAdapter:
     def from_payload(self, payload: Any) -> ReferenceDataBatch:
         entities = [
             CanonicalEntityInput(
-                kind=EntityKind.TAG,
+                kind="tag",
                 name=_first(item, "name", "tag", "label"),
                 canonical_id=_first(item, "canonical_id", "id", "code"),
                 aliases=_as_list(item.get("aliases")),
