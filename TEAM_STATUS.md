@@ -116,6 +116,7 @@
 | ML / Ingestion | Codex | OCR-first PDF parsing и оптимизация LLM-токенов | Добавлен локальный Tesseract `eng+rus`, OCR-first routing с selective VLM fallback, удаление placeholder/duplicate noise, token telemetry; 148 tests passed, Docker OCR confidence 0.903, health OK | 2026-07-04 |
 | ML / LLM / QA | Codex | Полный OpenRouter E2E прогон | 22/22 файлов обработаны через OpenRouter:free; Neo4j 164 entities, 53 observations, 193 relations, 197 evidence; исправлен LangChain `bind_tools` bridge, Deep Agents tool loop завершён, anti-hallucination отбросил ungrounded result; 149 tests passed | 2026-07-04 |
 | ML / NLP / Knowledge Graphs | Codex | OpenRouter cascade и Deep Agents tool-call bridge | Добавлен bridge для tool-calls/assistant messages в agent chat model, сохранена совместимость с OpenRouter/Generic provider, добавлен regression test для tool-call round-trip; pytest 149 passed | 2026-07-04 |
+| Product / UI | Codex | Hide disabled delete controls and remove chat recommendations | `/state` теперь отдает `destructive_api_enabled`; UI скрывает disabled delete controls, не вызывает destructive DELETE при выключенном API и больше не рендерит нижние рекомендации; targeted smoke 15 passed, визуальная проверка localhost OK | 2026-07-04 |
 
 ---
 

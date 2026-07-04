@@ -4,7 +4,8 @@ var state = {
   sourceFilter: "",
   sourceLimit: UI_CONFIG.sourcePageSize,
   total: 0,
-  overview: null
+  overview: null,
+  destructiveApiEnabled: false
 };
 
 function $(id) {
@@ -79,10 +80,6 @@ async function ask() {
     if (sourceIds) payload.source_ids = sourceIds;
     const data = await postJson(UI_CONFIG.endpoints.queryAnswer, payload);
     renderAnswer(data);
-    if (data.citations?.length) {
-      const suggestions = await fetch(UI_CONFIG.endpoints.sourceSuggestions).then(r => r.json()).catch(() => []);
-      if (suggestions.length) renderSuggestions(suggestions);
-    }
   } catch(e) {
     addMsg("assistant", '<div class="bubble error">' + escapeHtml(e.message) + "</div>");
   } finally {
@@ -94,7 +91,12 @@ function clearChat() {
   $("menuPopover").classList.remove("open");
   $("chatBody").innerHTML =
     '<div class="hero" id="hero"><div class="hero-inner"><div class="hero-icon">&#9883;</div><h1>Фабрика гипотез</h1><p id="notebookMeta">Добавьте источники слева и задавайте вопросы в чате. Граф знаний строится только из загруженных данных.</p></div></div>';
-  if ($("suggestions")) $("suggestions").innerHTML = "";
+}
+
+function syncDestructiveActions() {
+  const clearAll = $("clearAllSources");
+  if (!clearAll) return;
+  clearAll.hidden = !state.destructiveApiEnabled;
 }
 
 async function loadInitialState() {
@@ -102,11 +104,12 @@ async function loadInitialState() {
     const r = await fetch(UI_CONFIG.endpoints.state);
     if (!r.ok) return;
     const data = await r.json();
+    state.destructiveApiEnabled = Boolean(data.destructive_api_enabled);
+    syncDestructiveActions();
     if (data.overview) state.overview = data.overview;
     if (data.source_files?.length) {
       mergeFiles(data.source_files);
       renderSourceList();
-      if (data.suggested_questions?.length) renderSuggestions(data.suggested_questions);
     } else {
       state.files = [];
       state.selected.clear();
@@ -162,6 +165,7 @@ function registerEventListeners() {
 
 document.addEventListener("DOMContentLoaded", () => {
   registerEventListeners();
+  syncDestructiveActions();
   buildLegend();
   loadInitialState();
 });

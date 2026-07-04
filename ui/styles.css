@@ -332,7 +332,6 @@
       .composer-wrap { padding: 8px 12px 14px; }
       .composer { grid-template-columns: minmax(0, 1fr) 40px; border-radius: 18px; }
       .composer .src-label { display: none; }
-      .suggestions { padding: 8px 14px; overflow: hidden; }
     }
     .menu-popover {
       display: none;
@@ -552,22 +551,6 @@
     }
     .cite-item:last-child { border-bottom: 0; }
     .cite-item b { color: #202124; }
-    .suggestions {
-      display: flex; flex-wrap: wrap; gap: 6px;
-      padding: 8px 20px;
-      min-width: 0;
-    }
-    .suggestion {
-      height: 30px; padding: 0 12px;
-      border: 1px solid #dadce0; border-radius: 15px;
-      background: #fff; font-size: 12px; color: #5f6368;
-      display: inline-flex; align-items: center;
-      cursor: pointer; white-space: nowrap;
-      max-width: 100%;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-    .suggestion:hover { background: #f1f3f4; border-color: #1a73e8; color: #1a73e8; }
     .overview-card {
       border: 1px solid #e8eaed; border-radius: 14px;
       padding: 14px 16px; background: #fafbff;

@@ -102,6 +102,10 @@ def test_materials_api_health_and_ingest_query_flow() -> None:
     assert body["material"]["canonical_name"] == "Ti-6Al-4V"
     assert len(body["observations"]) == 1
 
+    state = client.get("/state")
+    assert state.status_code == 200
+    assert state.json()["destructive_api_enabled"] is False
+
 
 def test_ingest_url_downloads_and_ingests_document(monkeypatch) -> None:
     async def fake_download(url: str, max_bytes: int) -> tuple[bytes, str | None]:
@@ -205,23 +209,17 @@ def test_dashboard_and_sample_data_flow() -> None:
     assert '<script src="/ui/config.js"></script>' in dashboard.text
     assert '<script src="/ui/main.js"></script>' in dashboard.text
     assert '<script src="/ui/graph.js"></script>' in dashboard.text
-    assert 'id="collapseSources"' in dashboard.text
-    assert 'id="restoreSources"' in dashboard.text
     assert 'id="menuButton"' in dashboard.text
     assert 'id="graphToggle"' in dashboard.text
     assert 'id="graphPanel"' in dashboard.text
     assert 'id="graphVis"' in dashboard.text
     assert 'id="clearAllSources"' in dashboard.text
+    assert 'id="suggestions"' not in dashboard.text
     assert 'id="loadTaskMaterials"' in dashboard.text
-    assert 'id="exportHypothesesJson"' in dashboard.text
-    assert 'id="exportHypothesesCsv"' in dashboard.text
     assert 'id="clearChat"' in dashboard.text
     assert 'id="sourceSearch"' in dashboard.text
     assert 'id="sourceSummary"' in dashboard.text
     assert 'id="sourceNote"' in dashboard.text
-    assert 'id="hypothesisPanel"' in dashboard.text
-    assert 'id="targetKpi"' in dashboard.text
-    assert 'id="generateHypotheses"' in dashboard.text
     assert dashboard.text.index('id="graphPanel"') > dashboard.text.index("</section>")
 
     static_assets = {
@@ -229,7 +227,7 @@ def test_dashboard_and_sample_data_flow() -> None:
         "/ui/config.js": "/graph/data",
         "/ui/main.js": "loadInitialState",
         "/ui/api.js": "postJson",
-        "/ui/sources.js": "async function clearAllSources",
+        "/ui/sources.js": "state.destructiveApiEnabled",
         "/ui/hypotheses.js": "renderHypotheses",
         "/ui/graph.js": "async function loadGraph",
         "/ui/text.ru.js": "graphEmpty",
@@ -246,6 +244,14 @@ def test_dashboard_and_sample_data_flow() -> None:
     assert "/metrics/feedback" in config
     assert "uploadBatchSize" in config
     assert "supportedTypes" in config
+
+    main_js = client.get("/ui/main.js").text
+    assert "destructive_api_enabled" in main_js
+    assert "syncDestructiveActions" in main_js
+
+    sources_js = client.get("/ui/sources.js").text
+    assert "if (!state.destructiveApiEnabled) return;" in sources_js
+    assert "renderSuggestions" not in sources_js
 
     graph_js = client.get("/ui/graph.js").text
     assert "new vis.Network" in graph_js

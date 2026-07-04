@@ -79,10 +79,13 @@ function renderSourceList() {
     const t = sourceType(f);
     const checked = state.selected.has(f.name) ? " checked" : "";
     const muted = checked ? "" : " is-muted";
+    const deleteButton = state.destructiveApiEnabled
+      ? '<button class="source-delete" data-name="' + escapeHtml(f.name) + '" title="Удалить из базы">&times;</button>'
+      : "";
     return '<div class="source-row' + muted + '"><input type="checkbox" class="source-check"' + checked + ' data-name="' + escapeHtml(f.name) + '">' +
       '<div class="source-icon ' + t + '">' + t.toUpperCase() + "</div>" +
       '<div class="source-info"><b title="' + escapeHtml(f.name) + '">' + escapeHtml(f.name) + "</b><span>" + formatSize(f.size) + "</span></div>" +
-      '<button class="source-delete" data-name="' + escapeHtml(f.name) + '" title="Удалить из базы">&times;</button></div>';
+      deleteButton + "</div>";
   }).join("") + (filtered.length > visible.length
     ? '<button class="source-more" id="showMoreSources" type="button">Показать ещё ' + Math.min(UI_CONFIG.sourcePageSize, filtered.length - visible.length) + '</button>'
     : "");
@@ -98,25 +101,6 @@ function renderSources(uploadResult, options = {}) {
   if (uploaded.length) mergeFiles(uploaded);
   if (uploadResult.overview) state.overview = uploadResult.overview;
   renderSourceList();
-  if (uploadResult.suggested_questions?.length) {
-    renderSuggestions(uploadResult.suggested_questions);
-  }
-}
-
-function renderSuggestions(questions) {
-  if (!state.total) {
-    $("suggestions").innerHTML = "";
-    return;
-  }
-  $("suggestions").innerHTML = questions.map(q =>
-    '<button class="suggestion" type="button">' + escapeHtml(q) + "</button>"
-  ).join("");
-  document.querySelectorAll(".suggestion").forEach(btn => {
-    btn.addEventListener("click", () => {
-      $("question").value = btn.textContent;
-      ask();
-    });
-  });
 }
 
 function setUploadProgress(done, total, label) {
@@ -135,7 +119,6 @@ async function uploadFiles(files) {
   setUploadProgress(0, files.length, "Подготовка " + formatCount(files.length, "файл", "файла", "файлов"));
   const totals = { entities: 0, experiments: 0, documents: 0, llmStructured: 0, llmExtracted: 0, fallback: 0 };
   let lastOverview = null;
-  let lastQuestions = [];
   let uploadedCount = 0;
   try {
     for (let offset = 0; offset < files.length; offset += UI_CONFIG.uploadBatchSize) {
@@ -154,7 +137,6 @@ async function uploadFiles(files) {
       totals.fallback += data.ingestion?.searchable_fallback_files?.length || 0;
       totals.llmExtracted += data.documents?.llm_extracted_experiments || 0;
       lastOverview = data.overview || lastOverview;
-      lastQuestions = data.suggested_questions || lastQuestions;
       renderSources(data, { notify: false });
       setUploadProgress(uploadedCount, files.length, "Загружено " + uploadedCount + " из " + files.length);
       await new Promise(resolve => setTimeout(resolve, 0));
@@ -166,7 +148,6 @@ async function uploadFiles(files) {
     if (totals.llmStructured) counts.push("ИИ-нормализация: " + totals.llmStructured);
     if (totals.llmExtracted) counts.push("ИИ-извлечение: " + totals.llmExtracted);
     if (totals.fallback) counts.push("fallback: " + totals.fallback + " (ИИ не вернула структуру)");
-    if (lastQuestions.length) renderSuggestions(lastQuestions);
     addMsg("assistant", '<div class="bubble">Готово: ' + formatCount(files.length, "файл", "файла", "файлов") + ". " + (counts.join(", ") || UI_TEXT.filesAccepted) + ".</div>");
     refreshGraphIfOpen();
   } catch(e) {
@@ -221,6 +202,7 @@ async function loadTaskMaterials() {
 }
 
 async function deleteSource(name) {
+  if (!state.destructiveApiEnabled) return;
   try {
     const r = await fetch(UI_CONFIG.endpoints.sourceDeleteBase + encodeURIComponent(name), { method: "DELETE" });
     if (!r.ok) throw new Error(await r.text() || r.statusText);
@@ -238,6 +220,10 @@ async function deleteSource(name) {
 }
 
 async function clearAllSources() {
+  if (!state.destructiveApiEnabled) {
+    $("menuPopover").classList.remove("open");
+    return;
+  }
   try {
     const r = await fetch(UI_CONFIG.endpoints.sources, { method: "DELETE" });
     if (!r.ok) throw new Error(await r.text() || r.statusText);
@@ -256,7 +242,6 @@ async function clearAllSources() {
   renderSourceList();
     addMsg("assistant", '<div class="bubble">' + UI_TEXT.allSourcesRemoved + "</div>");
     refreshGraphIfOpen();
-    if (data.suggested_questions?.length) renderSuggestions(data.suggested_questions);
   } catch(e) {
     addMsg("assistant", '<div class="bubble error">' + escapeHtml(e.message) + "</div>");
   }

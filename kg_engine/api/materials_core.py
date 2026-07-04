@@ -1406,6 +1406,9 @@ def create_materials_app(
         return {
             "source_files": list(_source_files),
             "overview": overview,
+            "destructive_api_enabled": bool(
+                getattr(runtime_settings, "materials_enable_destructive_api", False)
+            ),
             "suggested_questions": runtime_service.get_suggested_questions(),
         }
 
