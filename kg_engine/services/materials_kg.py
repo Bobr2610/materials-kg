@@ -43,6 +43,11 @@ from kg_engine.domain.models import SearchTextUnit
 from kg_engine.domain.models import SourceKind
 from kg_engine.domain.models import SourceSpan
 from kg_engine.domain.models import TextUnitInput
+from kg_engine.domain.product import DecisionGate
+from kg_engine.domain.product import ExpectedEffect
+from kg_engine.domain.product import ExperimentStep
+from kg_engine.domain.product import RequiredResource
+from kg_engine.domain.product import VerificationRoadmap
 from kg_engine.domain.resolution import normalize_name
 from kg_engine.repositories.protocols import MaterialsKGRepository
 from kg_engine.services.hypothesis_adjustments import EXPERT_ADJUSTMENT_SCHEMA
@@ -123,6 +128,23 @@ def _expand_source_set(source_set: set[str]) -> set[str]:
 
 def _source_matches(value: Any, source_set: set[str]) -> bool:
     return bool(_source_key_variants(value) & source_set)
+
+
+def _hypothesis_mentions_any(
+    hypothesis: ResearchHypothesis,
+    excluded_terms: list[str],
+) -> bool:
+    if not excluded_terms:
+        return False
+    searchable = " ".join(
+        [
+            hypothesis.statement,
+            hypothesis.rationale,
+            hypothesis.test_plan,
+            hypothesis.mechanism,
+        ]
+    ).casefold()
+    return any(term in searchable for term in excluded_terms)
 
 
 def _compact_document_text_for_storage(text: str, *, document_id: str) -> tuple[str, dict[str, Any]]:
@@ -2657,7 +2679,30 @@ class MaterialsKGService:
                 )
             )
 
-        apply_expert_adjustments(hypotheses, request.expert_adjustments)
+        if request.excluded_directions:
+            excluded_terms = [
+                item.strip().casefold()
+                for item in request.excluded_directions
+                if item.strip()
+            ]
+            before_filter = len(hypotheses)
+            hypotheses = [
+                hypothesis
+                for hypothesis in hypotheses
+                if not _hypothesis_mentions_any(hypothesis, excluded_terms)
+            ]
+            removed = before_filter - len(hypotheses)
+            if removed:
+                warnings.append(
+                    f"Excluded {removed} hypotheses by project/domain exclusions."
+                )
+
+        expert_adjustments = dict(request.expert_adjustments)
+        if request.ranking_weights:
+            expert_adjustments["ranking_weights"] = request.ranking_weights
+        apply_expert_adjustments(hypotheses, expert_adjustments)
+        for hypothesis in hypotheses:
+            self._populate_verification_plan(hypothesis, request)
 
         hypotheses.sort(key=lambda item: item.score.final_score, reverse=True)
         hypotheses = hypotheses[: request.max_hypotheses]
@@ -2690,13 +2735,16 @@ class MaterialsKGService:
                 ),
             },
             "source_ids_filter": request.source_ids,
+            "excluded_directions": request.excluded_directions,
+            "domain_constraints": request.domain_constraints,
         }
+        ranking_weights = expert_adjustments.get("ranking_weights")
         ranking_rubric = {
             "final_score_formula": (
-                "0.35*value + 0.25*evidence_strength + "
-                "0.20*novelty + 0.20*(1-risk)"
+                "value*w_value + evidence_strength*w_evidence_strength + "
+                "novelty*w_novelty + (1-risk)*w_inverse_risk"
             ),
-            "weights": {
+            "weights": ranking_weights or {
                 "value": 0.35,
                 "evidence_strength": 0.25,
                 "novelty": 0.20,
@@ -2770,6 +2818,93 @@ class MaterialsKGService:
                 evidence_strength=evidence_strength,
             ),
         )
+
+    def _populate_verification_plan(
+        self,
+        hypothesis: ResearchHypothesis,
+        request: HypothesisInput,
+    ) -> None:
+        uncertainty = clamp_score(1.0 - hypothesis.score.evidence_strength)
+        technical_risk = clamp_score(hypothesis.score.risk)
+        economic_risk = clamp_score(0.25 + 0.35 * uncertainty)
+        regulatory_risk = clamp_score(0.10 + 0.20 * uncertainty)
+        resource_cost = clamp_score(0.30 + 0.25 * hypothesis.score.risk)
+        time_to_test = clamp_score(0.25 + 0.35 * uncertainty)
+        feasibility = clamp_score(1.0 - (technical_risk + resource_cost) / 2.0)
+        hypothesis.score = hypothesis.score.model_copy(
+            update={
+                "feasibility": feasibility,
+                "technical_risk": technical_risk,
+                "economic_risk": economic_risk,
+                "regulatory_risk": regulatory_risk,
+                "resource_cost": resource_cost,
+                "time_to_test": time_to_test,
+                "uncertainty": uncertainty,
+            }
+        )
+        hypothesis.confidence = clamp_score(
+            (hypothesis.score.evidence_strength + feasibility) / 2.0
+        )
+        if not hypothesis.uncertainty_factors:
+            hypothesis.uncertainty_factors = [
+                "Недостаточно прямых повторных измерений.",
+                "Нужна проверка сопоставимости условий и единиц KPI.",
+            ]
+        property_name = request.property_name or request.target_kpi
+        hypothesis.expected_effect = hypothesis.expected_effect or ExpectedEffect(
+            property_name=property_name,
+            direction="increase",
+            minimum=request.target_kpi and None,
+            unit=None,
+        )
+        resource = RequiredResource(
+            kind="laboratory",
+            name="Экспертная проверка и экспериментальная серия",
+            quantity=1,
+            unit="study",
+            assumption="Оценка построена deterministic без внешней модели.",
+        )
+        gate = DecisionGate(
+            metric=property_name,
+            operator="improves",
+            threshold="baseline",
+            success_action="promote hypothesis and expand design-of-experiments",
+            failure_action="reject or revise mechanism",
+        )
+        steps = [
+            ExperimentStep(
+                order=1,
+                objective="Validate source evidence and baseline comparability",
+                method="Graph evidence review",
+                resources=[resource],
+                estimated_duration_days=1,
+            ),
+            ExperimentStep(
+                order=2,
+                objective=f"Measure KPI '{property_name}' under controlled conditions",
+                method=hypothesis.test_plan[:180] or "Controlled experiment",
+                dependency_ids=[],
+                resources=[resource],
+                decision_gate=gate,
+                estimated_duration_days=5,
+            ),
+        ]
+        hypothesis.verification_roadmap = hypothesis.verification_roadmap or VerificationRoadmap(
+            steps=steps,
+            assumptions=[
+                "Baseline is measured with the same material, mode, and unit.",
+                "All raw observations are stored with evidence ids.",
+            ],
+        )
+        hypothesis.resource_estimate = hypothesis.resource_estimate or [resource]
+        hypothesis.success_criteria = hypothesis.success_criteria or [
+            f"KPI '{property_name}' improves against baseline.",
+            "Result is supported by traceable observation/evidence records.",
+        ]
+        hypothesis.failure_criteria = hypothesis.failure_criteria or [
+            f"KPI '{property_name}' does not improve against baseline.",
+            "Evidence review finds the source conditions are not comparable.",
+        ]
 
     def _entity_name(self, entity_id: str | None, fallback: str) -> str:
         if entity_id is None:

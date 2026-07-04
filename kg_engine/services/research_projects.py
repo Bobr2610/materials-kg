@@ -11,10 +11,14 @@ from kg_engine.domain.product import Constraint
 from kg_engine.domain.product import ConstraintStrength
 from kg_engine.domain.product import HypothesisRun
 from kg_engine.domain.product import ExpertReview
+from kg_engine.domain.product import ExperimentOutcome
 from kg_engine.domain.product import ProjectValidation
 from kg_engine.domain.product import ResearchProject
 from kg_engine.domain.product import ResearchProjectCreate
+from kg_engine.domain.models import HypothesisScore
 from kg_engine.domain.product import utc_now
+from kg_engine.services.metrics import ExpertFeedbackEntry
+from kg_engine.services.metrics import recalibrate_ranking_weights
 
 
 class ProjectNotFoundError(LookupError):
@@ -193,6 +197,114 @@ class ResearchProjectService:
             ).fetchall()
         return [ExpertReview.model_validate_json(row[0]) for row in rows]
 
+    def save_experiment_outcome(self, outcome: ExperimentOutcome) -> ExperimentOutcome:
+        review = self.get_expert_review(outcome.review_id)
+        run = self.get_hypothesis_run(review.run_id)
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO experiment_outcomes (id, review_id, payload) VALUES (?, ?, ?)",
+                (outcome.id, outcome.review_id, outcome.model_dump_json()),
+            )
+            self._insert_audit(
+                connection,
+                AuditEvent(
+                    actor="system",
+                    action="experiment_outcome.created",
+                    project_id=run.project_id,
+                    payload={
+                        "run_id": run.id,
+                        "review_id": review.id,
+                        "outcome_id": outcome.id,
+                        "confirmed": outcome.confirmed,
+                    },
+                ),
+            )
+        return outcome
+
+    def get_expert_review(self, review_id: str) -> ExpertReview:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT payload FROM expert_reviews WHERE id = ?", (review_id,)
+            ).fetchone()
+        if row is None:
+            raise ProjectNotFoundError(review_id)
+        return ExpertReview.model_validate_json(row[0])
+
+    def list_experiment_outcomes(
+        self,
+        *,
+        review_id: str | None = None,
+        run_id: str | None = None,
+    ) -> list[ExperimentOutcome]:
+        if review_id is not None:
+            with self._connect() as connection:
+                rows = connection.execute(
+                    "SELECT payload FROM experiment_outcomes WHERE review_id = ? ORDER BY rowid",
+                    (review_id,),
+                ).fetchall()
+            return [ExperimentOutcome.model_validate_json(row[0]) for row in rows]
+        if run_id is not None:
+            self.get_hypothesis_run(run_id)
+            review_ids = [review.id for review in self.list_expert_reviews(run_id=run_id)]
+            if not review_ids:
+                return []
+            placeholders = ",".join("?" for _ in review_ids)
+            with self._connect() as connection:
+                rows = connection.execute(
+                    f"SELECT payload FROM experiment_outcomes WHERE review_id IN ({placeholders}) ORDER BY rowid",
+                    tuple(review_ids),
+                ).fetchall()
+            return [ExperimentOutcome.model_validate_json(row[0]) for row in rows]
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT payload FROM experiment_outcomes ORDER BY rowid"
+            ).fetchall()
+        return [ExperimentOutcome.model_validate_json(row[0]) for row in rows]
+
+    def derive_feedback_ranking_weights(self, project_id: str) -> dict[str, float]:
+        """Calibrate default ranking weights from prior reviews and outcomes."""
+        self.get_project(project_id)
+        with self._connect() as connection:
+            run_rows = connection.execute(
+                "SELECT payload FROM hypothesis_runs WHERE project_id = ? ORDER BY rowid",
+                (project_id,),
+            ).fetchall()
+        entries: list[ExpertFeedbackEntry] = []
+        for run_row in run_rows:
+            run = HypothesisRun.model_validate_json(run_row[0])
+            hypotheses = {
+                item.get("id"): item
+                for item in run.result.get("hypotheses", [])
+                if isinstance(item, dict) and item.get("id")
+            }
+            reviews = self.list_expert_reviews(run_id=run.id)
+            outcomes_by_review = {
+                outcome.review_id: outcome
+                for outcome in self.list_experiment_outcomes(run_id=run.id)
+            }
+            for review in reviews:
+                payload = hypotheses.get(review.hypothesis_id)
+                if not payload or "score" not in payload:
+                    continue
+                try:
+                    score = HypothesisScore.model_validate(payload["score"])
+                except Exception:
+                    continue
+                outcome = outcomes_by_review.get(review.id)
+                rating = review.rating
+                if outcome is not None:
+                    rating = 5 if outcome.confirmed else 1
+                entries.append(
+                    ExpertFeedbackEntry(
+                        hypothesis_id=review.hypothesis_id,
+                        rating=rating,
+                        score=score,
+                        expert_id=review.expert_id,
+                        comment=review.comment,
+                    )
+                )
+        return recalibrate_ranking_weights(entries).model_dump(mode="json")
+
     def _save(self, project: ResearchProject, *, actor: str, action: str) -> None:
         with self._connect() as connection:
             connection.execute(
@@ -224,6 +336,10 @@ class ResearchProjectService:
             connection.execute(
                 "CREATE TABLE IF NOT EXISTS expert_reviews "
                 "(id TEXT PRIMARY KEY, run_id TEXT NOT NULL, payload TEXT NOT NULL)"
+            )
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS experiment_outcomes "
+                "(id TEXT PRIMARY KEY, review_id TEXT NOT NULL, payload TEXT NOT NULL)"
             )
 
     @staticmethod

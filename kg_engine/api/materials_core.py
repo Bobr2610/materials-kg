@@ -33,6 +33,8 @@ from kg_engine.domain.models import PropertyFilters
 from kg_engine.domain.models import QueryFilters
 from kg_engine.domain.models import ReferenceDataBatch
 from kg_engine.domain.product import Constraint
+from kg_engine.domain.product import ConstraintKind
+from kg_engine.domain.product import ExperimentOutcome
 from kg_engine.domain.product import HypothesisRun
 from kg_engine.domain.product import ExpertReview
 from kg_engine.domain.product import ResearchProjectCreate
@@ -850,17 +852,31 @@ def create_materials_app(
                 status_code=409,
                 detail="Project has unresolved hard constraints",
             )
+        ranking_weights = project.ranking_weights
+        if not ranking_weights:
+            ranking_weights = runtime_product_service.derive_feedback_ranking_weights(
+                project.id
+            )
         request = HypothesisInput(
             target_kpi=project.target_kpi,
             material=project.materials[0] if project.materials else None,
             source_ids=project.source_ids or None,
-            expert_adjustments={"ranking_weights": project.ranking_weights},
+            ranking_weights=ranking_weights,
+            excluded_directions=[
+                str(item.value)
+                for item in project.constraints
+                if item.kind == ConstraintKind.EXCLUSION
+            ],
+            domain_constraints=[
+                item.explanation or f"{item.kind}: {item.operator} {item.value}"
+                for item in project.constraints
+            ],
         )
         result = runtime_service.generate_hypotheses(request)
         run = HypothesisRun(
             project_id=project.id,
             generation_engine=result.generation_engine,
-            ranking_weights=project.ranking_weights,
+            ranking_weights=ranking_weights,
             result=result.model_dump(mode="json"),
             actor=user,
         )
@@ -920,6 +936,27 @@ def create_materials_app(
             "overview": overview,
             "suggested_questions": runtime_service.get_suggested_questions(),
         }
+
+    @app.post("/reviews/{review_id}/outcomes", status_code=201)
+    def create_experiment_outcome(
+        review_id: str,
+        outcome: ExperimentOutcome,
+        role: str | None = Header(default=None, alias="X-Role"),
+    ):
+        require_writer(role)
+        if outcome.review_id != review_id:
+            raise HTTPException(status_code=422, detail="Outcome identity mismatch")
+        try:
+            return runtime_product_service.save_experiment_outcome(outcome)
+        except ProjectNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Expert review not found") from exc
+
+    @app.get("/hypothesis-runs/{run_id}/outcomes")
+    def list_experiment_outcomes(run_id: str):
+        try:
+            return runtime_product_service.list_experiment_outcomes(run_id=run_id)
+        except ProjectNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Hypothesis run not found") from exc
 
     @app.get("/graph/data")
     def graph_data(sources: list[str] | None = _SOURCES_QUERY) -> dict:

@@ -56,7 +56,7 @@ cp .env.example .env
 # Required vars:
 # NEO4J_USER=neo4j
 # NEO4J_PASSWORD=changeme
-# OPENROUTER_API_KEY=your_key
+# LLM_API_KEY=your_key
 ```
 
 ## Rules

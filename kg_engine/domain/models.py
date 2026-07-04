@@ -331,6 +331,18 @@ class HypothesisInput(BaseModel):
     )
     max_hypotheses: int = Field(default=5, ge=1, le=20)
     expert_adjustments: dict[str, Any] = Field(default_factory=dict)
+    ranking_weights: dict[str, float] | None = Field(
+        default=None,
+        description="Custom ranking weights for hypothesis scoring",
+    )
+    excluded_directions: list[str] = Field(
+        default_factory=list,
+        description="Hypothesis directions to exclude from results",
+    )
+    domain_constraints: list[str] = Field(
+        default_factory=list,
+        description="Free-text domain constraints for hypothesis generation",
+    )
 
 
 class HypothesisScore(BaseModel):
