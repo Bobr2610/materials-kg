@@ -7,7 +7,6 @@ from typing import Any
 from kg_engine.domain.models import HypothesisInput
 from kg_engine.domain.models import PropertyFilters
 from kg_engine.domain.models import QueryFilters
-from kg_engine.domain.models import RelationType
 from kg_engine.services.materials_kg import MaterialsKGService
 
 
@@ -188,12 +187,12 @@ def create_hypothesis_tools(
     ) -> dict[str, Any]:
         """Traverse related entities and evidence paths around a material, experiment, property, mode, team, or document."""
         record_tool("kg_query_related", entity=entity, depth=depth)
-        filters: list[RelationType] | None = None
+        filters: list[str] | None = None
         if relation_types:
             filters = []
             for rel_type in relation_types:
                 try:
-                    filters.append(RelationType(rel_type))
+                    filters.append(str(rel_type))
                 except ValueError:
                     trace.append(
                         {

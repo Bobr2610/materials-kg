@@ -925,7 +925,7 @@
       maxListRows: 8,
       maxTableRows: 10,
       maxCitations: 8,
-      supportedTypes: ["json", "jsonl", "csv", "tsv", "txt", "md"],
+      supportedTypes: ["json", "jsonl", "csv", "tsv", "txt", "md", "docx", "xlsx", "xls", "pdf", "html", "htm", "png", "jpg", "jpeg", "webp", "tif", "tiff", "bmp"],
       graph: {
         colors: {
           material: "#1a73e8", property: "#34a853", mode: "#f9ab00",
@@ -1357,6 +1357,23 @@
         $("sendQuestion").disabled = false;
       }
     }
+    async function runHypothesisJob(payload) {
+      let job = await postJson("/hypotheses/generate", payload);
+      addMsg("assistant", '<div class="bubble">Генерация гипотез запущена: ' + escapeHtml(job.job_id) + ".</div>");
+      while (job.status === "queued" || job.status === "running") {
+        if ($("generateHypotheses")) {
+          $("generateHypotheses").textContent = job.message || "Генерация...";
+        }
+        await new Promise(resolve => setTimeout(resolve, 1200));
+        const r = await fetch("/hypotheses/jobs/" + encodeURIComponent(job.job_id));
+        if (!r.ok) throw new Error(await r.text() || r.statusText);
+        job = await r.json();
+      }
+      if (job.status === "failed") {
+        throw new Error(job.error || "Hypothesis generation failed");
+      }
+      return job.result || {};
+    }
     async function generateHypothesesFromKpi() {
       const targetKpi = $("targetKpi").value.trim();
       if (!targetKpi) {
@@ -1365,6 +1382,7 @@
         return;
       }
       $("generateHypotheses").disabled = true;
+      const oldButtonText = $("generateHypotheses").textContent;
       addMsg("user", '<div class="bubble">KPI: ' + escapeHtml(targetKpi) + "</div>");
       try {
         const sourceIds = getSelectedSources();
@@ -1377,12 +1395,13 @@
         if (sourceIds) payload.source_ids = sourceIds;
         state.lastHypothesisRequest = payload;
         state.expertAdjustments = {};
-        const data = await postJson("/hypotheses/generate", payload);
+        const data = await runHypothesisJob(payload);
         renderHypotheses(data);
       } catch(e) {
         addMsg("assistant", '<div class="bubble error">' + escapeHtml(e.message) + "</div>");
       } finally {
         $("generateHypotheses").disabled = false;
+        $("generateHypotheses").textContent = oldButtonText;
       }
     }
     function updateExpertAdjustment(panel, input) {
@@ -1412,7 +1431,7 @@
       };
       addMsg("user", '<div class="bubble">Экспертные корректировки применены</div>');
       try {
-        const data = await postJson("/hypotheses/generate", payload);
+        const data = await runHypothesisJob(payload);
         renderHypotheses(data);
       } catch(e) {
         addMsg("assistant", '<div class="bubble error">' + escapeHtml(e.message) + "</div>");
@@ -1466,15 +1485,42 @@
     }
     async function loadTaskMaterials() {
       $("menuPopover").classList.remove("open");
+      $("uploadProgress").classList.add("active");
+      $("loadTaskMaterials").disabled = true;
+      setUploadProgress(0, 1, "Постановка загрузки Task 1 в очередь");
       try {
-        const data = await postJson("/demo/load-task-materials", {});
+        let job = await postJson("/demo/load-task-materials?exclude_examples=true&enable_vision=true&enable_llm_extraction=true&enable_embeddings=false&parallel_workers=8", {});
+        addMsg("assistant", '<div class="bubble">Загрузка Task 1 запущена: ' + escapeHtml(job.job_id) + ".</div>");
+        while (job.status === "queued" || job.status === "running") {
+          const total = Math.max(Number(job.total_files || 0), 1);
+          const done = Math.min(Number(job.processed_files || 0), total);
+          setUploadProgress(done, total, (job.message || job.stage || "Загрузка Task 1") + " (" + done + "/" + total + ")");
+          if (job.uploaded?.length) {
+            mergeFiles(job.uploaded);
+            renderSourceList();
+          }
+          await new Promise(resolve => setTimeout(resolve, 1200));
+          const r = await fetch("/demo/load-task-materials/jobs/" + encodeURIComponent(job.job_id));
+          if (!r.ok) throw new Error(await r.text() || r.statusText);
+          job = await r.json();
+        }
+        if (job.status === "failed") {
+          throw new Error(job.error || "Task 1 load failed");
+        }
+        const data = job.result || {};
         renderSources(data, { notify: false });
+        setUploadProgress(1, 1, "Task 1 загружена");
         const unsupported = data.unsupported_files?.length ? " Неподдерживаемых файлов: " + data.unsupported_files.length + "." : "";
+        const skipped = data.skipped_example_files?.length ? " Примеры пропущены: " + data.skipped_example_files.length + "." : "";
         const warning = data.warnings?.length ? " " + data.warnings.map(escapeHtml).join(" ") : "";
-        addMsg("assistant", '<div class="bubble">Материалы Task 1 загружены из ' + escapeHtml(data.task_materials_dir) + "." + unsupported + warning + "</div>");
+        addMsg("assistant", '<div class="bubble">Материалы Task 1 загружены из ' + escapeHtml(data.task_materials_dir) + ". Документов: " + escapeHtml(data.documents_ingested || 0) + "." + skipped + unsupported + warning + "</div>");
         refreshGraphIfOpen();
       } catch(e) {
         addMsg("assistant", '<div class="bubble error">' + escapeHtml(e.message) + "</div>");
+      } finally {
+        $("uploadProgress").classList.remove("active");
+        $("uploadProgressFill").style.width = "0%";
+        $("loadTaskMaterials").disabled = false;
       }
     }
     function graphDataUrl() {

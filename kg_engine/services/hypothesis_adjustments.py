@@ -7,9 +7,17 @@ from typing import Any
 from kg_engine.domain.models import HypothesisScore
 from kg_engine.domain.models import ResearchHypothesis
 
+DEFAULT_RANKING_WEIGHTS: dict[str, float] = {
+    "value": 0.35,
+    "evidence_strength": 0.25,
+    "novelty": 0.20,
+    "inverse_risk": 0.20,
+}
+
 EXPERT_ADJUSTMENT_SCHEMA: dict[str, Any] = {
     "description": "Per-hypothesis expert controls keyed by hypothesis id.",
     "fields": {
+        "ranking_weights": "global weights for value/evidence_strength/novelty/inverse_risk",
         "reject": "boolean; when true sets the hypothesis final score to 0",
         "note": "string; appended to expert_notes",
         "risk_adjustment": "number in -1..1 added to risk",
@@ -26,19 +34,38 @@ def clamp_score(value: float) -> float:
     return max(0.0, min(1.0, float(value)))
 
 
+def normalize_ranking_weights(weights: dict[str, Any] | None) -> dict[str, float]:
+    """Return non-negative score weights normalized to sum to one."""
+    if not weights:
+        return dict(DEFAULT_RANKING_WEIGHTS)
+    raw: dict[str, float] = {}
+    for key in DEFAULT_RANKING_WEIGHTS:
+        value = weights.get(key, DEFAULT_RANKING_WEIGHTS[key])
+        try:
+            raw[key] = max(0.0, float(value))
+        except (TypeError, ValueError):
+            raw[key] = DEFAULT_RANKING_WEIGHTS[key]
+    total = sum(raw.values())
+    if total <= 0:
+        return dict(DEFAULT_RANKING_WEIGHTS)
+    return {key: value / total for key, value in raw.items()}
+
+
 def calculate_final_score(
     *,
     novelty: float,
     risk: float,
     value: float,
     evidence_strength: float,
+    weights: dict[str, Any] | None = None,
 ) -> float:
     """Calculate the transparent Hypothesis Factory ranking score."""
+    normalized = normalize_ranking_weights(weights)
     return clamp_score(
-        0.35 * value
-        + 0.25 * evidence_strength
-        + 0.20 * novelty
-        + 0.20 * (1.0 - risk)
+        normalized["value"] * value
+        + normalized["evidence_strength"] * evidence_strength
+        + normalized["novelty"] * novelty
+        + normalized["inverse_risk"] * (1.0 - risk)
     )
 
 
@@ -49,10 +76,23 @@ def apply_expert_adjustments(
     """Apply expert overrides in-place using the public adjustment schema."""
     if not expert_adjustments:
         return
+    ranking_weights = expert_adjustments.get("ranking_weights")
 
     for hypothesis in hypotheses:
         adjustment = expert_adjustments.get(hypothesis.id)
         if adjustment is None:
+            if ranking_weights:
+                hypothesis.score = hypothesis.score.model_copy(
+                    update={
+                        "final_score": calculate_final_score(
+                            novelty=hypothesis.score.novelty,
+                            risk=hypothesis.score.risk,
+                            value=hypothesis.score.value,
+                            evidence_strength=hypothesis.score.evidence_strength,
+                            weights=ranking_weights,
+                        )
+                    }
+                )
             continue
         if not isinstance(adjustment, dict):
             continue
@@ -89,6 +129,7 @@ def apply_expert_adjustments(
                     risk=new_risk,
                     value=new_value,
                     evidence_strength=new_evidence,
+                    weights=ranking_weights,
                 )
             hypothesis.score = HypothesisScore(
                 novelty=new_novelty,

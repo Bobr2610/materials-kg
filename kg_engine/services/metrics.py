@@ -12,12 +12,10 @@ from pydantic import Field
 from pydantic import ValidationError
 from pydantic import computed_field
 
-from kg_engine.domain.models import EntityKind
 from kg_engine.domain.models import HypothesisGenerationResult
 from kg_engine.domain.models import HypothesisScore
 from kg_engine.domain.models import Observation
 from kg_engine.domain.models import ResearchHypothesis
-from kg_engine.domain.models import RelationType
 from kg_engine.domain.models import utc_now
 from kg_engine.domain.resolution import normalize_name
 from kg_engine.repositories.protocols import MaterialsKGRepository
@@ -28,22 +26,22 @@ logger = logging.getLogger(__name__)
 class EntityMatch(BaseModel):
     """Canonical comparison key for extracted or expected entities."""
 
-    kind: EntityKind
+    kind: str
     name: str = Field(min_length=1)
 
     def key(self) -> tuple[str, str]:
-        return (self.kind.value, normalize_name(self.name))
+        return (self.kind, normalize_name(self.name))
 
 
 class RelationMatch(BaseModel):
     """Canonical comparison key for extracted or expected relations."""
 
-    relation_type: RelationType
+    relation_type: str
     source: EntityMatch
     target: EntityMatch
 
     def key(self) -> tuple[str, tuple[str, str], tuple[str, str]]:
-        return (self.relation_type.value, self.source.key(), self.target.key())
+        return (self.relation_type, self.source.key(), self.target.key())
 
 
 class ExtractionBenchmarkSample(BaseModel):
@@ -376,19 +374,19 @@ def build_repository_coverage_heatmap(
         axes = CoverageAxis(
             material_ids=_axis_ids(
                 repository=repository,
-                kind=EntityKind.MATERIAL,
+                kind="material",
                 observed_ids=[item.material_id for item in observations],
             ),
             mode_ids=_axis_ids(
                 repository=repository,
-                kind=EntityKind.MODE,
+                kind="mode",
                 observed_ids=[
                     item.mode_id for item in observations if item.mode_id is not None
                 ],
             ),
             property_ids=_axis_ids(
                 repository=repository,
-                kind=EntityKind.PROPERTY,
+                kind="property",
                 observed_ids=[item.property_id for item in observations],
             ),
         )
@@ -684,7 +682,7 @@ def _default_weights() -> RankingWeights:
 def _axis_ids(
     *,
     repository: MaterialsKGRepository,
-    kind: EntityKind,
+    kind: str,
     observed_ids: list[str],
 ) -> list[str]:
     ids = {entity.id for entity in repository.find_entities(kind=kind)}

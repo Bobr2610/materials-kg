@@ -74,8 +74,8 @@ class FallbackChain:
     Usage::
 
         chain = FallbackChain([
-            ("openai", openai_provider),
-            ("vllm", vllm_provider),
+            ("primary", primary_provider),
+            ("secondary", secondary_provider),
         ])
         result = await chain.chat_stream_collected(messages)
     """

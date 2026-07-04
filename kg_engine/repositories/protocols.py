@@ -9,11 +9,9 @@ from kg_engine.domain.models import CoverageRuleInput
 from kg_engine.domain.models import DataGap
 from kg_engine.domain.models import DecisionTrace
 from kg_engine.domain.models import Entity
-from kg_engine.domain.models import EntityKind
 from kg_engine.domain.models import Evidence
 from kg_engine.domain.models import Observation
 from kg_engine.domain.models import Relation
-from kg_engine.domain.models import RelationType
 from kg_engine.domain.models import SearchTextUnit
 
 
@@ -27,12 +25,12 @@ class MaterialsKGRepository(Protocol):
     def find_entities(
         self,
         *,
-        kind: EntityKind | None = None,
+        kind: str | None = None,
         name: str | None = None,
         ids: list[str] | None = None,
     ) -> list[Entity]: ...
 
-    def resolve_entity(self, kind: EntityKind, raw_name: str) -> Entity | None: ...
+    def resolve_entity(self, kind: str, raw_name: str) -> Entity | None: ...
 
     def upsert_evidence(self, evidence: Evidence) -> Evidence: ...
 
@@ -48,7 +46,7 @@ class MaterialsKGRepository(Protocol):
         self,
         *,
         entity_id: str | None = None,
-        relation_types: list[RelationType] | None = None,
+        relation_types: list[str] | None = None,
     ) -> list[Relation]: ...
 
     def upsert_observation(self, observation: Observation) -> Observation: ...

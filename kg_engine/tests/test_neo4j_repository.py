@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Self
 
 from kg_engine.domain.models import Entity
-from kg_engine.domain.models import EntityKind
+from kg_engine.domain.models import Relation
 from kg_engine.repositories.neo4j import Neo4jMaterialsKGRepository
 from kg_engine.repositories.neo4j import create_neo4j_repository
 
@@ -74,7 +74,7 @@ def test_neo4j_repository_round_trips_entity_with_fake_driver() -> None:
     repository = Neo4jMaterialsKGRepository(driver, database="neo4j")
     entity = Entity(
         id="mat_cucrzr",
-        kind=EntityKind.MATERIAL,
+        kind="material",
         canonical_name="CuCrZr",
         aliases=["Cu-Cr-Zr"],
         source_refs=["sample"],
@@ -88,3 +88,28 @@ def test_neo4j_repository_round_trips_entity_with_fake_driver() -> None:
     assert loaded.canonical_name == "CuCrZr"
     assert driver.session_kwargs == {"database": "neo4j"}
     assert any("MERGE (n:Entity" in call[0] for call in driver.session_obj.calls)
+
+
+def test_neo4j_relation_upsert_deduplicates_evidence_ids_in_cypher() -> None:
+    driver = FakeDriver()
+    repository = Neo4jMaterialsKGRepository(driver, database="neo4j")
+
+    relation = Relation(
+        id="rel-1",
+        relation_type="tagged_with",
+        source_entity_id="doc-1",
+        target_entity_id="tag-source-document",
+        evidence_ids=["ev-1", "ev-1"],
+    )
+
+    repository.upsert_relation(relation)
+    repository.batch_upsert_relations([relation])
+
+    relation_queries = [
+        query
+        for query, _params in driver.session_obj.calls
+        if "KG_RELATION" in query
+    ]
+    assert relation_queries
+    assert all("existing_evidence_ids" in query for query in relation_queries)
+    assert all("reduce(" in query for query in relation_queries)

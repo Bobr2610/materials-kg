@@ -3,7 +3,6 @@ from __future__ import annotations
 from kg_engine.domain.models import CanonicalEntityInput
 from kg_engine.domain.models import CoverageRuleInput
 from kg_engine.domain.models import DocumentInput
-from kg_engine.domain.models import EntityKind
 from kg_engine.domain.models import ExperimentInput
 from kg_engine.domain.models import FindingInput
 from kg_engine.domain.models import ObservationInput
@@ -213,10 +212,10 @@ def _build_test_graph() -> tuple[InMemoryMaterialsKGRepository, MaterialsKGServi
 def test_graph_repository_is_populated_and_queryable_from_sample_data() -> None:
     repository, service = _build_test_graph()
 
-    materials = repository.find_entities(kind=EntityKind.MATERIAL)
-    experiments = repository.find_entities(kind=EntityKind.EXPERIMENT)
-    documents = repository.find_entities(kind=EntityKind.DOCUMENT)
-    test_mat = repository.resolve_entity(EntityKind.MATERIAL, "TEST-MATERIAL-001")
+    materials = repository.find_entities(kind="material")
+    experiments = repository.find_entities(kind="experiment")
+    documents = repository.find_entities(kind="document")
+    test_mat = repository.resolve_entity("material", "TEST-MATERIAL-001")
 
     assert len(materials) >= 3
     assert len(experiments) >= 5

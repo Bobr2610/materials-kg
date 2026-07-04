@@ -11,7 +11,7 @@ from pydantic import Field
 
 
 class VisionRequest(BaseModel):
-    """Single image/page analysis request for OpenAI-compatible VL models."""
+    """Single image/page analysis request for chat-completions VL models."""
 
     image_path: Path
     prompt: str
@@ -19,10 +19,10 @@ class VisionRequest(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
-def build_openai_compatible_vision_messages(
+def build_vision_messages(
     request: VisionRequest,
 ) -> list[dict[str, Any]]:
-    """Build a multimodal chat payload for OpenAI-compatible providers."""
+    """Build a multimodal chat payload for compatible providers."""
     if request.image_path.suffix.lower() == ".pdf":
         msg = "Vision analysis expects a rendered page/image, not a PDF file."
         raise ValueError(msg)
@@ -39,7 +39,7 @@ def build_openai_compatible_vision_messages(
     ]
 
 
-class OpenAICompatibleVisionConductor:
+class VisionConductor:
     """Small conductor that sends one rendered page/image per VL request."""
 
     def __init__(
@@ -68,7 +68,7 @@ class OpenAICompatibleVisionConductor:
             prompt=prompt,
             metadata=metadata or {},
         )
-        messages = build_openai_compatible_vision_messages(request)
+        messages = build_vision_messages(request)
         return self.provider.chat(
             messages,  # type: ignore[arg-type]
             temperature=self.temperature,

@@ -10,11 +10,9 @@ from typing import Any
 from kg_engine.domain.models import CoverageRuleInput
 from kg_engine.domain.models import DecisionTrace
 from kg_engine.domain.models import Entity
-from kg_engine.domain.models import EntityKind
 from kg_engine.domain.models import Evidence
 from kg_engine.domain.models import Observation
 from kg_engine.domain.models import Relation
-from kg_engine.domain.models import RelationType
 from kg_engine.domain.models import SearchTextUnit
 from kg_engine.domain.resolution import normalize_name
 
@@ -46,7 +44,7 @@ class InMemoryMaterialsKGRepository:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._entities: dict[str, Entity] = {}
-        self._alias_index: dict[tuple[EntityKind, str], str] = {}
+        self._alias_index: dict[tuple[str, str], str] = {}
         self._evidence: dict[str, Evidence] = {}
         self._relations: dict[str, Relation] = {}
         self._observations: dict[str, Observation] = {}
@@ -84,7 +82,7 @@ class InMemoryMaterialsKGRepository:
     def find_entities(
         self,
         *,
-        kind: EntityKind | None = None,
+        kind: str | None = None,
         name: str | None = None,
         ids: list[str] | None = None,
     ) -> list[Entity]:
@@ -105,7 +103,7 @@ class InMemoryMaterialsKGRepository:
             ]
         return entities
 
-    def resolve_entity(self, kind: EntityKind, raw_name: str) -> Entity | None:
+    def resolve_entity(self, kind: str, raw_name: str) -> Entity | None:
         entity_id = self._alias_index.get((kind, normalize_name(raw_name)))
         if entity_id is None:
             matches = self.find_entities(kind=kind, name=raw_name)
@@ -150,7 +148,7 @@ class InMemoryMaterialsKGRepository:
         self,
         *,
         entity_id: str | None = None,
-        relation_types: list[RelationType] | None = None,
+        relation_types: list[str] | None = None,
     ) -> list[Relation]:
         relations = list(self._relations.values())
         if entity_id is not None:

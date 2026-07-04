@@ -41,26 +41,11 @@ class Settings(BaseSettings):
     """
 
     # LLM (used by llm_core for extraction and answer generation)
-    openrouter_api_key: str = ""
-    openrouter_base_url: str = ""
-    openai_api_key: str | None = None
-    openai_base_url: str = ""
-    polza_api_key: str = ""
-    polza_base_url: str = ""
-    groq_api_key: str = ""
-    groq_base_url: str = ""
-    mistral_api_key: str = ""
-    mistral_base_url: str = ""
-    yandex_api_key: str = ""
-    yandex_base_url: str = ""
-    yandex_folder_id: str = ""
     llm_api_key: str = ""
     llm_base_url: str = ""
-    vllm_base_url: str = ""
-    vllm_api_key: str = ""
-    default_llm_provider: str = "yandex"
-    default_model: str = "deepseek-v4-flash"
-    default_embedding_model: str = "text-search-doc/latest"
+    default_llm_provider: str = ""
+    default_model: str = ""
+    default_embedding_model: str = ""
     llm_temperature: float = 0.7
 
     # Materials KG core API / storage
@@ -79,6 +64,7 @@ class Settings(BaseSettings):
     llm_context_window: int = 128000
     llm_safety_margin_tokens: int = 500
     llm_embedding_truncation_chars: int = 8000
+    llm_timeout_seconds: float = 60.0
     llm_max_retries: int = 3
     llm_retry_base_delay: float = 1.0
 
@@ -89,8 +75,8 @@ class Settings(BaseSettings):
 
     # Document parsing / Vision-Language interpretation
     materials_document_vision_enabled: bool = False
-    materials_vision_model: str = "qwen3.6-35b-a3b"
-    materials_vision_provider: str = "yandex"
+    materials_vision_model: str = ""
+    materials_vision_provider: str = ""
     materials_vision_api_key: str = ""
     materials_vision_base_url: str = ""
     materials_pdf_render_dpi: int = 180
@@ -98,8 +84,12 @@ class Settings(BaseSettings):
 
     # Ingestion limits
     materials_llm_extraction_max_chars: int = 80_000
-    materials_llm_extraction_chunk_size: int = 3000
-    materials_llm_extraction_chunk_overlap: int = 500
+    materials_llm_extraction_batch_chars: int = 25_000
+    materials_llm_extraction_max_batches_per_document: int = 4
+    materials_ingestion_llm_timeout_seconds: float = 60.0
+    materials_ingestion_llm_max_retries: int = 3
+    materials_llm_extraction_chunk_size: int = 25_000
+    materials_llm_extraction_chunk_overlap: int = 2_000
     materials_ingestion_doc_batch_size: int = 1
     materials_ingestion_parallel_workers: int = 4
 

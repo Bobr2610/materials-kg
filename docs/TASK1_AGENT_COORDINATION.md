@@ -37,7 +37,7 @@ LLM extraction -> graph ingestion -> Deep Agent hypotheses.
 - `kg_engine/scripts/ingest_materials_kg.py`
 - reader/helper modules for PDF/DOCX/XLSX/PNG
 - API upload parsing only where it connects formats to ingestion
-- tests for parsers, metadata, noisy inputs, OCR/table extraction
+- tests for parsers, metadata, noisy inputs, VL/table extraction
 - documentation sections about ingestion formats
 
 Нельзя менять без согласования:

@@ -15,23 +15,13 @@ from kg_engine.domain.product import ExpectedEffect
 from kg_engine.domain.product import RequiredResource
 from kg_engine.domain.product import VerificationRoadmap
 
+EntityKindName = str
+RelationTypeName = str
+
 
 def utc_now() -> datetime:
     """Return a timezone-aware UTC timestamp."""
     return datetime.now(UTC)
-
-
-class EntityKind(str, enum.Enum):
-    """Supported first-class entities in the materials KG."""
-
-    MATERIAL = "material"
-    EXPERIMENT = "experiment"
-    PROPERTY = "property"
-    MODE = "mode"
-    EQUIPMENT = "equipment"
-    TEAM = "team"
-    DOCUMENT = "document"
-    TAG = "tag"
 
 
 class SourceKind(str, enum.Enum):
@@ -42,20 +32,6 @@ class SourceKind(str, enum.Enum):
     REFERENCE = "reference"
     DIRECTORY = "directory"
     TAG = "tag"
-
-
-class RelationType(str, enum.Enum):
-    """Graph relations used by traversal and explainability."""
-
-    EVALUATES_MATERIAL = "evaluates_material"
-    USES_MODE = "uses_mode"
-    MEASURES_PROPERTY = "measures_property"
-    USES_EQUIPMENT = "uses_equipment"
-    PERFORMED_BY = "performed_by"
-    DOCUMENTED_IN = "documented_in"
-    TAGGED_WITH = "tagged_with"
-    REFERENCES = "references"
-    RELATED_TO = "related_to"
 
 
 class SourceSpan(BaseModel):
@@ -72,7 +48,7 @@ class Entity(BaseModel):
     """Canonical entity stored in the graph core."""
 
     id: str
-    kind: EntityKind
+    kind: EntityKindName
     canonical_name: str
     aliases: list[str] = Field(default_factory=list)
     properties: dict[str, Any] = Field(default_factory=dict)
@@ -100,7 +76,7 @@ class Relation(BaseModel):
     """Typed relation between canonical entities."""
 
     id: str
-    relation_type: RelationType
+    relation_type: RelationTypeName
     source_entity_id: str
     target_entity_id: str
     evidence_ids: list[str] = Field(default_factory=list)
@@ -172,7 +148,7 @@ class DataGap(BaseModel):
 class CanonicalEntityInput(BaseModel):
     """Reference record used to seed canonical dictionaries."""
 
-    kind: EntityKind
+    kind: EntityKindName
     name: str
     canonical_id: str | None = Field(default=None)
     aliases: list[str] = Field(default_factory=list)
@@ -355,6 +331,18 @@ class HypothesisInput(BaseModel):
     )
     max_hypotheses: int = Field(default=5, ge=1, le=20)
     expert_adjustments: dict[str, Any] = Field(default_factory=dict)
+    ranking_weights: dict[str, float] | None = Field(
+        default=None,
+        description="Custom ranking weights for hypothesis scoring",
+    )
+    excluded_directions: list[str] = Field(
+        default_factory=list,
+        description="Hypothesis directions to exclude from results",
+    )
+    domain_constraints: list[str] = Field(
+        default_factory=list,
+        description="Free-text domain constraints for hypothesis generation",
+    )
 
 
 class HypothesisScore(BaseModel):
@@ -477,7 +465,7 @@ class ConversationSession(BaseModel):
 class ExtractedEntity(BaseModel):
     """Entity extracted from a document by LLM or agent."""
 
-    kind: EntityKind
+    kind: str
     name: str = Field(min_length=1)
     aliases: list[str] = Field(default_factory=list)
     properties: dict[str, Any] = Field(default_factory=dict)
@@ -502,16 +490,16 @@ class ExtractedRelationship(BaseModel):
     type: str = Field(min_length=1)
 
 
-RELATION_TYPE_MAP: dict[str, RelationType] = {
-    "evaluates_material": RelationType.EVALUATES_MATERIAL,
-    "uses_mode": RelationType.USES_MODE,
-    "measures_property": RelationType.MEASURES_PROPERTY,
-    "uses_equipment": RelationType.USES_EQUIPMENT,
-    "performed_by": RelationType.PERFORMED_BY,
-    "documented_in": RelationType.DOCUMENTED_IN,
-    "tagged_with": RelationType.TAGGED_WITH,
-    "references": RelationType.REFERENCES,
-    "related_to": RelationType.RELATED_TO,
+RELATION_TYPE_MAP: dict[str, str] = {
+    "evaluates_material": "evaluates_material",
+    "uses_mode": "uses_mode",
+    "measures_property": "measures_property",
+    "uses_equipment": "uses_equipment",
+    "performed_by": "performed_by",
+    "documented_in": "documented_in",
+    "tagged_with": "tagged_with",
+    "references": "references",
+    "related_to": "related_to",
 }
 
 

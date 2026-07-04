@@ -11,7 +11,6 @@ from kg_engine.domain.models import DocumentExtractionResult
 from kg_engine.domain.models import ExtractedEntity
 from kg_engine.domain.models import ExtractedExperiment
 from kg_engine.domain.models import ExtractedRelationship
-from kg_engine.domain.models import EntityKind
 from kg_engine.domain.models import ObservationInput
 from kg_engine.domain.models import FindingInput
 from kg_engine.llm_core.provider import LLMProvider
@@ -182,14 +181,14 @@ Document text:
 Return a JSON object with:
 {{
   "entities": [
-    {{"kind": "material|property|mode|equipment|team|document|tag", "name": "...", "aliases": [...], "properties": {{}}}}
+    {{"kind": "<lowercase snake_case string describing the entity type, e.g. material, property, mode, equipment, team, process, alloy, mineral, method, condition, analysis_type, or any other type you discover in the text>", "name": "...", "aliases": [...], "properties": {{}}}}
   ]
 }}
 
 Rules:
 - Extract at most {max_entities} entities.
 - Every entity MUST have a non-empty "name" field.
-- Prefer canonical material names, alloy names, process/mode names, measured properties, equipment, teams, documents, and tags.
+- Use descriptive kind strings that best capture what each entity IS.
 - Preserve aliases exactly when the document gives abbreviations or alternate spellings.
 - If no entities are found, return {{"entities": []}}.
 - Return ONLY valid JSON, no markdown."""
@@ -209,7 +208,7 @@ Document text:
 Return a JSON object with:
 {{
   "relationships": [
-    {{"source": "entity_name", "target": "entity_name", "type": "evaluates_material|uses_mode|measures_property|uses_equipment|performed_by|documented_in|tagged_with|references|related_to"}}
+    {{"source": "entity_name", "target": "entity_name", "type": "<snake_case string describing the relationship, e.g. evaluates_material, uses_mode, measures_property, produces, requires, contains, related_to, or any other type that accurately describes the connection>"}}
   ]
 }}
 
@@ -217,7 +216,7 @@ Rules:
 - Extract at most {max_relationships} relationships.
 - Every relationship source and target MUST match an entity name from Known entities.
 - Do not create new entities in this step.
-- Use "related_to" when the relation is useful but does not fit a stricter type.
+- Use "related_to" when the relation is useful but does not fit a more specific type.
 - If no relationships are found, return {{"relationships": []}}.
 - Return ONLY valid JSON, no markdown."""
 
@@ -286,7 +285,7 @@ Return ONLY a JSON object with this schema:
 {{
   "reference": {{
     "entities": [
-      {{"kind": "material|property|mode|equipment|team|document|tag", "name": "...", "aliases": [], "properties": {{}}}}
+      {{"kind": "<lowercase snake_case string describing the entity type>", "name": "...", "aliases": [], "properties": {{}}}}
     ],
     "coverage_rules": [
       {{"rule_id": "...", "name": "...", "material_names": [], "mode_names": [], "property_names": [], "scope": "material-mode-property", "metadata": {{}}}}
@@ -338,10 +337,6 @@ def _validate_entity(raw: dict[str, Any]) -> ExtractedEntity | None:
     if not name:
         return None
     kind_str = (raw.get("kind") or "document").strip().lower()
-    try:
-        kind = EntityKind(kind_str)
-    except ValueError:
-        kind = EntityKind.DOCUMENT
     aliases = [
         str(a).strip()
         for a in (raw.get("aliases") or [])
@@ -351,7 +346,7 @@ def _validate_entity(raw: dict[str, Any]) -> ExtractedEntity | None:
     if not isinstance(properties, dict):
         properties = {}
     return ExtractedEntity(
-        kind=kind,
+        kind=kind_str,
         name=name,
         aliases=aliases,
         properties=properties,
@@ -543,26 +538,14 @@ def select_extraction_strategy(title: str, text: str) -> str:
     stripped = text.strip()
     if not stripped:
         return "empty"
-    if len(stripped) > 12000:
+    try:
+        from kg_engine.config.settings import settings
+        budget = int(getattr(settings, "llm_embedding_truncation_chars", 25000))
+    except Exception:
+        budget = 25000
+    if len(stripped) > budget:
         return "chunked_phased"
-    has_numeric_signal = bool(
-        re.search(
-            r"\d+(?:[.,]\d+)?\s*(MPa|GPa|HRC|HV|%IACS|%)\b",
-            stripped,
-            re.IGNORECASE,
-        )
-    )
-    has_table_signal = "\t" in stripped or stripped.count("|") >= 4
-    has_relation_signal = bool(
-        re.search(
-            r"\b(anneal|aging|aged|weld|sinter|measured|evaluated|uses|performed|documented)\b",
-            stripped,
-            re.IGNORECASE,
-        )
-    )
-    if has_numeric_signal or has_table_signal or has_relation_signal:
-        return "phased"
-    return "entity_first"
+    return "phased"
 
 
 def _json_messages(role: str, prompt: str) -> list[dict[str, str]]:
@@ -597,7 +580,7 @@ def _entities_json(entities: list[ExtractedEntity]) -> str:
     return json.dumps(
         [
             {
-                "kind": entity.kind.value,
+                "kind": entity.kind,
                 "name": entity.name,
                 "aliases": entity.aliases,
             }
@@ -771,10 +754,11 @@ def _extract_chunked_phased(
     parent_trace: list[dict[str, Any]],
 ) -> DocumentExtractionResult:
     """Chunk a long document and run phased extraction on each chunk."""
-    chunks = _chunk_text(full_text, chunk_size=_CHUNK_SIZE, overlap=_CHUNK_OVERLAP)
+    chunk_size, overlap = _get_chunk_config()
+    chunks = _chunk_text(full_text, chunk_size=chunk_size, overlap=overlap)
     logger.info(
         "Document '%s' chunked into %d segments (size=%d, overlap=%d) for extraction",
-        title, len(chunks), _CHUNK_SIZE, _CHUNK_OVERLAP,
+        title, len(chunks), chunk_size, overlap,
     )
     chunk_results: list[DocumentExtractionResult] = []
     for idx, chunk in enumerate(chunks):
@@ -908,13 +892,6 @@ def extract_entities_from_document(
     )
     entity_result = _validate_extraction({"entities": entities_raw.get("entities") or []})
 
-    if strategy == "entity_first" and not entity_result.entities:
-        return DocumentExtractionResult(
-            warnings=["LLM returned no entities"],
-            extraction_engine="llm_entity_first",
-            agent_trace=trace,
-        )
-
     entities_payload = _entities_json(entity_result.entities)
     relationships_raw: dict[str, Any] = {"relationships": []}
     if entity_result.entities:
@@ -937,8 +914,7 @@ def extract_entities_from_document(
     )
 
     measurements_raw: dict[str, Any] = {"experiments": []}
-    if strategy in {"phased", "chunked_phased"} or re.search(r"\d", truncated):
-        measurements_raw = _call_json_phase(
+    measurements_raw = _call_json_phase(
             provider,
             role="a materials science measurement extractor",
             prompt=_MEASUREMENT_PROMPT.format(

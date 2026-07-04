@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from kg_engine.domain.models import EntityKind
 from kg_engine.ingestion.adapters import DocumentCorpusAdapter
 from kg_engine.ingestion.adapters import ExperimentCatalogAdapter
 from kg_engine.ingestion.adapters import ReferenceDataAdapter
@@ -27,8 +26,8 @@ def test_reference_data_adapter_maps_sections_to_entity_kinds() -> None:
     )
 
     assert len(batch.entities) == 2
-    assert batch.entities[0].kind == EntityKind.MATERIAL
-    assert batch.entities[1].kind == EntityKind.EQUIPMENT
+    assert batch.entities[0].kind == "material"
+    assert batch.entities[1].kind == "equipment"
     assert len(batch.coverage_rules) == 1
 
 
@@ -52,8 +51,8 @@ def test_reference_adapter_accepts_generic_entities_with_explicit_kind() -> None
     )
 
     assert [entity.kind for entity in batch.entities] == [
-        EntityKind.MATERIAL,
-        EntityKind.EQUIPMENT,
+        "material",
+        "equipment",
     ]
     assert batch.entities[0].aliases == ["alloy-42", "sample-42"]
     assert batch.entities[0].properties["плотность"] == "7.8"
@@ -130,12 +129,30 @@ def test_document_adapter_builds_findings_and_text_units() -> None:
     assert documents[0].text_units[0].content == "chunk body"
 
 
+def test_document_adapter_keeps_source_document_without_extracted_text() -> None:
+    documents = DocumentCorpusAdapter().from_payload(
+        [
+            {
+                "document_id": "task1-image",
+                "title": "Регламент.png",
+                "source_ref": "Задача 1/Регламенты/Регламент.png",
+                "text_units": [],
+            }
+        ]
+    )
+
+    assert len(documents) == 1
+    assert documents[0].document_id == "task1-image"
+    assert documents[0].text
+    assert "no text extracted" in documents[0].text
+
+
 def test_directory_and_tag_adapters_create_reference_batches() -> None:
     staff_batch = StaffDirectoryAdapter().from_payload(
         [{"name": "Lab A", "members": ["Alice", "Bob"]}]
     )
     tag_batch = TagCatalogAdapter().from_payload([{"name": "fatigue"}])
 
-    assert staff_batch.entities[0].kind == EntityKind.TEAM
+    assert staff_batch.entities[0].kind == "team"
     assert staff_batch.entities[0].properties["members"] == ["Alice", "Bob"]
-    assert tag_batch.entities[0].kind == EntityKind.TAG
+    assert tag_batch.entities[0].kind == "tag"

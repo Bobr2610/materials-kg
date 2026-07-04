@@ -1,4 +1,4 @@
-"""OpenAI-compatible LLM provider with async streaming and retry."""
+"""Provider-neutral OpenAI-compatible LLM client with async streaming and retry."""
 
 from __future__ import annotations
 
@@ -7,7 +7,6 @@ import json
 import logging
 import os
 import random
-import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -21,25 +20,11 @@ logger = logging.getLogger(__name__)
 _DEFAULT_TIMEOUT = 60.0
 _MAX_RETRIES = 3
 _RETRY_BASE_DELAY = 1.0
-_OPENAI_BASE_URL = "https://api.openai.com"
-_OPENROUTER_BASE_URL = "https://openrouter.ai/api"
-_POLZA_BASE_URL = "https://polza.ai/api"
-_GROQ_BASE_URL = "https://api.groq.com/openai"
-_MISTRAL_BASE_URL = "https://api.mistral.ai"
-_YANDEX_BASE_URL = "https://ai.api.cloud.yandex.net"
-_PROVIDER_DEFAULT_BASE_URLS = {
-    "openai": _OPENAI_BASE_URL,
-    "openrouter": _OPENROUTER_BASE_URL,
-    "polza": _POLZA_BASE_URL,
-    "groq": _GROQ_BASE_URL,
-    "mistral": _MISTRAL_BASE_URL,
-    "yandex": _YANDEX_BASE_URL,
-}
 
 
 @dataclass(frozen=True)
-class OpenAICompatibleConfig:
-    """Resolved OpenAI-compatible provider configuration."""
+class ChatCompletionsConfig:
+    """Resolved chat-completions provider configuration."""
 
     provider: str
     api_key: str
@@ -60,24 +45,16 @@ def _setting_or_env(settings: Any, attr: str, env_name: str) -> str:
     return _clean(getattr(settings, attr, "")) or _clean(os.getenv(env_name))
 
 
-def _openrouter_model_name(model: str) -> str:
-    """Return an OpenRouter model slug without forcing OpenAI-only models."""
-    model = _clean(model)
-    if not model or "/" in model:
-        return model
-    return f"openai/{model}"
-
-
-def _openai_compatible_root(base_url: str) -> str:
-    """Normalize OpenAI-compatible base URLs before appending /v1 paths."""
+def _chat_completions_root(base_url: str) -> str:
+    """Normalize chat-completions base URLs before appending /v1 paths."""
     base_url = _clean(base_url).rstrip("/")
     if base_url.lower().endswith("/v1"):
         return base_url[:-3].rstrip("/")
     return base_url
 
 
-def _openai_compatible_api_base(base_url: str) -> str:
-    root = _openai_compatible_root(base_url)
+def _chat_completions_api_base(base_url: str) -> str:
+    root = _chat_completions_root(base_url)
     return f"{root}/v1"
 
 
@@ -93,15 +70,15 @@ def _selected_chat_model(settings: Any) -> str:
     )
 
 
-def resolve_openai_compatible_config(
+def resolve_chat_completions_config(
     settings: Any,
     *,
     require_provider: bool = False,
-) -> OpenAICompatibleConfig | None:
+) -> ChatCompletionsConfig | None:
     """Resolve any OpenAI-compatible LLM provider from settings/env.
 
-    Known providers keep their built-in default base URLs. Provider selection is
-    explicit: no other provider or generic API key is used as a fallback.
+    Provider selection is explicit: concrete providers, base URLs, API keys, and
+    model names are supplied by Settings or environment variables.
     """
     provider = _selected_provider(settings)
     if not provider:
@@ -116,26 +93,18 @@ def resolve_openai_compatible_config(
         settings,
         f"{provider_key}_api_key",
         f"{env_prefix}_API_KEY",
-    )
+    ) or _setting_or_env(settings, "llm_api_key", "LLM_API_KEY")
     base_url = (
         _setting_or_env(settings, f"{provider_key}_base_url", f"{env_prefix}_BASE_URL")
-        or _PROVIDER_DEFAULT_BASE_URLS.get(provider_key, "")
+        or _setting_or_env(settings, "llm_base_url", "LLM_BASE_URL")
     )
     if not api_key or not base_url:
         return None
 
     chat_model = _selected_chat_model(settings)
     embedding_model = _clean(getattr(settings, "default_embedding_model", ""))
-    if provider_key == "openrouter":
-        chat_model = _openrouter_model_name(chat_model)
-        embedding_model = _openrouter_model_name(embedding_model)
-    elif provider_key == "yandex":
-        folder_id = _clean(getattr(settings, "yandex_folder_id", ""))
-        if folder_id:
-            chat_model = f"gpt://{folder_id}/{chat_model.lstrip('gpt://')}" if chat_model else ""
-            embedding_model = f"emb://{folder_id}/{embedding_model.lstrip('emb://')}" if embedding_model else ""
 
-    return OpenAICompatibleConfig(
+    return ChatCompletionsConfig(
         provider=provider,
         api_key=api_key,
         base_url=base_url,
@@ -147,9 +116,8 @@ def resolve_openai_compatible_config(
 class LLMProvider:
     """Thin client for OpenAI-compatible chat and embedding endpoints.
 
-    Supports both sync and async operations. Async methods use a lazily
-    initialized ``httpx.AsyncClient`` that shares configuration with the
-    sync client.
+    Async-first client. Legacy sync methods are thin compatibility wrappers
+    around the async implementation.
     """
 
     def __init__(
@@ -164,7 +132,7 @@ class LLMProvider:
         retry_base_delay: float = _RETRY_BASE_DELAY,
         reasoning_effort: str | None = None,
     ) -> None:
-        self.base_url = _openai_compatible_root(base_url)
+        self.base_url = _chat_completions_root(base_url)
         self.api_key = api_key
         self.chat_model = chat_model
         self.embedding_model = embedding_model
@@ -172,23 +140,66 @@ class LLMProvider:
         self.max_retries = max_retries
         self.retry_base_delay = retry_base_delay
         self.reasoning_effort = reasoning_effort
-        self._client = httpx.Client(
-            timeout=self.timeout,
-            headers={"Authorization": f"Bearer {self.api_key}"},
-        )
         self._async_client: httpx.AsyncClient | None = None
 
     def _get_async_client(self) -> httpx.AsyncClient:
-        if self._async_client is None or self._async_client.is_closed:
-            self._async_client = httpx.AsyncClient(
-                timeout=self.timeout,
-                headers={"Authorization": f"Bearer {self.api_key}"},
-            )
-        return self._async_client
+        return httpx.AsyncClient(
+            timeout=self.timeout,
+            headers={"Authorization": f"Bearer {self.api_key}"},
+        )
 
-    # ── Sync methods ──────────────────────────────────────────────
+    def _run_async_compat(self, coroutine: Any) -> Any:
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(coroutine)
+        msg = "LLMProvider sync compatibility method called inside an async loop"
+        raise RuntimeError(msg)
+
+    # ── Legacy sync compatibility methods ────────────────────────
 
     def chat(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        model: str | None = None,
+        temperature: float = 0.3,
+        max_tokens: int = 2048,
+        response_format: dict | None = None,
+    ) -> str:
+        return self._run_async_compat(
+            self.chat_async(
+                messages,
+                model=model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                response_format=response_format,
+            )
+        )
+
+    def chat_json(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        model: str | None = None,
+        temperature: float = 0.1,
+        max_tokens: int = 2048,
+    ) -> dict[str, Any]:
+        return self._run_async_compat(
+            self.chat_json_async(
+                messages,
+                model=model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+        )
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        return self._run_async_compat(self.embed_async(texts))
+
+    # ── Async methods ─────────────────────────────────────────────
+
+    async def chat_async(
         self,
         messages: list[dict[str, str]],
         *,
@@ -207,9 +218,10 @@ class LLMProvider:
             payload["reasoning_effort"] = self.reasoning_effort
         if response_format:
             payload["response_format"] = response_format
+        client = self._get_async_client()
         for attempt in range(self.max_retries):
             try:
-                resp = self._client.post(
+                resp = await client.post(
                     f"{self.base_url}/v1/chat/completions",
                     json=payload,
                 )
@@ -238,13 +250,13 @@ class LLMProvider:
                     exc,
                     delay,
                 )
-                time.sleep(delay)
+                await asyncio.sleep(delay)
             except Exception:
                 logger.exception("LLM chat call failed with unexpected error")
                 return ""
         return ""
 
-    def chat_json(
+    async def chat_json_async(
         self,
         messages: list[dict[str, str]],
         *,
@@ -252,7 +264,7 @@ class LLMProvider:
         temperature: float = 0.1,
         max_tokens: int = 2048,
     ) -> dict[str, Any]:
-        raw = self.chat(
+        raw = await self.chat_async(
             messages,
             model=model,
             temperature=temperature,
@@ -286,112 +298,6 @@ class LLMProvider:
                 pass
         logger.warning("Failed to parse LLM JSON response (%d chars)", len(raw))
         return {}
-
-    def embed(self, texts: list[str]) -> list[list[float]]:
-        if not texts:
-            return []
-        results: list[list[float]] = []
-        batch_size = 5
-        for i in range(0, len(texts), batch_size):
-            chunk = texts[i : i + batch_size]
-            batch_result = self._embed_batch(chunk)
-            if batch_result is not None:
-                results.extend(batch_result)
-            else:
-                for text in chunk:
-                    emb = self._embed_one(text)
-                    results.append(emb)
-                    time.sleep(0.5)
-        return results
-
-    def _embed_batch(self, texts: list[str]) -> list[list[float]] | None:
-        payload = {"model": self.embedding_model, "input": texts}
-        for attempt in range(self.max_retries):
-            try:
-                resp = self._client.post(
-                    f"{self.base_url}/v1/embeddings", json=payload
-                )
-                if resp.status_code == 400:
-                    return None  # provider doesn't support batch
-                if resp.status_code == 429:
-                    delay = (2**attempt) * 5 + random.uniform(0, 2)
-                    logger.warning(
-                        "Batch embedding rate-limited, retrying in %.1fs",
-                        delay,
-                    )
-                    time.sleep(delay)
-                    continue
-                resp.raise_for_status()
-                data = resp.json()
-                return [item["embedding"] for item in data["data"]]
-            except (
-                httpx.TimeoutException,
-                httpx.HTTPStatusError,
-                httpx.ConnectError,
-            ) as exc:
-                if attempt == self.max_retries - 1:
-                    logger.exception(
-                        "Batch embedding call failed after %d attempts",
-                        self.max_retries,
-                    )
-                    return None
-                delay = self.retry_base_delay * (2**attempt) + random.uniform(0, 0.5)
-                logger.warning(
-                    "Batch embedding attempt %d/%d failed (%s), retrying in %.1fs",
-                    attempt + 1,
-                    self.max_retries,
-                    exc,
-                    delay,
-                )
-                time.sleep(delay)
-            except Exception:
-                logger.exception("Batch embedding call failed with unexpected error")
-                return None
-        return None
-
-    def _embed_one(self, text: str) -> list[float]:
-        payload = {"model": self.embedding_model, "input": text}
-        for attempt in range(self.max_retries):
-            try:
-                resp = self._client.post(
-                    f"{self.base_url}/v1/embeddings", json=payload
-                )
-                if resp.status_code == 429:
-                    delay = (2**attempt) * 5 + random.uniform(0, 2)
-                    logger.warning(
-                        "Individual embedding rate-limited, retrying in %.1fs",
-                        delay,
-                    )
-                    time.sleep(delay)
-                    continue
-                resp.raise_for_status()
-                data = resp.json()
-                return data["data"][0]["embedding"]
-            except (
-                httpx.TimeoutException,
-                httpx.HTTPStatusError,
-                httpx.ConnectError,
-            ) as exc:
-                if attempt == self.max_retries - 1:
-                    logger.exception(
-                        "Embedding call failed after %d attempts", self.max_retries
-                    )
-                    return []
-                delay = self.retry_base_delay * (2**attempt) + random.uniform(0, 0.5)  # noqa: S311
-                logger.warning(
-                    "Embedding attempt %d/%d failed (%s), retrying in %.1fs",
-                    attempt + 1,
-                    self.max_retries,
-                    exc,
-                    delay,
-                )
-                time.sleep(delay)
-            except Exception:
-                logger.exception("Embedding call failed with unexpected error")
-                return []
-        return []
-
-    # ── Async methods ─────────────────────────────────────────────
 
     async def chat_stream(
         self,
@@ -587,11 +493,12 @@ class LLMProvider:
     # ── Lifecycle ─────────────────────────────────────────────────
 
     def close(self) -> None:
-        self._client.close()
+        self._run_async_compat(self.aclose())
 
     async def aclose(self) -> None:
         if self._async_client and not self._async_client.is_closed:
             await self._async_client.aclose()
+        self._async_client = None
 
 
 def create_provider_from_settings(settings: Any) -> LLMProvider | None:
@@ -605,46 +512,35 @@ def create_provider_from_settings(settings: Any) -> LLMProvider | None:
     kwargs: dict[str, Any] = {
         "chat_model": "",
         "embedding_model": "",
+        "timeout": getattr(settings, "llm_timeout_seconds", _DEFAULT_TIMEOUT),
         "max_retries": getattr(settings, "llm_max_retries", _MAX_RETRIES),
         "retry_base_delay": getattr(
             settings, "llm_retry_base_delay", _RETRY_BASE_DELAY
         ),
     }
 
-    def create_from_config(config: OpenAICompatibleConfig) -> LLMProvider:
-        reasoning_effort: str | None = None
-        if config.provider == "yandex":
-            reasoning_effort = "none"
+    def create_from_config(config: ChatCompletionsConfig) -> LLMProvider:
         return LLMProvider(
             base_url=config.base_url,
             api_key=config.api_key,
             chat_model=config.chat_model,
             embedding_model=config.embedding_model,
+            timeout=kwargs["timeout"],
             max_retries=kwargs["max_retries"],
             retry_base_delay=kwargs["retry_base_delay"],
-            reasoning_effort=reasoning_effort,
         )
 
     selected_provider = _selected_provider(settings)
     if selected_provider:
-        config = resolve_openai_compatible_config(settings, require_provider=True)
+        config = resolve_chat_completions_config(settings, require_provider=True)
         return create_from_config(config) if config is not None else None
 
     return None
 
 
-def create_langchain_chat_model_from_settings(settings: Any) -> tuple[Any, str]:
-    """Create a LangChain-compatible chat model from shared LLM settings."""
-    try:
-        from langchain_openai import ChatOpenAI
-    except ImportError as exc:
-        msg = (
-            "langchain-openai is required for Deep Agents. "
-            "Install kg_engine/requirements.txt before using deepagents mode."
-        )
-        raise RuntimeError(msg) from exc
-
-    config = resolve_openai_compatible_config(settings, require_provider=True)
+def create_agent_chat_model_from_settings(settings: Any) -> tuple[Any, str]:
+    """Create an agent-compatible chat model from the generic LLM provider."""
+    config = resolve_chat_completions_config(settings, require_provider=True)
     if config is None:
         provider = _selected_provider(settings)
         if not provider:
@@ -656,13 +552,85 @@ def create_langchain_chat_model_from_settings(settings: Any) -> tuple[Any, str]:
             )
         raise RuntimeError(msg)
 
-    model = ChatOpenAI(
-        model=config.chat_model,
+    try:
+        from langchain_core.language_models.chat_models import BaseChatModel
+        from langchain_core.messages import AIMessage
+        from langchain_core.messages import BaseMessage
+        from langchain_core.outputs import ChatGeneration
+        from langchain_core.outputs import ChatResult
+    except ImportError as exc:
+        msg = (
+            "langchain-core is required for Deep Agents. "
+            "Install project dependencies before using deepagents mode."
+        )
+        raise RuntimeError(msg) from exc
+
+    provider = LLMProvider(
+        base_url=config.base_url,
         api_key=config.api_key,
-        base_url=_openai_compatible_api_base(config.base_url),
-        temperature=getattr(settings, "llm_temperature", 0.7),
-        timeout=_DEFAULT_TIMEOUT,
+        chat_model=config.chat_model,
+        embedding_model=config.embedding_model,
+        timeout=getattr(settings, "llm_timeout_seconds", _DEFAULT_TIMEOUT),
         max_retries=getattr(settings, "llm_max_retries", _MAX_RETRIES),
+        retry_base_delay=getattr(settings, "llm_retry_base_delay", _RETRY_BASE_DELAY),
+    )
+
+    class ProviderChatModel(BaseChatModel):
+        provider: LLMProvider
+        temperature: float
+        max_tokens: int
+
+        @property
+        def _llm_type(self) -> str:
+            return "materials-kg-chat-completions"
+
+        @staticmethod
+        def _message_to_dict(message: BaseMessage) -> dict[str, str]:
+            role = getattr(message, "type", "user")
+            if role == "human":
+                role = "user"
+            elif role == "ai":
+                role = "assistant"
+            return {"role": role, "content": str(message.content)}
+
+        def _generate(
+            self,
+            messages: list[BaseMessage],
+            stop: list[str] | None = None,
+            run_manager: Any | None = None,
+            **kwargs: Any,
+        ) -> ChatResult:
+            _ = (stop, run_manager)
+            content = self.provider.chat(
+                [self._message_to_dict(message) for message in messages],
+                temperature=kwargs.get("temperature", self.temperature),
+                max_tokens=kwargs.get("max_tokens", self.max_tokens),
+            )
+            return ChatResult(
+                generations=[ChatGeneration(message=AIMessage(content=content))]
+            )
+
+        async def _agenerate(
+            self,
+            messages: list[BaseMessage],
+            stop: list[str] | None = None,
+            run_manager: Any | None = None,
+            **kwargs: Any,
+        ) -> ChatResult:
+            _ = (stop, run_manager)
+            content = await self.provider.chat_async(
+                [self._message_to_dict(message) for message in messages],
+                temperature=kwargs.get("temperature", self.temperature),
+                max_tokens=kwargs.get("max_tokens", self.max_tokens),
+            )
+            return ChatResult(
+                generations=[ChatGeneration(message=AIMessage(content=content))]
+            )
+
+    model = ProviderChatModel(
+        provider=provider,
+        temperature=getattr(settings, "llm_temperature", 0.7),
+        max_tokens=getattr(settings, "llm_max_tokens", 4096),
     )
     return model, f"{config.provider}:{config.chat_model}"
 

@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import json
 
+import anyio
 from fastapi.testclient import TestClient
 
+from kg_engine.agents.hypothesis_tools import create_hypothesis_tools
 from kg_engine.api import materials_core
 from kg_engine.api.materials_core import create_materials_app
 from kg_engine.config.settings import Settings
+from kg_engine.ingestion.document_blocks import DocumentBlock
 from kg_engine.repositories.memory import InMemoryMaterialsKGRepository
 from kg_engine.services.materials_kg import MaterialsKGService
 
@@ -16,6 +19,39 @@ def deterministic_settings() -> Settings:
         materials_hypothesis_engine="deterministic",
         materials_enable_destructive_api=False,
     )
+
+
+def load_task_materials_job(client: TestClient, **params) -> dict:
+    started = client.post("/demo/load-task-materials", params=params)
+    assert started.status_code == 202
+    job = started.json()
+    assert job["status"] in {"queued", "running"}
+    assert job["job_id"]
+    for _ in range(500):
+        job = client.get(f"/demo/load-task-materials/jobs/{job['job_id']}").json()
+        if job["status"] not in {"queued", "running"}:
+            break
+        anyio.run(anyio.sleep, 0.02)
+    assert job["status"] == "completed", job
+    assert job["processed_files"] == job["total_files"]
+    assert job["result"] is not None
+    return job["result"]
+
+
+def generate_hypotheses_job(client: TestClient, payload: dict) -> dict:
+    started = client.post("/hypotheses/generate", json=payload)
+    assert started.status_code == 202
+    job = started.json()
+    assert job["status"] in {"queued", "running"}
+    assert job["job_id"]
+    for _ in range(100):
+        job = client.get(f"/hypotheses/jobs/{job['job_id']}").json()
+        if job["status"] not in {"queued", "running"}:
+            break
+        anyio.run(anyio.sleep, 0.01)
+    assert job["status"] == "completed", job
+    assert job["result"] is not None
+    return job["result"]
 
 
 def test_materials_api_health_and_ingest_query_flow() -> None:
@@ -231,16 +267,14 @@ def test_demo_load_sample_powers_notebook_ui_queries() -> None:
     assert answer_body["experiments"]
     assert answer_body["related_entities"]
 
-    hypotheses = client.post(
-        "/hypotheses/generate",
-        json={
+    hypotheses_body = generate_hypotheses_job(
+        client,
+        {
             "target_kpi": "Tensile Strength",
             "material": "Ti-6Al-4V",
             "max_hypotheses": 3,
         },
     )
-    assert hypotheses.status_code == 200
-    hypotheses_body = hypotheses.json()
     assert hypotheses_body["hypotheses"]
     assert hypotheses_body["hypotheses"][0]["score"]["final_score"] > 0
     assert hypotheses_body["evidence"] or hypotheses_body["data_gaps"]
@@ -294,25 +328,21 @@ def test_task_materials_loader_and_hypothesis_exports(tmp_path, monkeypatch) -> 
     )
     client = TestClient(app)
 
-    loaded = client.post("/demo/load-task-materials")
-    assert loaded.status_code == 200
-    loaded_body = loaded.json()
+    loaded_body = load_task_materials_job(client)
     assert len(loaded_body["uploaded"]) == 4
     assert loaded_body["unsupported_files"] == []
     assert loaded_body["reference"]["entities"] == 3
     assert loaded_body["experiments"]["observations"] == 1
     assert loaded_body["documents_ingested"] == 2
 
-    hypotheses = client.post(
-        "/hypotheses/generate",
-        json={
+    result = generate_hypotheses_job(
+        client,
+        {
             "target_kpi": "Conductivity",
             "material": "CuCrZr",
             "max_hypotheses": 2,
         },
     )
-    assert hypotheses.status_code == 200
-    result = hypotheses.json()
     assert result["hypotheses"]
 
     json_export = client.post(
@@ -369,10 +399,7 @@ def test_task_materials_loader_uses_packaged_fallback(tmp_path, monkeypatch) -> 
     )
     client = TestClient(app)
 
-    loaded = client.post("/demo/load-task-materials")
-
-    assert loaded.status_code == 200
-    loaded_body = loaded.json()
+    loaded_body = load_task_materials_job(client)
     assert loaded_body["used_fallback"] is True
     assert "sample_sources" in loaded_body["task_materials_dir"]
     assert loaded_body["warnings"]
@@ -407,16 +434,11 @@ def test_task_materials_base_loader_skips_examples_and_saves_snapshot(
     )
     client = TestClient(app)
 
-    loaded = client.post(
-        "/demo/load-task-materials",
-        params={
-            "exclude_examples": "true",
-            "snapshot_path": str(snapshot_path),
-        },
+    body = load_task_materials_job(
+        client,
+        exclude_examples="true",
+        snapshot_path=str(snapshot_path),
     )
-
-    assert loaded.status_code == 200
-    body = loaded.json()
     assert body["excluded_examples"] is True
     uploaded_name = body["uploaded"][0]["name"].replace("\\", "/")
     assert uploaded_name == "Регламенты/base.md"
@@ -429,6 +451,88 @@ def test_task_materials_base_loader_skips_examples_and_saves_snapshot(
     restored_counts = restored_service.load_graph_snapshot(snapshot_path)
     assert restored_counts["entities"] == body["snapshot"]["entities"]
     assert restored_service.search_evidence_units("CuCrZr", limit=5)
+
+
+def test_task_example_tailings_excel_is_navigable_for_graph_agent(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    task_dir = tmp_path / "Задача 1"
+    example_dir = task_dir / "Пример 1"
+    example_dir.mkdir(parents=True)
+    source = example_dir / "Хвосты КГМК.xlsx"
+    source.write_bytes(b"fake xlsx; parser is injected")
+
+    class TailingsExcelParser:
+        def parse(self, path):
+            text = (
+                "Комплексный анализ хвостов обогатительных фабрик. "
+                "Хвосты являются отвальными продуктами флотационного обогащения. "
+                "Породные и пирротиновые хвосты содержат потерянные элементы 28 и 29. "
+                "Классы крупности: +125; -125 +71; -71 +45; -45 +20; -20 +10; -10. "
+                "Минералогический анализ: для элемента 28 потенциально извлекаемы "
+                "раскрытый Pnt, закрытый Pnt и миллерит; для элемента 29 извлекаемы "
+                "раскрытый и закрытый Pnt/Cp."
+            )
+            return [
+                DocumentBlock(
+                    block_id="tailings-xlsx-block",
+                    source_file=path.name,
+                    source_path=str(path),
+                    page=None,
+                    block_type="text",
+                    text=text,
+                    raw_fragment=text,
+                    confidence=1.0,
+                    parser="test_excel_parser",
+                    metadata={"sheet": "analysis"},
+                )
+            ]
+
+    monkeypatch.setattr(materials_core, "_TASK_MATERIALS_DIRS", (task_dir,))
+    monkeypatch.setattr(
+        materials_core,
+        "_api_document_parser",
+        lambda *args, **kwargs: TailingsExcelParser(),
+    )
+
+    repository = InMemoryMaterialsKGRepository()
+    service = MaterialsKGService(repository)
+    app = create_materials_app(settings=deterministic_settings(), service=service)
+    client = TestClient(app)
+
+    body = load_task_materials_job(
+        client,
+        enable_llm_extraction="false",
+        enable_embeddings="false",
+    )
+    assert body["documents_ingested"] == 1
+    assert body["uploaded"][0]["name"].replace("\\", "/") == "Пример 1/Хвосты КГМК.xlsx"
+
+    graph = client.get(
+        "/graph/data",
+        params={"sources": "Пример 1/Хвосты КГМК.xlsx"},
+    )
+    assert graph.status_code == 200
+    graph_body = graph.json()
+    document_nodes = [
+        node for node in graph_body["nodes"] if node["kind"] == "document"
+    ]
+    assert document_nodes
+    assert graph_body["edges"]
+
+    tools = {tool.__name__: tool for tool in create_hypothesis_tools(service)}
+    hits = tools["kg_search_evidence"](
+        "хвосты элемент 28 Pnt крупности",
+        source_ids=["Пример 1/Хвосты КГМК.xlsx"],
+    )
+    related = tools["kg_query_related"](document_nodes[0]["id"], depth=1)
+
+    assert hits
+    assert "Pnt" in hits[0]["content"]
+    assert related["root_entity"]["kind"] == "document"
+    assert related["relations"]
+    assert related["evidence"]
 
 
 def test_metrics_api_offline_quality_flow() -> None:
@@ -930,25 +1034,21 @@ def test_task_materials_loader_and_hypothesis_exports(tmp_path, monkeypatch) -> 
     )
     client = TestClient(app)
 
-    loaded = client.post("/demo/load-task-materials")
-    assert loaded.status_code == 200
-    loaded_body = loaded.json()
+    loaded_body = load_task_materials_job(client)
     assert len(loaded_body["uploaded"]) == 4
     assert loaded_body["unsupported_files"] == []
     assert loaded_body["reference"]["entities"] == 3
     assert loaded_body["experiments"]["observations"] == 1
     assert loaded_body["documents_ingested"] == 2
 
-    hypotheses = client.post(
-        "/hypotheses/generate",
-        json={
+    result = generate_hypotheses_job(
+        client,
+        {
             "target_kpi": "Conductivity",
             "material": "CuCrZr",
             "max_hypotheses": 2,
         },
     )
-    assert hypotheses.status_code == 200
-    result = hypotheses.json()
     assert result["hypotheses"]
 
     json_export = client.post(
@@ -1005,10 +1105,7 @@ def test_task_materials_loader_uses_packaged_fallback(tmp_path, monkeypatch) -> 
     )
     client = TestClient(app)
 
-    loaded = client.post("/demo/load-task-materials")
-
-    assert loaded.status_code == 200
-    loaded_body = loaded.json()
+    loaded_body = load_task_materials_job(client)
     assert loaded_body["used_fallback"] is True
     assert "sample_sources" in loaded_body["task_materials_dir"]
     assert loaded_body["warnings"]

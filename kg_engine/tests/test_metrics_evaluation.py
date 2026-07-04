@@ -2,12 +2,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from kg_engine.domain.models import EntityKind
 from kg_engine.domain.models import HypothesisGenerationResult
 from kg_engine.domain.models import HypothesisScore
 from kg_engine.domain.models import Observation
 from kg_engine.domain.models import ResearchHypothesis
-from kg_engine.domain.models import RelationType
 from kg_engine.repositories.memory import InMemoryMaterialsKGRepository
 from kg_engine.services.metrics import ContextBenchmark
 from kg_engine.services.metrics import CoverageAxis
@@ -41,25 +39,25 @@ def test_extraction_benchmark_scores_entity_and_relation_f1() -> None:
             ExtractionBenchmarkSample(
                 sample_id="doc-1",
                 expected_entities=[
-                    EntityMatch(kind=EntityKind.MATERIAL, name="CuCrZr"),
-                    EntityMatch(kind=EntityKind.MODE, name="Aging"),
+                    EntityMatch(kind="material", name="CuCrZr"),
+                    EntityMatch(kind="mode", name="Aging"),
                 ],
                 extracted_entities=[
-                    EntityMatch(kind=EntityKind.MATERIAL, name="cucrzr"),
-                    EntityMatch(kind=EntityKind.PROPERTY, name="Hardness"),
+                    EntityMatch(kind="material", name="cucrzr"),
+                    EntityMatch(kind="property", name="Hardness"),
                 ],
                 expected_relations=[
                     RelationMatch(
-                        relation_type=RelationType.USES_MODE,
-                        source=EntityMatch(kind=EntityKind.MATERIAL, name="CuCrZr"),
-                        target=EntityMatch(kind=EntityKind.MODE, name="Aging"),
+                        relation_type="uses_mode",
+                        source=EntityMatch(kind="material", name="CuCrZr"),
+                        target=EntityMatch(kind="mode", name="Aging"),
                     )
                 ],
                 extracted_relations=[
                     RelationMatch(
-                        relation_type=RelationType.USES_MODE,
-                        source=EntityMatch(kind=EntityKind.MATERIAL, name="CuCrZr"),
-                        target=EntityMatch(kind=EntityKind.MODE, name="Aging"),
+                        relation_type="uses_mode",
+                        source=EntityMatch(kind="material", name="CuCrZr"),
+                        target=EntityMatch(kind="mode", name="Aging"),
                     )
                 ],
             )
@@ -235,8 +233,8 @@ def test_compare_hypothesis_runs_reports_metric_deltas() -> None:
         samples=[
             ExtractionBenchmarkSample(
                 sample_id="doc-1",
-                expected_entities=[EntityMatch(kind=EntityKind.MATERIAL, name="CuCrZr")],
-                extracted_entities=[EntityMatch(kind=EntityKind.MATERIAL, name="CuCrZr")],
+                expected_entities=[EntityMatch(kind="material", name="CuCrZr")],
+                extracted_entities=[EntityMatch(kind="material", name="CuCrZr")],
                 expected_relations=[],
                 extracted_relations=[],
             )
@@ -603,8 +601,8 @@ def test_compare_hypothesis_runs_identical_produces_zero_deltas() -> None:
             samples=[
                 ExtractionBenchmarkSample(
                     sample_id="doc-1",
-                    expected_entities=[EntityMatch(kind=EntityKind.MATERIAL, name="CuCrZr")],
-                    extracted_entities=[EntityMatch(kind=EntityKind.MATERIAL, name="CuCrZr")],
+                    expected_entities=[EntityMatch(kind="material", name="CuCrZr")],
+                    extracted_entities=[EntityMatch(kind="material", name="CuCrZr")],
                     expected_relations=[],
                     extracted_relations=[],
                 )

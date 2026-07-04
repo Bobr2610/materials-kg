@@ -11,6 +11,7 @@ from kg_engine.domain.product import DecisionGate
 from kg_engine.domain.product import ExperimentStep
 from kg_engine.domain.product import VerificationRoadmap
 from kg_engine.domain.product import ExpertReview
+from kg_engine.domain.product import ExperimentOutcome
 from kg_engine.domain.product import HypothesisRun
 from kg_engine.domain.product import ReviewDecision
 from kg_engine.domain.models import HypothesisScore
@@ -181,3 +182,69 @@ def test_expert_review_is_persisted_as_immutable_run_feedback(tmp_path: Path) ->
     )
 
     assert service.list_expert_reviews(run_id=run.id) == [review]
+
+
+def test_experiment_outcome_calibrates_future_project_weights(tmp_path: Path) -> None:
+    service = _product_service(tmp_path)
+    project = service.create_project(
+        ResearchProjectCreate(name="Tailings", target_kpi="Reduce metal losses")
+    )
+    run = service.save_hypothesis_run(
+        HypothesisRun(
+            project_id=project.id,
+            result={
+                "hypotheses": [
+                    {
+                        "id": "h-value",
+                        "score": {
+                            "novelty": 0.1,
+                            "risk": 0.8,
+                            "value": 0.95,
+                            "evidence_strength": 0.2,
+                            "final_score": 0.43,
+                        },
+                    },
+                    {
+                        "id": "h-evidence",
+                        "score": {
+                            "novelty": 0.1,
+                            "risk": 0.8,
+                            "value": 0.2,
+                            "evidence_strength": 0.95,
+                            "final_score": 0.37,
+                        },
+                    },
+                ]
+            },
+        )
+    )
+    accepted = service.save_expert_review(
+        ExpertReview(
+            run_id=run.id,
+            hypothesis_id="h-value",
+            expert_id="expert-1",
+            decision=ReviewDecision.ACCEPT,
+            rating=4,
+        )
+    )
+    rejected = service.save_expert_review(
+        ExpertReview(
+            run_id=run.id,
+            hypothesis_id="h-evidence",
+            expert_id="expert-1",
+            decision=ReviewDecision.REJECT,
+            rating=2,
+        )
+    )
+
+    confirmed = service.save_experiment_outcome(
+        ExperimentOutcome(review_id=accepted.id, confirmed=True, actual_kpi=1.5)
+    )
+    service.save_experiment_outcome(
+        ExperimentOutcome(review_id=rejected.id, confirmed=False, actual_kpi=0.1)
+    )
+
+    weights = service.derive_feedback_ranking_weights(project.id)
+
+    assert service.list_experiment_outcomes(run_id=run.id)[0] == confirmed
+    assert weights["value"] > weights["evidence_strength"]

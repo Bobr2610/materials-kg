@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import anyio
 from fastapi.testclient import TestClient
 import pytest
 
@@ -15,18 +16,25 @@ from kg_engine.config.settings import Settings
 from kg_engine.domain.models import CanonicalEntityInput
 from kg_engine.domain.models import CoverageRuleInput
 from kg_engine.domain.models import DocumentInput
-from kg_engine.domain.models import EntityKind
 from kg_engine.domain.models import ExperimentInput
 from kg_engine.domain.models import FindingInput
 from kg_engine.domain.models import HypothesisInput
 from kg_engine.domain.models import ObservationInput
 from kg_engine.domain.models import ReferenceDataBatch
-from kg_engine.domain.models import RelationType
 from kg_engine.domain.models import TextUnitInput
 from kg_engine.llm_core.extraction import extract_entities_from_document
 from kg_engine.llm_core.extraction import select_extraction_strategy
 from kg_engine.repositories.memory import InMemoryMaterialsKGRepository
 from kg_engine.services.materials_kg import MaterialsKGService
+
+
+def _wait_hypothesis_job(client: TestClient, job_id: str) -> dict:
+    for _ in range(200):
+        job = client.get(f"/hypotheses/jobs/{job_id}").json()
+        if job["status"] not in {"queued", "running"}:
+            return job
+        anyio.run(anyio.sleep, 0.02)
+    return client.get(f"/hypotheses/jobs/{job_id}").json()
 
 
 class _Message:
@@ -53,10 +61,10 @@ def _build_service() -> MaterialsKGService:
     service.ingest_reference_data(
         ReferenceDataBatch(
             entities=[
-                CanonicalEntityInput(kind=EntityKind.MATERIAL, name="CuCrZr"),
-                CanonicalEntityInput(kind=EntityKind.MODE, name="Aged"),
+                CanonicalEntityInput(kind="material", name="CuCrZr"),
+                CanonicalEntityInput(kind="mode", name="Aged"),
                 CanonicalEntityInput(
-                    kind=EntityKind.PROPERTY,
+                    kind="property",
                     name="Electrical Conductivity",
                 ),
             ],
@@ -88,9 +96,10 @@ def _settings() -> Settings:
         materials_hypothesis_engine="deepagents",
         materials_deepagents_enabled=True,
         materials_deepagents_max_tool_steps=7,
-        default_llm_provider="openai",
+        default_llm_provider="provider-test",
         default_model="gpt-test",
-        openai_api_key="test-key",
+        llm_api_key="test-key",
+        llm_base_url="https://provider-test.example/v1",
     )
 
 
@@ -129,11 +138,11 @@ def test_deep_agent_factory_validates_result_and_records_trace() -> None:
         HypothesisInput(target_kpi="Electrical Conductivity", material="CuCrZr"),
         runtime_settings=_settings(),
         agent_factory=fake_agent_factory,
-        model_factory=lambda _: ("fake-model", "openai:gpt-test"),
+        model_factory=lambda _: ("fake-model", "provider-test:gpt-test"),
     )
 
     assert result.generation_engine == "deepagents"
-    assert result.llm_used == "openai:gpt-test"
+    assert result.llm_used == "provider-test:gpt-test"
     assert result.hypotheses
     assert result.agent_trace[0]["event"] == "agent_prepare"
     assert result.agent_trace[0]["max_tool_steps"] == 7
@@ -167,7 +176,7 @@ def test_deep_agent_rejects_non_json_without_deterministic_fallback() -> None:
             HypothesisInput(target_kpi="Electrical Conductivity"),
             runtime_settings=_settings(),
             agent_factory=lambda **_: BadAgent(),
-            model_factory=lambda _: ("fake-model", "openai:gpt-test"),
+            model_factory=lambda _: ("fake-model", "provider-test:gpt-test"),
         )
 
 
@@ -188,7 +197,7 @@ def test_deep_agent_invocation_error_is_explicit() -> None:
             HypothesisInput(target_kpi="Electrical Conductivity"),
             runtime_settings=_settings(),
             agent_factory=lambda **_: FailingAgent(),
-            model_factory=lambda _: ("fake-model", "openai:gpt-test"),
+            model_factory=lambda _: ("fake-model", "provider-test:gpt-test"),
         )
 
 
@@ -205,9 +214,10 @@ def test_deep_agent_llm_preflight_runs_before_factories() -> None:
             HypothesisInput(target_kpi="Electrical Conductivity"),
             runtime_settings=Settings(
                 materials_deepagents_enabled=True,
-                default_llm_provider="openai",
+                default_llm_provider="provider-test",
                 default_model="gpt-test",
-                openai_api_key="",
+                llm_api_key="",
+                llm_base_url="",
             ),
             agent_factory=fail_agent_factory,
         )
@@ -238,7 +248,7 @@ def test_deep_agent_discards_ungrounded_hypotheses() -> None:
         HypothesisInput(target_kpi="Electrical Conductivity", material="CuCrZr"),
         runtime_settings=_settings(),
         agent_factory=lambda **kwargs: _FakeDeepAgent(payload, kwargs["tools"]),
-        model_factory=lambda _: ("fake-model", "openai:gpt-test"),
+        model_factory=lambda _: ("fake-model", "provider-test:gpt-test"),
     )
 
     assert "hallucinated-hypothesis" not in {item.id for item in result.hypotheses}
@@ -274,7 +284,7 @@ def test_deep_agent_does_not_treat_entity_ids_as_grounding() -> None:
         HypothesisInput(target_kpi="Electrical Conductivity", material="CuCrZr"),
         runtime_settings=_settings(),
         agent_factory=lambda **kwargs: _FakeDeepAgent(payload, kwargs["tools"]),
-        model_factory=lambda _: ("fake-model", "openai:gpt-test"),
+        model_factory=lambda _: ("fake-model", "provider-test:gpt-test"),
     )
 
     assert result.hypotheses == []
@@ -358,37 +368,37 @@ def test_hypothesis_tools_filter_by_source_ids() -> None:
         ReferenceDataBatch(
             entities=[
                 CanonicalEntityInput(
-                    kind=EntityKind.MATERIAL,
+                    kind="material",
                     name="Material-A",
                     source_ref="file-a.json",
                 ),
                 CanonicalEntityInput(
-                    kind=EntityKind.MODE,
+                    kind="mode",
                     name="Mode-A",
                     source_ref="file-a.json",
                 ),
                 CanonicalEntityInput(
-                    kind=EntityKind.PROPERTY,
+                    kind="property",
                     name="KPI-A",
                     source_ref="file-a.json",
                 ),
                 CanonicalEntityInput(
-                    kind=EntityKind.PROPERTY,
+                    kind="property",
                     name="KPI-A-Missing",
                     source_ref="file-a.json",
                 ),
                 CanonicalEntityInput(
-                    kind=EntityKind.MATERIAL,
+                    kind="material",
                     name="Material-B",
                     source_ref="file-b.json",
                 ),
                 CanonicalEntityInput(
-                    kind=EntityKind.MODE,
+                    kind="mode",
                     name="Mode-B",
                     source_ref="file-b.json",
                 ),
                 CanonicalEntityInput(
-                    kind=EntityKind.PROPERTY,
+                    kind="property",
                     name="KPI-B-Missing",
                     source_ref="file-b.json",
                 ),
@@ -449,6 +459,41 @@ def test_hypothesis_tools_filter_by_source_ids() -> None:
     )
 
 
+def test_hypothesis_tools_can_navigate_loaded_files_through_graph() -> None:
+    service = MaterialsKGService(InMemoryMaterialsKGRepository())
+    service.ingest_documents(
+        [
+            DocumentInput(
+                document_id="doc-reglament",
+                title="Регламент флотации",
+                text="CuCrZr conductivity source hit from Регламенты/reglament.md.",
+                source_ref="Регламенты/reglament.md",
+            )
+        ]
+    )
+
+    tools = {tool.__name__: tool for tool in create_hypothesis_tools(service)}
+
+    overview = tools["kg_get_source_overview"]()
+    hits = tools["kg_search_evidence"](
+        "CuCrZr conductivity",
+        source_ids=["Регламенты/reglament.md"],
+    )
+    related = tools["kg_query_related"]("doc-reglament", depth=1)
+
+    assert "Регламенты/reglament.md" in overview["source_files"]
+    assert overview["total_evidence"] >= 1
+    assert hits
+    assert hits[0]["source_entity_id"] == "doc-reglament"
+    assert related["root_entity"]["kind"] == "document"
+    assert related["relations"]
+    assert related["evidence"]
+    assert any(
+        path["evidence_ids"]
+        for path in related["evidence_paths"]
+    )
+
+
 def test_api_uses_deepagents_engine_with_injected_runner(monkeypatch) -> None:
     service = _build_service()
     baseline = service.generate_hypotheses(
@@ -456,7 +501,7 @@ def test_api_uses_deepagents_engine_with_injected_runner(monkeypatch) -> None:
     )
     payload = baseline.model_dump(mode="json")
     payload["generation_engine"] = "deepagents"
-    payload["llm_used"] = "openai:gpt-test"
+    payload["llm_used"] = "provider-test:gpt-test"
 
     def fake_generate(
         runtime_service: MaterialsKGService,
@@ -468,7 +513,7 @@ def test_api_uses_deepagents_engine_with_injected_runner(monkeypatch) -> None:
         return baseline.model_copy(
             update={
                 "generation_engine": "deepagents",
-                "llm_used": "openai:gpt-test",
+                "llm_used": "provider-test:gpt-test",
                 "agent_trace": [{"event": "fake"}],
             }
         )
@@ -487,10 +532,12 @@ def test_api_uses_deepagents_engine_with_injected_runner(monkeypatch) -> None:
         json={"target_kpi": "Electrical Conductivity", "material": "CuCrZr"},
     )
 
-    assert response.status_code == 200
-    body = response.json()
+    assert response.status_code == 202
+    job = _wait_hypothesis_job(client, response.json()["job_id"])
+    assert job["status"] == "completed"
+    body = job["result"]
     assert body["generation_engine"] == "deepagents"
-    assert body["llm_used"] == "openai:gpt-test"
+    assert body["llm_used"] == "provider-test:gpt-test"
     assert body["agent_trace"] == [{"event": "fake"}]
 
 
@@ -499,9 +546,10 @@ def test_api_returns_explicit_error_when_llm_config_is_missing() -> None:
         settings=Settings(
             materials_hypothesis_engine="deepagents",
             materials_deepagents_enabled=True,
-            default_llm_provider="openai",
+            default_llm_provider="provider-test",
             default_model="gpt-test",
-            openai_api_key="",
+            llm_api_key="",
+            llm_base_url="",
         ),
         service=_build_service(),
     )
@@ -512,8 +560,11 @@ def test_api_returns_explicit_error_when_llm_config_is_missing() -> None:
         json={"target_kpi": "Electrical Conductivity", "material": "CuCrZr"},
     )
 
-    assert response.status_code == 503
-    assert response.json()["detail"]
+    assert response.status_code == 202
+    job = _wait_hypothesis_job(client, response.json()["job_id"])
+    assert job["status"] == "failed"
+    assert job["status_code"] == 503
+    assert job["error"]
 
 
 def test_expert_adjustments_apply_to_deep_agent_result() -> None:
@@ -535,7 +586,7 @@ def test_expert_adjustments_apply_to_deep_agent_result() -> None:
         ),
         runtime_settings=_settings(),
         agent_factory=lambda **kwargs: _FakeDeepAgent(payload, kwargs["tools"]),
-        model_factory=lambda _: ("fake-model", "openai:gpt-test"),
+        model_factory=lambda _: ("fake-model", "provider-test:gpt-test"),
     )
 
     assert result.hypotheses[0].score.final_score > old_score
@@ -654,13 +705,13 @@ def test_extraction_strategy_handles_empty_simple_numeric_and_long_documents() -
     assert select_extraction_strategy("empty", "   ") == "empty"
     assert (
         select_extraction_strategy("note", "CuCrZr and IN718 overview")
-        == "entity_first"
+        == "phased"
     )
     assert (
         select_extraction_strategy("results", "Hardness reached 36 HRC after anneal")
         == "phased"
     )
-    assert select_extraction_strategy("long", "CuCrZr " * 3000) == "chunked_phased"
+    assert select_extraction_strategy("long", "CuCrZr " * 5000) == "chunked_phased"
 
 
 def test_ingest_documents_writes_llm_extracted_graph_data_with_evidence() -> None:
@@ -732,7 +783,7 @@ def test_ingest_documents_writes_llm_extracted_graph_data_with_evidence() -> Non
     assert material_mode.evidence[0].metadata["agent_trace"][0]["event"] == (
         "deepagents_extraction_started"
     )
-    related = service.query_related("CuCrZr", relation_filters=[RelationType.USES_MODE])
+    related = service.query_related("CuCrZr", relation_filters=["uses_mode"])
     assert related.relations
     assert related.relations[0].evidence_ids
     relation_evidence = service.repository.list_evidence(related.relations[0].evidence_ids)

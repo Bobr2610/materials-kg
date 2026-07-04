@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from kg_engine.domain.models import HypothesisGenerationResult
+from kg_engine.domain.models import ResearchHypothesis
 
 
 def render_hypothesis_report(
@@ -43,6 +44,12 @@ def _render_markdown(result: HypothesisGenerationResult) -> bytes:
                 f"- Mechanism: {hypothesis.mechanism or 'Not specified'}",
                 f"- Rationale: {hypothesis.rationale}",
                 f"- Test plan: {hypothesis.test_plan}",
+                f"- Uncertainty: {hypothesis.score.uncertainty:.3f}",
+                f"- Feasibility: {hypothesis.score.feasibility:.3f}",
+                f"- Risks: {_join(hypothesis.risk_items)}",
+                f"- Falsification: {_join(hypothesis.falsification_criteria)}",
+                f"- Roadmap: {_roadmap_summary(hypothesis)}",
+                f"- Resources: {_resources_summary(hypothesis)}",
                 "- Evidence: "
                 + ", ".join(
                     [
@@ -74,6 +81,13 @@ def _render_xlsx(result: HypothesisGenerationResult) -> bytes:
             "Risk",
             "Value",
             "Evidence strength",
+            "Feasibility",
+            "Uncertainty",
+            "Technical risk",
+            "Risk items",
+            "Falsification criteria",
+            "Roadmap",
+            "Resources",
             "Evidence IDs",
             "Test plan",
         ]
@@ -90,6 +104,13 @@ def _render_xlsx(result: HypothesisGenerationResult) -> bytes:
                 item.score.risk,
                 item.score.value,
                 item.score.evidence_strength,
+                item.score.feasibility,
+                item.score.uncertainty,
+                item.score.technical_risk,
+                _join(item.risk_items),
+                _join(item.falsification_criteria),
+                _roadmap_summary(item),
+                _resources_summary(item),
                 ";".join(
                     [
                         *item.supporting_evidence_ids,
@@ -121,6 +142,18 @@ def _render_docx(result: HypothesisGenerationResult) -> bytes:
         document.add_paragraph(item.rationale)
         document.add_heading("Verification", level=2)
         document.add_paragraph(item.test_plan)
+        document.add_heading("Risk, uncertainty, and KPI", level=2)
+        document.add_paragraph(
+            f"Feasibility: {item.score.feasibility:.3f}; "
+            f"uncertainty: {item.score.uncertainty:.3f}; "
+            f"technical risk: {item.score.technical_risk:.3f}"
+        )
+        document.add_paragraph(f"Risks: {_join(item.risk_items)}")
+        document.add_paragraph(f"Falsification: {_join(item.falsification_criteria)}")
+        document.add_paragraph(f"Success criteria: {_join(item.success_criteria)}")
+        document.add_heading("Roadmap and resources", level=2)
+        document.add_paragraph(_roadmap_summary(item))
+        document.add_paragraph(_resources_summary(item))
         document.add_heading("Provenance IDs", level=2)
         evidence_ids = [
             *item.supporting_evidence_ids,
@@ -164,6 +197,16 @@ def _render_pdf(result: HypothesisGenerationResult) -> bytes:
         write(f"Mechanism: {item.mechanism or 'Not specified'}")
         write(f"Rationale: {item.rationale}")
         write(f"Verification: {item.test_plan}")
+        write(
+            "Risk/uncertainty: "
+            f"feasibility={item.score.feasibility:.3f}, "
+            f"uncertainty={item.score.uncertainty:.3f}, "
+            f"technical_risk={item.score.technical_risk:.3f}"
+        )
+        write(f"Risks: {_join(item.risk_items)}")
+        write(f"Falsification: {_join(item.falsification_criteria)}")
+        write(f"Roadmap: {_roadmap_summary(item)}")
+        write(f"Resources: {_resources_summary(item)}")
         ids = [
             *item.supporting_evidence_ids,
             *item.supporting_observation_ids,
@@ -172,6 +215,36 @@ def _render_pdf(result: HypothesisGenerationResult) -> bytes:
         write(f"Provenance IDs: {', '.join(ids) or 'none'}")
     canvas.save()
     return output.getvalue()
+
+
+def _join(values: list[str]) -> str:
+    return "; ".join(item for item in values if item) or "none"
+
+
+def _roadmap_summary(hypothesis: ResearchHypothesis) -> str:
+    roadmap = hypothesis.verification_roadmap
+    if roadmap is None or not roadmap.steps:
+        return "none"
+    parts = []
+    for step in sorted(roadmap.steps, key=lambda item: item.order):
+        duration = (
+            f", {step.estimated_duration_days:g} days"
+            if step.estimated_duration_days is not None
+            else ""
+        )
+        parts.append(f"{step.order}. {step.objective} via {step.method}{duration}")
+    return " | ".join(parts)
+
+
+def _resources_summary(hypothesis: ResearchHypothesis) -> str:
+    if not hypothesis.resource_estimate:
+        return "none"
+    return "; ".join(
+        f"{item.kind}:{item.name}"
+        + (f" x{item.quantity:g}" if item.quantity is not None else "")
+        + (f" {item.unit}" if item.unit else "")
+        for item in hypothesis.resource_estimate
+    )
 
 
 def _register_pdf_font(pdfmetrics: Any, font_type: Any) -> str:
