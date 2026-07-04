@@ -1,0 +1,21 @@
+var UI_TEXT = {
+  noData: "Нет данных",
+  noMeasurements: "Измерения не найдены",
+  noExperiments: "Эксперименты не найдены",
+  noDecisionHistory: "История решений не найдена",
+  noGaps: "Пробелы не найдены",
+  answerMissing: "Ответ не сформирован.",
+  citationsTitle: "Источники цитат",
+  sourceEmptyTitle: "Здесь появятся загруженные источники",
+  sourceEmptyBody: "Нажмите &laquo;Добавить источники&raquo; или перетащите файлы: JSON, JSONL, CSV, TSV, TXT, MD",
+  sourceNotFoundTitle: "Источники не найдены",
+  sourceNotFoundBody: "Измените строку поиска или загрузите другой файл.",
+  graphEmpty: "Граф пуст — загрузите источники слева",
+  graphNoSelection: "Отметьте галочкой хотя бы один источник",
+  graphLoadErrorHint: "Убедитесь что Neo4j запущен: docker compose up -d",
+  sampleLoaded: "Пример данных загружен.",
+  allSourcesRemoved: "Все источники удалены. Граф пуст.",
+  filesAccepted: "источники приняты",
+  hypothesisMissingKpi: "Введите целевой KPI для генерации гипотез.",
+  noHypotheses: "Гипотезы не сформированы"
+};

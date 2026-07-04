@@ -43,11 +43,27 @@ kg_engine/domain/models.py
 | `lint.py` | Colored ruff check/format wrapper with summary |
 | `Dockerfile` | Python 3.11-slim build, exposes 8090 |
 | `docker-compose.yml` | Two services: `materials-neo4j` (Neo4j 5) + `materials-api` (FastAPI) |
-| `ui-page.html` | Single-page Russian UI "Фабрика гипотез": upload, graph inspection, hypothesis generation, evidence IDs, expert feedback, JSON/CSV export |
+| `ui/` | Static Russian UI "Фабрика гипотез": upload, graph inspection, hypothesis generation, evidence IDs, expert feedback, JSON/CSV export |
 | `.env` | Live env vars (gitignored) |
 | `.env.example` | Template: Neo4j, API, LLM provider config (82 lines) |
 | `.gitignore` | Ignores .env, .venv, __pycache__, caches |
 | `.dockerignore` | Strips .git, .venv, caches, .env, .agents from Docker context |
+
+---
+
+### `ui/` — Static Dashboard
+
+| File | Purpose |
+|------|---------|
+| `index.html` | Markup-only dashboard shell served by `/` |
+| `styles.css` | Dashboard layout, responsive rules, source list, hypothesis cards, right-side graph panel |
+| `config.js` | UI endpoints, limits, supported file types, Task 1 loader params, graph colors/labels |
+| `text.ru.js` | Reusable Russian UI strings for empty/error/status states |
+| `api.js` | Shared `fetch`/JSON helpers and export download helper |
+| `sources.js` | Upload, source list, source delete, source filtering, Task 1 load flow |
+| `hypotheses.js` | Hypothesis generation jobs, rendering, export, expert adjustment and feedback logic |
+| `graph.js` | Right-side sliding graph panel, legend, `/graph/data` loading, `vis.Network` rendering |
+| `main.js` | Global UI state, chat rendering, event listener bootstrap, initial `/state` load |
 
 ---
 

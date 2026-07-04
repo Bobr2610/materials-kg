@@ -70,7 +70,7 @@ Acceptance:
 Можно менять:
 
 - `kg_engine/api/materials_core.py`
-- `ui-page.html` or a replacement UI entry point
+- `ui/` static dashboard files
 - export/report helpers
 - README/API docs for user workflows
 - tests for API smoke, exports, demo loading, feedback UX

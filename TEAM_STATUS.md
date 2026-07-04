@@ -95,7 +95,7 @@
 
 | Роль | Участник | Задача | Статус | Ветка | Обновлено |
 |------|----------|--------|--------|-------|-----------|
-| _(пусто)_ | — | — | — | — | — |
+| Product / UI | Codex | Split monolithic UI into static modules without graph regression | готово | feat/api-static-ui-split | 2026-07-04 |
 
 ## История выполненных задач
 

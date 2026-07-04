@@ -7,7 +7,7 @@ WORKDIR /app
 
 COPY pyproject.toml README.md ./
 COPY kg_engine ./kg_engine
-COPY ui-page.html ./
+COPY ui ./ui
 
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -e . \

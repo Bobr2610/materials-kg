@@ -26,6 +26,7 @@ from fastapi import Query
 from fastapi import UploadFile
 from fastapi.responses import HTMLResponse
 from fastapi.responses import Response
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from pydantic import Field
 
@@ -961,11 +962,12 @@ class HypothesisExportRequest(BaseModel):
     result: HypothesisGenerationResult
 
 
-_UI_PAGE = Path(__file__).resolve().parents[2] / "ui-page.html"
+_UI_DIR = Path(__file__).resolve().parents[2] / "ui"
+_UI_INDEX = _UI_DIR / "index.html"
 
 
 def _notebook_dashboard_html() -> str:
-    return _UI_PAGE.read_text(encoding="utf-8")
+    return _UI_INDEX.read_text(encoding="utf-8")
 
 
 def _create_llm_provider(settings: Settings | None = None):
@@ -1029,6 +1031,7 @@ def create_materials_app(
         _PROJECT_ROOT / ".scratch" / "product" / "research.sqlite3"
     )
     app = FastAPI(title=api_title)
+    app.mount("/ui", StaticFiles(directory=_UI_DIR), name="ui")
     _source_files: list[dict] = []
     _task_load_jobs: dict[str, dict] = {}
     _task_load_jobs_lock = Lock()

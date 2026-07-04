@@ -200,12 +200,17 @@ def test_dashboard_and_sample_data_flow() -> None:
     assert "Источники" in dashboard.text
     assert "Чат" in dashboard.text
     assert "Добавить источники" in dashboard.text
-    assert "/ingest/upload" in dashboard.text
     assert "Введите текст" in dashboard.text
+    assert '<link rel="stylesheet" href="/ui/styles.css">' in dashboard.text
+    assert '<script src="/ui/config.js"></script>' in dashboard.text
+    assert '<script src="/ui/main.js"></script>' in dashboard.text
+    assert '<script src="/ui/graph.js"></script>' in dashboard.text
     assert 'id="collapseSources"' in dashboard.text
     assert 'id="restoreSources"' in dashboard.text
     assert 'id="menuButton"' in dashboard.text
     assert 'id="graphToggle"' in dashboard.text
+    assert 'id="graphPanel"' in dashboard.text
+    assert 'id="graphVis"' in dashboard.text
     assert 'id="clearAllSources"' in dashboard.text
     assert 'id="loadTaskMaterials"' in dashboard.text
     assert 'id="exportHypothesesJson"' in dashboard.text
@@ -217,17 +222,34 @@ def test_dashboard_and_sample_data_flow() -> None:
     assert 'id="hypothesisPanel"' in dashboard.text
     assert 'id="targetKpi"' in dashboard.text
     assert 'id="generateHypotheses"' in dashboard.text
-    assert "/hypotheses/generate" in dashboard.text
-    assert "renderHypotheses" in dashboard.text
-    assert "/demo/load-task-materials" in dashboard.text
-    assert "/hypotheses/export?format=" in dashboard.text
-    assert "/metrics/feedback" in dashboard.text
-    assert "Evidence IDs" in dashboard.text
-    assert "Observation IDs" in dashboard.text
-    assert "uploadBatchSize" in dashboard.text
-    assert "graphDataUrl" in dashboard.text
-    assert "renderSourceList" in dashboard.text
-    assert "async function clearAllSources" in dashboard.text
+    assert dashboard.text.index('id="graphPanel"') > dashboard.text.index("</section>")
+
+    static_assets = {
+        "/ui/styles.css": ".graph-panel",
+        "/ui/config.js": "/graph/data",
+        "/ui/main.js": "loadInitialState",
+        "/ui/api.js": "postJson",
+        "/ui/sources.js": "async function clearAllSources",
+        "/ui/hypotheses.js": "renderHypotheses",
+        "/ui/graph.js": "async function loadGraph",
+        "/ui/text.ru.js": "graphEmpty",
+    }
+    for path, marker in static_assets.items():
+        asset = client.get(path)
+        assert asset.status_code == 200, path
+        assert marker in asset.text
+
+    config = client.get("/ui/config.js").text
+    assert "/ingest/upload" in config
+    assert "/hypotheses/generate" in config
+    assert "/demo/load-task-materials" in config
+    assert "/metrics/feedback" in config
+    assert "uploadBatchSize" in config
+    assert "supportedTypes" in config
+
+    graph_js = client.get("/ui/graph.js").text
+    assert "new vis.Network" in graph_js
+    assert "UI_CONFIG.endpoints.graphData" in graph_js
 
     ref_json = json.dumps(
         {
