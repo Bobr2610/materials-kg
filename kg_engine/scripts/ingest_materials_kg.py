@@ -103,6 +103,9 @@ def _document_parser(*, disable_vision: bool = False) -> DocumentBlockParser:
             enable_vision=vision_enabled,
             pdf_render_dpi=settings.materials_pdf_render_dpi,
             max_pdf_pages=settings.materials_pdf_max_pages,
+            grobid_url=settings.materials_grobid_url,
+            grobid_timeout_seconds=settings.materials_grobid_timeout_seconds,
+            grobid_min_text_chars=settings.materials_grobid_min_text_chars,
         ),
     )
 

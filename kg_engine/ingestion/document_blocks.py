@@ -8,6 +8,9 @@ import logging
 from pathlib import Path
 import re
 from typing import Any
+import urllib.error
+import urllib.request
+import xml.etree.ElementTree as ET
 
 from pydantic import BaseModel
 from pydantic import Field
@@ -126,6 +129,44 @@ class DocumentParseSettings:
     pdf_render_dpi: int = 180
     max_pdf_pages: int | None = None
     preserve_pdf_pages_without_text: bool = True
+    grobid_url: str = ""
+    grobid_timeout_seconds: float = 45.0
+    grobid_min_text_chars: int = 80
+
+
+class GrobidClient:
+    """Small GROBID REST client for scientific PDF structure extraction."""
+
+    def __init__(self, base_url: str, *, timeout_seconds: float = 45.0) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.timeout_seconds = timeout_seconds
+
+    def process_fulltext_document(self, path: Path) -> str:
+        boundary = "----materials-kg-grobid"
+        body = _multipart_file_body(
+            boundary=boundary,
+            field_name="input",
+            path=path,
+            content_type="application/pdf",
+        )
+        request = urllib.request.Request(
+            f"{self.base_url}/api/processFulltextDocument",
+            data=body,
+            headers={
+                "Content-Type": f"multipart/form-data; boundary={boundary}",
+                "Accept": "application/xml",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(
+                request,
+                timeout=self.timeout_seconds,
+            ) as response:
+                return response.read().decode("utf-8", "replace")
+        except urllib.error.URLError as exc:
+            msg = f"GROBID request failed for {path}: {exc}"
+            raise RuntimeError(msg) from exc
 
 
 class MarkItDownAdapter:
@@ -202,13 +243,20 @@ class DocumentBlockParser:
         *,
         markitdown: Any | None = None,
         pdf_renderer: Any | None = None,
+        grobid_client: Any | None = None,
         vision_conductor: Any | None = None,
         settings: DocumentParseSettings | None = None,
     ) -> None:
         self.markitdown = markitdown or MarkItDownAdapter()
         self.pdf_renderer = pdf_renderer
+        self.grobid_client = grobid_client
         self.vision_conductor = vision_conductor
         self.settings = settings or DocumentParseSettings()
+        if self.grobid_client is None and self.settings.grobid_url.strip():
+            self.grobid_client = GrobidClient(
+                self.settings.grobid_url.strip(),
+                timeout_seconds=self.settings.grobid_timeout_seconds,
+            )
 
     def parse(self, path: str | Path) -> list[DocumentBlock]:
         source = Path(path)
@@ -227,6 +275,11 @@ class DocumentBlockParser:
         raise ValueError(msg)
 
     def _pdf_blocks(self, source: Path) -> list[DocumentBlock]:
+        grobid_blocks = self._grobid_pdf_blocks(source)
+        grobid_text_len = sum(len(block.text.strip()) for block in grobid_blocks)
+        if grobid_text_len >= self.settings.grobid_min_text_chars:
+            return grobid_blocks
+
         page_text_blocks = self._pypdf_text_blocks(source)
         extracted_text_len = sum(
             len(block.text.strip())
@@ -292,6 +345,24 @@ class DocumentBlockParser:
                         )
                     )
         return blocks
+
+    def _grobid_pdf_blocks(self, source: Path) -> list[DocumentBlock]:
+        if self.grobid_client is None:
+            return []
+        try:
+            tei_xml = self.grobid_client.process_fulltext_document(source)
+        except Exception:
+            logger.debug("GROBID PDF parsing failed for %s", source, exc_info=True)
+            return []
+        try:
+            return _grobid_tei_to_blocks(
+                tei_xml,
+                source=source,
+                max_pages=self.settings.max_pdf_pages,
+            )
+        except Exception:
+            logger.debug("GROBID TEI parsing failed for %s", source, exc_info=True)
+            return []
 
     def _pypdf_text_blocks(self, source: Path) -> list[DocumentBlock]:
         try:
@@ -398,17 +469,14 @@ class DocumentBlockParser:
         confidence: float = 1.0,
         metadata: dict[str, Any] | None = None,
     ) -> DocumentBlock:
-        return DocumentBlock(
-            block_id=_stable_block_id(source, page, block_type, text),
-            source_file=source.name,
-            source_path=str(source),
+        return _make_text_block(
+            source,
+            text,
+            parser=parser,
             page=page,
             block_type=block_type,
-            text=text,
-            raw_fragment=text[:_RAW_FRAGMENT_MAX_CHARS],
             confidence=confidence,
-            parser=parser,
-            metadata=metadata or {},
+            metadata=metadata,
         )
 
     def _image_block(
@@ -609,3 +677,211 @@ def _stable_block_id(
     ).hexdigest()[:12]
     page_part = "nopage" if page is None else f"p{page}"
     return f"{source.stem}:{page_part}:{block_type}:{digest}"
+
+
+def _make_text_block(
+    source: Path,
+    text: str,
+    *,
+    parser: str,
+    page: int | None = None,
+    block_type: str = "text",
+    confidence: float = 1.0,
+    metadata: dict[str, Any] | None = None,
+) -> DocumentBlock:
+    """Module-level helper to build a DocumentBlock."""
+    return DocumentBlock(
+        block_id=_stable_block_id(source, page, block_type, text),
+        source_file=source.name,
+        source_path=str(source),
+        page=page,
+        block_type=block_type,
+        text=text,
+        raw_fragment=text[:_RAW_FRAGMENT_MAX_CHARS],
+        confidence=confidence,
+        parser=parser,
+        metadata=metadata or {},
+    )
+
+
+# ---------------------------------------------------------------------------
+# GROBID TEI XML helpers
+# ---------------------------------------------------------------------------
+
+_NS = {"tei": "http://www.tei-c.org/ns/1.0"}
+
+
+def _tei_text(element: ET.Element | None) -> str:
+    """Extract all text content from a TEI element, including nested children."""
+    if element is None:
+        return ""
+    return " ".join(element.itertext()).strip()
+
+
+def _multipart_file_body(
+    *,
+    boundary: str,
+    field_name: str,
+    path: Path,
+    content_type: str = "application/pdf",
+) -> bytes:
+    """Build a minimal multipart/form-data body for a single file field."""
+    parts: list[bytes] = []
+    parts.append(f"--{boundary}\r\n".encode())
+    parts.append(
+        f'Content-Disposition: form-data; name="{field_name}"; '
+        f'filename="{path.name}"\r\n'.encode()
+    )
+    parts.append(f"Content-Type: {content_type}\r\n\r\n".encode())
+    parts.append(path.read_bytes())
+    parts.append(f"\r\n--{boundary}--\r\n".encode())
+    return b"".join(parts)
+
+
+def _grobid_tei_to_blocks(
+    tei_xml: str,
+    *,
+    source: Path,
+    max_pages: int | None = None,
+) -> list[DocumentBlock]:
+    """Parse GROBID TEI XML into structured DocumentBlock objects."""
+    root = ET.fromstring(tei_xml)
+    body = root.find(".//tei:body", _NS)
+    title_el = root.find(".//tei:titleStmt/tei:title", _NS)
+    abstract_el = root.find(".//tei:abstract", _NS)
+
+    # Extract DOI if present
+    doi = ""
+    id_el = root.find(".//tei:idno[@type='DOI']", _NS)
+    if id_el is not None and id_el.text:
+        doi = id_el.text.strip()
+
+    blocks: list[DocumentBlock] = []
+    block_index = 0
+
+    # --- Title block ---
+    title_text = _tei_text(title_el)
+    if title_text:
+        blocks.append(
+            _make_text_block(
+                source,
+                title_text,
+                parser="grobid",
+                block_type="title",
+                confidence=0.95,
+                metadata={
+                    "tei_path": "teiHeader/titleStmt/title",
+                    "source_marker": "grobid",
+                    "doi": doi,
+                },
+            )
+        )
+
+    # --- Abstract block ---
+    abstract_text = _tei_text(abstract_el)
+    if abstract_text:
+        blocks.append(
+            _make_text_block(
+                source,
+                abstract_text,
+                parser="grobid",
+                block_type="abstract",
+                confidence=0.95,
+                metadata={
+                    "tei_path": "teiHeader/abstract",
+                    "source_marker": "grobid",
+                    "doi": doi,
+                },
+            )
+        )
+
+    # --- Body section blocks ---
+    if body is not None:
+        section_index = 0
+        for div in body.findall(".//tei:div", _NS):
+            head_el = div.find("tei:head", _NS)
+            head_text = _tei_text(head_el)
+            section_name = head_text or f"section_{section_index + 1}"
+
+            # Gather paragraph text within this div
+            paragraphs = div.findall(".//tei:p", _NS)
+            section_text_parts: list[str] = []
+            for p in paragraphs:
+                p_text = _tei_text(p)
+                if p_text:
+                    section_text_parts.append(p_text)
+            section_text = "\n\n".join(section_text_parts)
+
+            if section_text.strip():
+                blocks.append(
+                    _make_text_block(
+                        source,
+                        section_text,
+                        parser="grobid",
+                        block_type="section",
+                        confidence=0.90,
+                        metadata={
+                            "section": section_name,
+                            "section_index": section_index,
+                            "tei_path": f"body/div[{section_index + 1}]",
+                            "source_marker": "grobid",
+                            "doi": doi,
+                        },
+                    )
+                )
+                section_index += 1
+
+    # --- Bibliography / reference blocks ---
+    bibl_struct = root.find(".//tei:back//tei:div[@type='references']", _NS)
+    if bibl_struct is None:
+        bibl_struct = root.find(".//tei:back//tei:listBibl", _NS)
+    if bibl_struct is not None:
+        ref_index = 0
+        for bibl in bibl_struct.findall(".//tei:biblStruct", _NS):
+            # Try analytic + monograph title combination
+            analytic_title = _tei_text(
+                bibl.find(".//tei:analytic/tei:title", _NS)
+            )
+            mono_title = _tei_text(
+                bibl.find(".//tei:monogr/tei:title", _NS)
+            )
+            authors = []
+            for author in bibl.findall(".//tei:author/tei:persName", _NS):
+                surname = _tei_text(author.find("tei:surname", _NS))
+                given = _tei_text(author.find("tei:givenName", _NS))
+                name = f"{given} {surname}".strip() if given else surname
+                if name:
+                    authors.append(name)
+            year_el = bibl.find(".//tei:date[@when]", _NS)
+            year = year_el.get("when", "") if year_el is not None else ""
+
+            ref_title = analytic_title or mono_title
+            author_str = ", ".join(authors[:3])
+            ref_text = f"{ref_title}"
+            if author_str:
+                ref_text = f"{author_str}. {ref_text}"
+            if year:
+                ref_text = f"{ref_text} ({year})."
+            ref_text = ref_text.strip()
+
+            if ref_text:
+                blocks.append(
+                    _make_text_block(
+                        source,
+                        ref_text,
+                        parser="grobid",
+                        block_type="reference",
+                        confidence=0.85,
+                        metadata={
+                            "reference_index": ref_index,
+                            "authors": authors[:5],
+                            "year": year,
+                            "tei_path": f"back//biblStruct[{ref_index + 1}]",
+                            "source_marker": "grobid",
+                            "doi": doi,
+                        },
+                    )
+                )
+                ref_index += 1
+
+    return blocks

@@ -16,6 +16,12 @@ services:
       timeout: 5s
       retries: 20
 
+  materials-grobid:
+    image: lfoppiano/grobid:0.8.1
+    container_name: materials-kg-grobid
+    ports:
+      - "8070:8070"
+
   materials-api:
     build:
       context: .
@@ -23,6 +29,8 @@ services:
     depends_on:
       materials-neo4j:
         condition: service_healthy
+      materials-grobid:
+        condition: service_started
     environment:
       MATERIALS_NEO4J_URI: bolt://materials-neo4j:7687
       MATERIALS_NEO4J_USER: ${NEO4J_USER:-neo4j}
@@ -51,6 +59,9 @@ services:
       LLM_EMBEDDING_TRUNCATION_CHARS: ${LLM_EMBEDDING_TRUNCATION_CHARS:-25000}
       MATERIALS_LLM_EXTRACTION_CHUNK_SIZE: ${MATERIALS_LLM_EXTRACTION_CHUNK_SIZE:-25000}
       MATERIALS_LLM_EXTRACTION_CHUNK_OVERLAP: ${MATERIALS_LLM_EXTRACTION_CHUNK_OVERLAP:-2000}
+      MATERIALS_GROBID_URL: ${MATERIALS_GROBID_URL:-http://materials-grobid:8070}
+      MATERIALS_GROBID_TIMEOUT_SECONDS: ${MATERIALS_GROBID_TIMEOUT_SECONDS:-45}
+      MATERIALS_GROBID_MIN_TEXT_CHARS: ${MATERIALS_GROBID_MIN_TEXT_CHARS:-80}
     volumes:
       - ./Задача 1:/app/Задача 1:ro
     ports:

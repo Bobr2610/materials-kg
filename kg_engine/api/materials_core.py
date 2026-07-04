@@ -204,7 +204,12 @@ def _api_document_parser(
         from kg_engine.ingestion.document_blocks import DocumentParseSettings
         if not enable_vision:
             return DocumentBlockParser(
-                settings=DocumentParseSettings(enable_vision=False),
+                settings=DocumentParseSettings(
+                    enable_vision=False,
+                    grobid_url=settings.materials_grobid_url,
+                    grobid_timeout_seconds=settings.materials_grobid_timeout_seconds,
+                    grobid_min_text_chars=settings.materials_grobid_min_text_chars,
+                ),
             )
         from kg_engine.llm_core.provider import LLMProvider, resolve_chat_completions_config
         from kg_engine.llm_core.vision import VisionConductor
@@ -254,7 +259,12 @@ def _api_document_parser(
         conductor = VisionConductor(vision_provider, model=vision_model)
         return DocumentBlockParser(
             vision_conductor=conductor,
-            settings=DocumentParseSettings(enable_vision=True),
+            settings=DocumentParseSettings(
+                enable_vision=True,
+                grobid_url=settings.materials_grobid_url,
+                grobid_timeout_seconds=settings.materials_grobid_timeout_seconds,
+                grobid_min_text_chars=settings.materials_grobid_min_text_chars,
+            ),
         )
     except Exception:
         return None

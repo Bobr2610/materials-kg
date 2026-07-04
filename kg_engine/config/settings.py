@@ -81,6 +81,9 @@ class Settings(BaseSettings):
     materials_vision_base_url: str = ""
     materials_pdf_render_dpi: int = 180
     materials_pdf_max_pages: int | None = 500
+    materials_grobid_url: str = ""
+    materials_grobid_timeout_seconds: float = 45.0
+    materials_grobid_min_text_chars: int = 80
 
     # Ingestion limits
     materials_llm_extraction_max_chars: int = 80_000

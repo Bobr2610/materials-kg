@@ -110,6 +110,13 @@ reports through `POST /ingest/url` with a JSON body such as
 the resolved filename and original URL provenance, so graph views and source
 filters can scope queries to the URL.
 
+PDF parsing is PDF-first through GROBID when `MATERIALS_GROBID_URL` is set.
+GROBID extracts scientific structure such as title, abstract, body sections,
+and references into provenance-rich text blocks. If GROBID is unavailable or
+returns too little text, ingestion falls back to the existing PDF path:
+page-level text extraction, MarkItDown fallback, and rendered page images for
+scanned PDFs before any VLM interpretation.
+
 ## Research Projects
 
 Research work can be organized through persistent project APIs:

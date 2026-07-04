@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 from pathlib import Path  # noqa: TC003
 from typing import Any
+from unittest.mock import MagicMock
 from unittest.mock import patch
 
 import pytest
@@ -10,7 +11,9 @@ import pytest
 from kg_engine.ingestion.document_blocks import DocumentBlock
 from kg_engine.ingestion.document_blocks import DocumentBlockParser
 from kg_engine.ingestion.document_blocks import DocumentParseSettings
+from kg_engine.ingestion.document_blocks import GrobidClient
 from kg_engine.ingestion.document_blocks import PageImage
+from kg_engine.ingestion.document_blocks import _grobid_tei_to_blocks
 from kg_engine.ingestion.document_blocks import blocks_to_document_input
 from kg_engine.scripts.ingest_materials_kg import _load_payload
 from kg_engine.llm_core.vision import VisionRequest
@@ -323,3 +326,213 @@ def test_vlm_interpretations_included_in_document_input(tmp_path) -> None:
     assert "annealing" in document.text.lower()
     assert len(document.text_units) == 1
     assert document.text_units[0].metadata["block_type"] == "image_interpretation"
+
+
+# ---------------------------------------------------------------------------
+# GROBID tests
+# ---------------------------------------------------------------------------
+
+_SAMPLE_TEI = """\
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0">
+  <teiHeader>
+    <fileDesc>
+      <titleStmt>
+        <title>Effect of aging on CuCrZr conductivity</title>
+      </titleStmt>
+      <publicationStmt><publisher>Test</publisher></publicationStmt>
+      <sourceDesc><p>A PDF</p></sourceDesc>
+    </fileDesc>
+  </teiHeader>
+  <profileDesc>
+    <abstract>
+      <p>This study investigates how thermal aging at 480 C affects CuCrZr.</p>
+    </abstract>
+  </profileDesc>
+  <text>
+    <body>
+      <div>
+        <head>Introduction</head>
+        <p>CuCrZr alloys are widely used in fusion reactors.</p>
+        <p>Conductivity targets exceed 80 %IACS.</p>
+      </div>
+      <div>
+        <head>Results</head>
+        <p>Aging at 480 C for 100 h yields 82 %IACS and 145 HV.</p>
+      </div>
+    </body>
+    <back>
+      <div type="references">
+        <listBibl>
+          <biblStruct>
+            <analytic><title>Conductivity of CuCrZr</title></analytic>
+            <monogr><journal><title>J. Nucl. Mater.</title></journal></monogr>
+            <author><persName><surname>Smith</surname><givenName>J.</givenName></persName></author>
+            <date when="2020"/>
+          </biblStruct>
+          <biblStruct>
+            <analytic><title>Hardness recovery in CuCrZr</title></analytic>
+            <author><persName><surname>Lee</surname><givenName>K.</givenName></persName></author>
+            <date when="2021"/>
+          </biblStruct>
+        </listBibl>
+      </div>
+    </back>
+  </text>
+</TEI>"""
+
+
+def test_grobid_tei_produces_title_abstract_section_reference_blocks(tmp_path) -> None:
+    source = tmp_path / "cuartz.pdf"
+    blocks = _grobid_tei_to_blocks(_SAMPLE_TEI, source=source)
+
+    block_types = [b.block_type for b in blocks]
+    assert "title" in block_types
+    assert "abstract" in block_types
+    assert "section" in block_types
+    assert "reference" in block_types
+
+    title_block = next(b for b in blocks if b.block_type == "title")
+    assert "CuCrZr" in title_block.text
+    assert title_block.parser == "grobid"
+    assert title_block.metadata["doi"] == ""
+    assert title_block.metadata["source_marker"] == "grobid"
+
+    abstract_block = next(b for b in blocks if b.block_type == "abstract")
+    assert "thermal aging" in abstract_block.text.lower()
+    assert abstract_block.parser == "grobid"
+
+    sections = [b for b in blocks if b.block_type == "section"]
+    assert len(sections) == 2
+    assert sections[0].metadata["section"] == "Introduction"
+    assert sections[0].metadata["section_index"] == 0
+    assert sections[1].metadata["section"] == "Results"
+    assert "82 %IACS" in sections[1].text
+
+    refs = [b for b in blocks if b.block_type == "reference"]
+    assert len(refs) == 2
+    assert refs[0].metadata["reference_index"] == 0
+    assert "Smith" in refs[0].text
+    assert "2020" in refs[0].metadata["year"]
+    assert "Lee" in refs[1].text
+    assert refs[1].metadata["authors"] == ["K. Lee"]
+
+
+def test_grobid_pdf_parser_does_not_call_pypdf_when_grobid_succeeds(tmp_path) -> None:
+    source = tmp_path / "paper.pdf"
+    source.write_bytes(b"%PDF fake")
+
+    grobid_client = MagicMock(spec=GrobidClient)
+    grobid_client.process_fulltext_document.return_value = _SAMPLE_TEI
+
+    parser = DocumentBlockParser(
+        grobid_client=grobid_client,
+        settings=DocumentParseSettings(grobid_min_text_chars=80),
+    )
+
+    with patch.object(parser, "_pypdf_text_blocks") as mock_pypdf, \
+         patch.object(parser, "markitdown") as mock_markitdown:
+        blocks = parser.parse(source)
+
+        # GROBID succeeded with enough text — pypdf and markitdown must not be called
+        mock_pypdf.assert_not_called()
+        mock_markitdown.assert_not_called()
+
+    assert all(b.parser == "grobid" for b in blocks)
+    grobid_client.process_fulltext_document.assert_called_once_with(source)
+
+
+def test_grobid_empty_response_falls_back_to_scanned_pdf_path(tmp_path) -> None:
+    source = tmp_path / "scan.pdf"
+    source.write_bytes(b"%PDF fake")
+    page_image = tmp_path / "page-0001.png"
+    page_image.write_bytes(b"png")
+
+    grobid_client = MagicMock(spec=GrobidClient)
+    grobid_client.process_fulltext_document.return_value = "<tei:TEI/>"  # minimal, no body
+    # Actually, let's make it raise to trigger the fallback
+    grobid_client.process_fulltext_document.side_effect = RuntimeError("GROBID down")
+
+    page_images = [PageImage(page=1, image_path=page_image)]
+    renderer = FakeRenderer(page_images)
+    vision = FakeVisionConductor()
+    converter = FakeMarkItDown({".pdf": ""})
+
+    parser = DocumentBlockParser(
+        grobid_client=grobid_client,
+        markitdown=converter,
+        pdf_renderer=renderer,
+        vision_conductor=vision,
+        settings=DocumentParseSettings(
+            enable_vision=True,
+            grobid_min_text_chars=80,
+        ),
+    )
+
+    blocks = parser.parse(source)
+
+    # GROBID failed → should fall back to page rendering + VL
+    grobid_client.process_fulltext_document.assert_called_once()
+    assert renderer.calls == [source]
+    assert any(b.block_type == "image" for b in blocks)
+    assert any(b.block_type == "image_interpretation" for b in blocks)
+    # Verify scanned PDF is NOT sent as raw PDF to VL — it's rendered to images first
+    image_blocks = [b for b in blocks if b.block_type == "image"]
+    assert all(b.image_path != source for b in image_blocks)
+
+
+def test_grobid_insufficient_text_falls_back_to_pypdf(tmp_path) -> None:
+    from reportlab.pdfgen.canvas import Canvas
+
+    source = tmp_path / "minimal.pdf"
+    canvas = Canvas(str(source))
+    canvas.drawString(72, 720, "Page one: CuCrZr conductivity " * 4)
+    canvas.showPage()
+    canvas.save()
+
+    # GROBID returns TEI with very little text (just a title, no body)
+    minimal_tei = """\
+    <?xml version="1.0" encoding="UTF-8"?>
+    <TEI xmlns="http://www.tei-c.org/ns/1.0">
+      <teiHeader>
+        <fileDesc>
+          <titleStmt><title>X</title></titleStmt>
+          <publicationStmt><publisher>T</publisher></publicationStmt>
+          <sourceDesc><p>A PDF</p></sourceDesc>
+        </fileDesc>
+      </teiHeader>
+      <text><body><div><p>a</p></div></body></text>
+    </TEI>"""
+
+    grobid_client = MagicMock(spec=GrobidClient)
+    grobid_client.process_fulltext_document.return_value = minimal_tei
+
+    converter = FakeMarkItDown({".pdf": ""})
+    parser = DocumentBlockParser(
+        grobid_client=grobid_client,
+        markitdown=converter,
+        settings=DocumentParseSettings(grobid_min_text_chars=80),
+    )
+
+    blocks = parser.parse(source)
+
+    # GROBID returned < 80 chars of useful text → fallback to pypdf
+    grobid_client.process_fulltext_document.assert_called_once()
+    assert converter.calls == []  # pypdf succeeded, no need for markitdown
+    assert {b.parser for b in blocks} == {"pypdf"}
+    assert "CuCrZr" in blocks[0].text
+
+
+def test_grobid_disabled_url_skips_grobid_entirely(tmp_path) -> None:
+    source = tmp_path / "paper.pdf"
+    source.write_bytes(b"%PDF fake")
+
+    # Empty grobid_url means no client created
+    parser = DocumentBlockParser(
+        settings=DocumentParseSettings(grobid_url=""),
+    )
+    assert parser.grobid_client is None
+
+    # When GROBID is disabled, _grobid_pdf_blocks should return []
+    grobid_blocks = parser._grobid_pdf_blocks(source)
+    assert grobid_blocks == []
