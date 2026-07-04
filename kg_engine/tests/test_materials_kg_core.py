@@ -427,6 +427,15 @@ def test_hypothesis_factory_generates_ranked_graph_grounded_candidates() -> None
     assert result.data_gaps
     assert result.knowledge_base_summary["observations"] == 1
     assert result.ranking_rubric["weights"]["value"] == 0.35
+    quality_metrics = result.ranking_rubric["quality_metrics"]
+    assert quality_metrics["items"]
+    assert quality_metrics["average_faithfulness"] > 0.0
+    assert quality_metrics["average_groundedness"] > 0.0
+    assert result.knowledge_base_summary["quality_metrics"]["coverage_ratio"] > 0.0
+    assert any(
+        item.get("event") == "hypothesis_metrics_evaluated"
+        for item in result.agent_trace
+    )
     assert [item.rank for item in result.hypotheses] == list(
         range(1, len(result.hypotheses) + 1)
     )

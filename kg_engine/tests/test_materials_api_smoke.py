@@ -341,6 +341,11 @@ def test_demo_load_sample_powers_notebook_ui_queries() -> None:
     assert hypotheses_body["hypotheses"]
     assert hypotheses_body["hypotheses"][0]["score"]["final_score"] > 0
     assert hypotheses_body["evidence"] or hypotheses_body["data_gaps"]
+    assert hypotheses_body["ranking_rubric"]["quality_metrics"]["items"]
+    assert (
+        hypotheses_body["ranking_rubric"]["quality_metrics"]["average_groundedness"]
+        > 0.0
+    )
 
 
 def test_task_materials_loader_and_hypothesis_exports(tmp_path, monkeypatch) -> None:

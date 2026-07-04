@@ -2846,7 +2846,7 @@ class MaterialsKGService:
                 "evidence_strength": "сила observation/evidence/text-grounding",
             },
         }
-        return HypothesisGenerationResult(
+        result = HypothesisGenerationResult(
             target_kpi=request.target_kpi,
             generation_engine="deterministic",
             expert_adjustment_schema=EXPERT_ADJUSTMENT_SCHEMA,
@@ -2867,6 +2867,62 @@ class MaterialsKGService:
             matched_entities=matched_entities,
             warnings=warnings,
         )
+        return self.attach_hypothesis_metrics(result)
+
+    def attach_hypothesis_metrics(
+        self,
+        result: HypothesisGenerationResult,
+    ) -> HypothesisGenerationResult:
+        """Attach repository-grounded quality metrics to an agent result."""
+        from kg_engine.services.metrics import MetricContext
+        from kg_engine.services.metrics import build_repository_coverage_heatmap
+        from kg_engine.services.metrics import evaluate_hypothesis_metrics
+
+        context = MetricContext(
+            evidence_ids=[item.id for item in result.evidence],
+            observation_ids=[item.id for item in result.observations],
+            text_unit_ids=[item.id for item in result.search_hits],
+            entity_ids=[item.id for item in result.matched_entities],
+        )
+        coverage = build_repository_coverage_heatmap(self._repository)
+        metrics = evaluate_hypothesis_metrics(
+            hypotheses=result.hypotheses,
+            context=context,
+            coverage=coverage,
+        )
+        metrics_payload = metrics.model_dump(mode="json")
+        quality_context = {
+            "evidence_ids": len(context.evidence_ids),
+            "observation_ids": len(context.observation_ids),
+            "text_unit_ids": len(context.text_unit_ids),
+            "entity_ids": len(context.entity_ids),
+            "coverage_cells": len(coverage.cells),
+            "coverage_ratio": coverage.coverage_ratio,
+        }
+        result.ranking_rubric = {
+            **result.ranking_rubric,
+            "quality_metrics": metrics_payload,
+            "quality_metrics_context": quality_context,
+        }
+        result.knowledge_base_summary = {
+            **result.knowledge_base_summary,
+            "quality_metrics": {
+                "average_faithfulness": metrics.average_faithfulness,
+                "average_groundedness": metrics.average_groundedness,
+                "average_novelty": metrics.average_novelty,
+                "coverage_ratio": metrics.coverage_ratio,
+            },
+        }
+        result.agent_trace.append(
+            {
+                "event": "hypothesis_metrics_evaluated",
+                "average_faithfulness": metrics.average_faithfulness,
+                "average_groundedness": metrics.average_groundedness,
+                "average_novelty": metrics.average_novelty,
+                "coverage_ratio": metrics.coverage_ratio,
+            }
+        )
+        return result
 
     def _collect_hypothesis_observations(
         self,

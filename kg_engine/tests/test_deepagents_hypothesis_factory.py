@@ -159,6 +159,12 @@ def test_deep_agent_factory_validates_result_and_records_trace() -> None:
     }
     assert "Electrical Conductivity" in created["system_prompt"]
     assert "entity_counts_by_kind" in created["system_prompt"]
+    assert result.ranking_rubric["quality_metrics"]["items"]
+    assert result.ranking_rubric["quality_metrics"]["average_faithfulness"] > 0.0
+    assert any(
+        item.get("event") == "hypothesis_metrics_evaluated"
+        for item in result.agent_trace
+    )
 
 
 def test_deep_agent_rejects_non_json_without_deterministic_fallback() -> None:

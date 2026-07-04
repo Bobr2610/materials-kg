@@ -344,4 +344,4 @@ def generate_hypotheses_with_deep_agent(
     result.hypotheses = result.hypotheses[: request.max_hypotheses]
     for rank, hypothesis in enumerate(result.hypotheses, start=1):
         hypothesis.rank = rank
-    return result
+    return service.attach_hypothesis_metrics(result)
