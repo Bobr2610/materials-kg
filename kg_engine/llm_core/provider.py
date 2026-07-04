@@ -310,6 +310,28 @@ class LLMProvider:
             )
         )
 
+    def chat_completion(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        model: str | None = None,
+        temperature: float = 0.3,
+        max_tokens: int = 2048,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: Any | None = None,
+    ) -> dict[str, Any]:
+        """Return the full OpenAI-compatible assistant message."""
+        return self._run_async_compat(
+            self.chat_completion_async(
+                messages,
+                model=model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                tools=tools,
+                tool_choice=tool_choice,
+            )
+        )
+
     def chat_json(
         self,
         messages: list[dict[str, str]],
@@ -332,15 +354,17 @@ class LLMProvider:
 
     # ── Async methods ─────────────────────────────────────────────
 
-    async def chat_async(
+    async def chat_completion_async(
         self,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
         *,
         model: str | None = None,
         temperature: float = 0.3,
         max_tokens: int = 2048,
         response_format: dict | None = None,
-    ) -> str:
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: Any | None = None,
+    ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "model": model or self.chat_model,
             "messages": messages,
@@ -351,6 +375,10 @@ class LLMProvider:
             payload["reasoning_effort"] = self.reasoning_effort
         if response_format:
             payload["response_format"] = response_format
+        if tools:
+            payload["tools"] = tools
+        if tool_choice is not None:
+            payload["tool_choice"] = tool_choice
         client = self._get_async_client()
         for attempt in range(self.max_retries):
             try:
@@ -364,7 +392,8 @@ class LLMProvider:
                     )
                 resp.raise_for_status()
                 data = resp.json()
-                return data["choices"][0]["message"]["content"]
+                message = data["choices"][0]["message"]
+                return message if isinstance(message, dict) else {"content": ""}
             except (
                 httpx.TimeoutException,
                 httpx.HTTPStatusError,
@@ -374,7 +403,7 @@ class LLMProvider:
                     logger.exception(
                         "LLM chat call failed after %d attempts", self.max_retries
                     )
-                    return ""
+                    return {"content": ""}
                 delay = self.retry_base_delay * (2**attempt) + random.uniform(0, 0.5)  # noqa: S311
                 logger.warning(
                     "LLM chat attempt %d/%d failed (%s), retrying in %.1fs",
@@ -386,8 +415,26 @@ class LLMProvider:
                 await asyncio.sleep(delay)
             except Exception:
                 logger.exception("LLM chat call failed with unexpected error")
-                return ""
-        return ""
+                return {"content": ""}
+        return {"content": ""}
+
+    async def chat_async(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        model: str | None = None,
+        temperature: float = 0.3,
+        max_tokens: int = 2048,
+        response_format: dict | None = None,
+    ) -> str:
+        message = await self.chat_completion_async(
+            messages,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            response_format=response_format,
+        )
+        return str(message.get("content") or "")
 
     async def chat_json_async(
         self,
@@ -541,7 +588,7 @@ class LLMProvider:
                 if resp.status_code == 400:
                     return None
                 if resp.status_code == 429:
-                    delay = (2**attempt) * 5 + random.uniform(0, 2)  # noqa: S311
+                    delay = (2**attempt) * 5 + random.SystemRandom().uniform(0, 2)
                     logger.warning(
                         "Async batch embedding rate-limited, retrying in %.1fs",
                         delay,
@@ -562,7 +609,9 @@ class LLMProvider:
                         self.max_retries,
                     )
                     return None
-                delay = self.retry_base_delay * (2**attempt) + random.uniform(0, 0.5)  # noqa: S311
+                delay = self.retry_base_delay * (
+                    2**attempt
+                ) + random.SystemRandom().uniform(0, 0.5)
                 logger.warning(
                     "Async batch embedding attempt %d/%d failed (%s), retrying in %.1fs",
                     attempt + 1,
@@ -588,7 +637,7 @@ class LLMProvider:
                     f"{self.base_url}/v1/embeddings", json=payload
                 )
                 if resp.status_code == 429:
-                    delay = (2**attempt) * 5 + random.uniform(0, 2)  # noqa: S311
+                    delay = (2**attempt) * 5 + random.SystemRandom().uniform(0, 2)
                     logger.warning(
                         "Async individual embedding rate-limited, retrying in %.1fs",
                         delay,
@@ -754,6 +803,7 @@ def create_agent_chat_model_from_settings(settings: Any) -> tuple[Any, str]:
         from langchain_core.messages import BaseMessage
         from langchain_core.outputs import ChatGeneration
         from langchain_core.outputs import ChatResult
+        from langchain_core.utils.function_calling import convert_to_openai_tool
     except ImportError as exc:
         msg = (
             "langchain-core is required for Deep Agents. "
@@ -790,13 +840,74 @@ def create_agent_chat_model_from_settings(settings: Any) -> tuple[Any, str]:
             return model
 
         @staticmethod
-        def _message_to_dict(message: BaseMessage) -> dict[str, str]:
+        def _message_to_dict(message: BaseMessage) -> dict[str, Any]:
             role = getattr(message, "type", "user")
             if role == "human":
                 role = "user"
             elif role == "ai":
                 role = "assistant"
-            return {"role": role, "content": str(message.content)}
+            payload: dict[str, Any] = {
+                "role": role,
+                "content": str(message.content),
+            }
+            if role == "tool":
+                payload["tool_call_id"] = getattr(message, "tool_call_id", "")
+                name = getattr(message, "name", None)
+                if name:
+                    payload["name"] = name
+            tool_calls = getattr(message, "tool_calls", None)
+            if role == "assistant" and tool_calls:
+                payload["tool_calls"] = [
+                    {
+                        "id": call.get("id", ""),
+                        "type": "function",
+                        "function": {
+                            "name": call.get("name", ""),
+                            "arguments": json.dumps(
+                                call.get("args", {}), ensure_ascii=False
+                            ),
+                        },
+                    }
+                    for call in tool_calls
+                ]
+            return payload
+
+        @staticmethod
+        def _assistant_message(message: dict[str, Any]) -> AIMessage:
+            tool_calls = []
+            for call in message.get("tool_calls") or []:
+                function = call.get("function") or {}
+                arguments = function.get("arguments") or "{}"
+                try:
+                    args = json.loads(arguments)
+                except (TypeError, json.JSONDecodeError):
+                    args = {"raw_arguments": str(arguments)}
+                tool_calls.append(
+                    {
+                        "name": function.get("name", ""),
+                        "args": args,
+                        "id": call.get("id", ""),
+                        "type": "tool_call",
+                    }
+                )
+            return AIMessage(
+                content=message.get("content") or "",
+                tool_calls=tool_calls,
+            )
+
+        def bind_tools(
+            self,
+            tools: Any,
+            *,
+            tool_choice: Any | None = None,
+            **kwargs: Any,
+        ) -> Any:
+            formatted_tools = [convert_to_openai_tool(tool) for tool in tools]
+            return self.bind(
+                tools=formatted_tools,
+                tool_choice=tool_choice,
+                **kwargs,
+            )
 
         def _generate(
             self,
@@ -806,13 +917,15 @@ def create_agent_chat_model_from_settings(settings: Any) -> tuple[Any, str]:
             **kwargs: Any,
         ) -> ChatResult:
             _ = (stop, run_manager)
-            content = self.provider.chat(
+            message = self.provider.chat_completion(
                 [self._message_to_dict(message) for message in messages],
                 temperature=kwargs.get("temperature", self.temperature),
                 max_tokens=kwargs.get("max_tokens", self.max_tokens),
+                tools=kwargs.get("tools"),
+                tool_choice=kwargs.get("tool_choice"),
             )
             return ChatResult(
-                generations=[ChatGeneration(message=AIMessage(content=content))]
+                generations=[ChatGeneration(message=self._assistant_message(message))]
             )
 
         async def _agenerate(
@@ -823,13 +936,15 @@ def create_agent_chat_model_from_settings(settings: Any) -> tuple[Any, str]:
             **kwargs: Any,
         ) -> ChatResult:
             _ = (stop, run_manager)
-            content = await self.provider.chat_async(
+            message = await self.provider.chat_completion_async(
                 [self._message_to_dict(message) for message in messages],
                 temperature=kwargs.get("temperature", self.temperature),
                 max_tokens=kwargs.get("max_tokens", self.max_tokens),
+                tools=kwargs.get("tools"),
+                tool_choice=kwargs.get("tool_choice"),
             )
             return ChatResult(
-                generations=[ChatGeneration(message=AIMessage(content=content))]
+                generations=[ChatGeneration(message=self._assistant_message(message))]
             )
 
     model = ProviderChatModel(

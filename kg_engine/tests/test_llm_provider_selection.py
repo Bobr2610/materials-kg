@@ -7,6 +7,7 @@ from kg_engine.llm_core.provider import create_agent_chat_model_from_settings
 from kg_engine.llm_core.provider import create_provider_from_settings
 from kg_engine.llm_core.provider import resolve_chat_completions_cascade
 from kg_engine.llm_core.provider import resolve_vision_completions_cascade
+from kg_engine.llm_core.provider import LLMProvider
 
 
 @pytest.fixture(autouse=True)
@@ -204,3 +205,35 @@ def test_vision_cascade_uses_dedicated_priority_order() -> None:
         "google/gemma-4-31b-it:free",
         "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
     ]
+
+
+def test_agent_chat_model_supports_bind_tools() -> None:
+    settings = Settings(
+        llm_cascade_enabled=True,
+        llm_cascade_1_provider="openrouter",
+        llm_cascade_1_model="google/gemma-4-31b-it:free",
+        llm_cascade_1_base_url="https://openrouter.ai/api",
+        llm_cascade_1_api_key="test-key",
+    )
+
+    model, _label = create_agent_chat_model_from_settings(settings)
+    bound = model.bind_tools(
+        [
+            {
+                "type": "function",
+                "function": {
+                    "name": "kg_search",
+                    "description": "Search graph evidence",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"query": {"type": "string"}},
+                        "required": ["query"],
+                    },
+                },
+            }
+        ]
+    )
+
+    assert bound is not None
+    # bind_tools should not raise NotImplementedError
+    assert hasattr(bound, "invoke")
