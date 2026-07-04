@@ -96,9 +96,11 @@ def _document_parser(*, disable_vision: bool = False) -> DocumentBlockParser:
             )
             vision_enabled = False
         else:
-            vision_model = settings.materials_vision_model or settings.default_model or None
+            vision_model = None
+            if not settings.materials_vision_cascade_enabled:
+                vision_model = settings.materials_vision_model or settings.default_model or None
             conductor = VisionConductor(vision_provider, model=vision_model)
-            logger.info("VLM enabled, model: %s", vision_model or "(default)")
+            logger.info("VLM enabled, model: %s", vision_model or "(cascade/default)")
     return DocumentBlockParser(
         vision_conductor=conductor,
         settings=DocumentParseSettings(
@@ -113,13 +115,43 @@ def _document_parser(*, disable_vision: bool = False) -> DocumentBlockParser:
             grobid_url=settings.materials_grobid_url,
             grobid_timeout_seconds=settings.materials_grobid_timeout_seconds,
             grobid_min_text_chars=settings.materials_grobid_min_text_chars,
+            enable_text_compaction=getattr(
+                settings,
+                "materials_document_text_compaction_enabled",
+                True,
+            ),
+            repeated_line_min_pages=getattr(
+                settings,
+                "materials_document_repeated_line_min_pages",
+                2,
+            ),
         ),
     )
 
 
 def _create_vision_provider():
     """Create LLM provider for VLM from dedicated settings or the main provider."""
-    from kg_engine.llm_core.provider import LLMProvider, resolve_chat_completions_config
+    from kg_engine.llm_core.provider import LLMProvider
+    from kg_engine.llm_core.provider import create_provider_from_configs
+    from kg_engine.llm_core.provider import resolve_chat_completions_config
+    from kg_engine.llm_core.provider import resolve_vision_completions_cascade
+
+    vision_cascade_configs = resolve_vision_completions_cascade(settings)
+    if vision_cascade_configs:
+        return create_provider_from_configs(
+            vision_cascade_configs,
+            timeout=getattr(
+                settings,
+                "materials_ingestion_llm_timeout_seconds",
+                getattr(settings, "llm_timeout_seconds", 60.0),
+            ),
+            max_retries=getattr(
+                settings,
+                "materials_ingestion_llm_max_retries",
+                getattr(settings, "llm_max_retries", 3),
+            ),
+            retry_base_delay=getattr(settings, "llm_retry_base_delay", 1.0),
+        )
 
     vision_provider_name = (settings.materials_vision_provider or "").strip().lower()
     vision_model = (settings.materials_vision_model or "").strip()
@@ -512,20 +544,40 @@ def main() -> None:
         action="store_true",
         default=False,
         help=(
-            "Disable Vision-Language interpretation for rendered PDF/image pages. "
+            "Disable Vision-Language interpretation for image files. "
             "VLM is opt-in through MATERIALS_DOCUMENT_VISION_ENABLED; local OCR "
-            "is used first."
+            "is used first, and PDFs never use VLM."
         ),
+    )
+    parser.add_argument(
+        "--disable-llm-extraction",
+        action="store_true",
+        default=False,
+        help="Disable LLM extraction during document ingestion.",
+    )
+    parser.add_argument(
+        "--enable-embeddings",
+        action="store_true",
+        default=False,
+        help="Generate embeddings during ingestion. Disabled by default to reduce API spend.",
     )
     args = parser.parse_args()
 
     document_parser = _document_parser(disable_vision=args.disable_vision)
+    llm_provider = None
+    if not args.disable_llm_extraction:
+        llm_provider = create_provider_from_settings(settings)
+        if llm_provider is None:
+            logger.warning("No complete LLM provider configured; extraction disabled.")
+        else:
+            logger.info("LLM extraction provider enabled.")
 
     repository = create_materials_repository(
         settings,
         ensure_schema=args.ensure_schema or settings.materials_api_ensure_schema,
     )
-    service = MaterialsKGService(repository)
+    service = MaterialsKGService(repository, llm_provider=llm_provider)
+    enable_llm_extraction = llm_provider is not None and not args.disable_llm_extraction
 
     if args.input:
         bundle = _load_bundle(args.input, document_parser=document_parser)
@@ -536,7 +588,9 @@ def main() -> None:
             ExperimentCatalogAdapter().from_payload(bundle["experiments"])
         )
         document_result = service.ingest_documents(
-            DocumentCorpusAdapter().from_payload(bundle["documents"])
+            DocumentCorpusAdapter().from_payload(bundle["documents"]),
+            enable_llm_extraction=enable_llm_extraction,
+            enable_embeddings=args.enable_embeddings,
         )
         logger.info("Mixed input reference ingestion: %s", reference_result)
         logger.info("Mixed input experiment ingestion: %s", experiment_result)
@@ -561,7 +615,11 @@ def main() -> None:
             document_parser=document_parser,
         )
         batch = DocumentCorpusAdapter().from_payload(payload or [])
-        result = service.ingest_documents(batch)
+        result = service.ingest_documents(
+            batch,
+            enable_llm_extraction=enable_llm_extraction,
+            enable_embeddings=args.enable_embeddings,
+        )
         logger.info("Document ingestion: %s", result)
 
     if args.staff:

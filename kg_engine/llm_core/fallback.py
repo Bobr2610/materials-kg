@@ -124,6 +124,50 @@ class FallbackChain:
             chunks.append(chunk)
         return "".join(chunks)
 
+    async def chat_async(
+        self,
+        messages: list[dict[str, str]],
+        **kwargs: Any,
+    ) -> str:
+        """Async chat from the first provider that returns content."""
+        for name, provider in self._providers:
+            breaker = self._breakers[name]
+            if not breaker.allow_request():
+                continue
+            try:
+                result = await provider.chat_async(messages, **kwargs)
+                if result:
+                    breaker.record_success()
+                    return result
+                breaker.record_failure()
+            except Exception as exc:
+                breaker.record_failure()
+                logger.warning("Provider %s async chat failed: %s", name, exc)
+        logger.error("All providers in fallback chain failed")
+        return ""
+
+    async def chat_json_async(
+        self,
+        messages: list[dict[str, str]],
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Async JSON chat from the first provider that returns an object."""
+        for name, provider in self._providers:
+            breaker = self._breakers[name]
+            if not breaker.allow_request():
+                continue
+            try:
+                result = await provider.chat_json_async(messages, **kwargs)
+                if result:
+                    breaker.record_success()
+                    return result
+                breaker.record_failure()
+            except Exception as exc:
+                breaker.record_failure()
+                logger.warning("Provider %s async JSON chat failed: %s", name, exc)
+        logger.error("All providers in fallback chain failed")
+        return {}
+
     def chat(
         self,
         messages: list[dict[str, str]],
@@ -146,6 +190,28 @@ class FallbackChain:
         logger.error("All providers in fallback chain failed")
         return ""
 
+    def chat_json(
+        self,
+        messages: list[dict[str, str]],
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Sync JSON chat from the first available provider."""
+        for name, provider in self._providers:
+            breaker = self._breakers[name]
+            if not breaker.allow_request():
+                continue
+            try:
+                result = provider.chat_json(messages, **kwargs)
+                if result:
+                    breaker.record_success()
+                    return result
+                breaker.record_failure()
+            except Exception as exc:
+                breaker.record_failure()
+                logger.warning("Provider %s JSON chat failed: %s", name, exc)
+        logger.error("All providers in fallback chain failed")
+        return {}
+
     def embed(self, texts: list[str]) -> list[list[float]]:
         """Sync embed from the first available provider."""
         for name, provider in self._providers:
@@ -163,6 +229,23 @@ class FallbackChain:
                 logger.warning("Provider %s embed failed: %s", name, exc)
         return [[] for _ in texts]
 
+    async def embed_async(self, texts: list[str]) -> list[list[float]]:
+        """Async embed from the first available provider."""
+        for name, provider in self._providers:
+            breaker = self._breakers[name]
+            if not breaker.allow_request():
+                continue
+            try:
+                result = await provider.embed_async(texts)
+                if result and result[0]:
+                    breaker.record_success()
+                    return result
+                breaker.record_failure()
+            except Exception as exc:
+                breaker.record_failure()
+                logger.warning("Provider %s async embed failed: %s", name, exc)
+        return [[] for _ in texts]
+
     def get_status(self) -> dict[str, Any]:
         """Return status of all providers in the chain."""
         return {
@@ -176,3 +259,6 @@ class FallbackChain:
     async def close(self) -> None:
         for _, provider in self._providers:
             await provider.aclose()
+
+    async def aclose(self) -> None:
+        await self.close()

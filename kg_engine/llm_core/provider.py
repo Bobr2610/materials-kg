@@ -41,6 +41,49 @@ def _setting_or_env(settings: Any, attr: str, env_name: str) -> str:
     return _clean(getattr(settings, attr, "")) or _clean(os.getenv(env_name))
 
 
+def _truthy(value: Any) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _cascade_enabled(settings: Any) -> bool:
+    value = getattr(settings, "llm_cascade_enabled", None)
+    if value is not None:
+        return _truthy(value)
+    return _truthy(
+        os.getenv("LLM_CASCADE_ENABLED")
+    )
+
+
+def _cascade_value(settings: Any, index: int, name: str) -> str:
+    attr = f"llm_cascade_{index}_{name.lower()}"
+    env_name = f"LLM_CASCADE_{index}_{name.upper()}"
+    return _setting_or_env(settings, attr, env_name)
+
+
+def _prefixed_cascade_enabled(settings: Any, attr_prefix: str, env_prefix: str) -> bool:
+    attr = f"{attr_prefix}_cascade_enabled"
+    value = getattr(settings, attr, None)
+    if value is not None:
+        return _truthy(value)
+    env_name = f"{env_prefix}_CASCADE_ENABLED"
+    return _truthy(os.getenv(env_name))
+
+
+def _prefixed_cascade_value(
+    settings: Any,
+    attr_prefix: str,
+    env_prefix: str,
+    index: int,
+    name: str,
+) -> str:
+    attr = f"{attr_prefix}_cascade_{index}_{name.lower()}"
+    env_name = f"{env_prefix}_CASCADE_{index}_{name.upper()}"
+    value = getattr(settings, attr, None)
+    if value is not None:
+        return _clean(value)
+    return _clean(os.getenv(env_name))
+
+
 def _chat_completions_root(base_url: str) -> str:
     """Normalize chat-completions base URLs before appending /v1 paths."""
     base_url = _clean(base_url).rstrip("/")
@@ -97,6 +140,109 @@ def resolve_chat_completions_config(
         base_url=base_url,
         chat_model=chat_model,
         embedding_model=embedding_model,
+    )
+
+
+def resolve_chat_completions_cascade(
+    settings: Any,
+    *,
+    max_providers: int = 8,
+) -> list[ChatCompletionsConfig]:
+    """Resolve configured provider/model cascade in priority order."""
+    if not _cascade_enabled(settings):
+        return []
+
+    return _resolve_prefixed_chat_completions_cascade(
+        settings,
+        attr_prefix="llm",
+        env_prefix="LLM",
+        max_providers=max_providers,
+    )
+
+
+def _resolve_prefixed_chat_completions_cascade(
+    settings: Any,
+    *,
+    attr_prefix: str,
+    env_prefix: str,
+    max_providers: int = 8,
+) -> list[ChatCompletionsConfig]:
+    """Resolve a configured provider/model cascade for a settings prefix."""
+    configs: list[ChatCompletionsConfig] = []
+    embedding_model = _clean(getattr(settings, "default_embedding_model", ""))
+    for index in range(1, max_providers + 1):
+        provider = _prefixed_cascade_value(
+            settings,
+            attr_prefix,
+            env_prefix,
+            index,
+            "provider",
+        )
+        model = _prefixed_cascade_value(settings, attr_prefix, env_prefix, index, "model")
+        base_url = _prefixed_cascade_value(
+            settings,
+            attr_prefix,
+            env_prefix,
+            index,
+            "base_url",
+        )
+        api_key = _prefixed_cascade_value(
+            settings,
+            attr_prefix,
+            env_prefix,
+            index,
+            "api_key",
+        )
+        if not provider and not model and not base_url and not api_key:
+            continue
+        if not provider or not model or not base_url or not api_key:
+            logger.info(
+                "Skipping incomplete %s cascade entry #%d: provider=%s model=%s "
+                "base_url_set=%s api_key_set=%s",
+                env_prefix,
+                index,
+                provider or "(empty)",
+                model or "(empty)",
+                bool(base_url),
+                bool(api_key),
+            )
+            continue
+        configs.append(
+            ChatCompletionsConfig(
+                provider=provider,
+                api_key=api_key,
+                base_url=base_url,
+                chat_model=model,
+                embedding_model=_prefixed_cascade_value(
+                    settings,
+                    attr_prefix,
+                    env_prefix,
+                    index,
+                    "embedding_model",
+                )
+                or embedding_model,
+            )
+        )
+    return configs
+
+
+def resolve_vision_completions_cascade(
+    settings: Any,
+    *,
+    max_providers: int = 8,
+) -> list[ChatCompletionsConfig]:
+    """Resolve configured Vision-Language provider/model cascade."""
+    if not _prefixed_cascade_enabled(
+        settings,
+        "materials_vision",
+        "MATERIALS_VISION",
+    ):
+        return []
+    return _resolve_prefixed_chat_completions_cascade(
+        settings,
+        attr_prefix="materials_vision",
+        env_prefix="MATERIALS_VISION",
+        max_providers=max_providers,
     )
 
 
@@ -395,7 +541,7 @@ class LLMProvider:
                 if resp.status_code == 400:
                     return None
                 if resp.status_code == 429:
-                    delay = (2**attempt) * 5 + random.uniform(0, 2)
+                    delay = (2**attempt) * 5 + random.uniform(0, 2)  # noqa: S311
                     logger.warning(
                         "Async batch embedding rate-limited, retrying in %.1fs",
                         delay,
@@ -416,7 +562,7 @@ class LLMProvider:
                         self.max_retries,
                     )
                     return None
-                delay = self.retry_base_delay * (2**attempt) + random.uniform(0, 0.5)
+                delay = self.retry_base_delay * (2**attempt) + random.uniform(0, 0.5)  # noqa: S311
                 logger.warning(
                     "Async batch embedding attempt %d/%d failed (%s), retrying in %.1fs",
                     attempt + 1,
@@ -442,7 +588,7 @@ class LLMProvider:
                     f"{self.base_url}/v1/embeddings", json=payload
                 )
                 if resp.status_code == 429:
-                    delay = (2**attempt) * 5 + random.uniform(0, 2)
+                    delay = (2**attempt) * 5 + random.uniform(0, 2)  # noqa: S311
                     logger.warning(
                         "Async individual embedding rate-limited, retrying in %.1fs",
                         delay,
@@ -488,7 +634,7 @@ class LLMProvider:
         self._async_client = None
 
 
-def create_provider_from_settings(settings: Any) -> LLMProvider | None:
+def create_provider_from_settings(settings: Any) -> Any | None:
     """Create the configured LLM provider from application settings.
 
     ``default_llm_provider`` is the single source of truth. ``AGENT_PROVIDER``
@@ -507,15 +653,11 @@ def create_provider_from_settings(settings: Any) -> LLMProvider | None:
     }
 
     def create_from_config(config: ChatCompletionsConfig) -> LLMProvider:
-        return LLMProvider(
-            base_url=config.base_url,
-            api_key=config.api_key,
-            chat_model=config.chat_model,
-            embedding_model=config.embedding_model,
-            timeout=kwargs["timeout"],
-            max_retries=kwargs["max_retries"],
-            retry_base_delay=kwargs["retry_base_delay"],
-        )
+        return _create_llm_provider_from_config(config, **kwargs)
+
+    cascade_configs = resolve_chat_completions_cascade(settings)
+    if cascade_configs:
+        return create_provider_from_configs(cascade_configs, **kwargs)
 
     selected_provider = _selected_provider(settings)
     if selected_provider:
@@ -525,9 +667,76 @@ def create_provider_from_settings(settings: Any) -> LLMProvider | None:
     return None
 
 
+def _create_llm_provider_from_config(
+    config: ChatCompletionsConfig,
+    *,
+    chat_model: str = "",
+    embedding_model: str = "",
+    timeout: float = _DEFAULT_TIMEOUT,
+    max_retries: int = _MAX_RETRIES,
+    retry_base_delay: float = _RETRY_BASE_DELAY,
+) -> LLMProvider:
+    return LLMProvider(
+        base_url=config.base_url,
+        api_key=config.api_key,
+        chat_model=chat_model or config.chat_model,
+        embedding_model=embedding_model or config.embedding_model,
+        timeout=timeout,
+        max_retries=max_retries,
+        retry_base_delay=retry_base_delay,
+    )
+
+
+def create_provider_from_configs(
+    configs: list[ChatCompletionsConfig],
+    *,
+    timeout: float = _DEFAULT_TIMEOUT,
+    max_retries: int = _MAX_RETRIES,
+    retry_base_delay: float = _RETRY_BASE_DELAY,
+    chat_model: str = "",
+    embedding_model: str = "",
+) -> Any | None:
+    """Create one provider or a fallback chain from resolved configs."""
+    if not configs:
+        return None
+    if len(configs) == 1:
+        return _create_llm_provider_from_config(
+            configs[0],
+            chat_model=chat_model,
+            embedding_model=embedding_model,
+            timeout=timeout,
+            max_retries=max_retries,
+            retry_base_delay=retry_base_delay,
+        )
+
+    from kg_engine.llm_core.fallback import FallbackChain
+
+    return FallbackChain(
+        [
+            (
+                f"{config.provider}:{config.chat_model}",
+                _create_llm_provider_from_config(
+                    config,
+                    chat_model=chat_model,
+                    embedding_model=embedding_model,
+                    timeout=timeout,
+                    max_retries=max_retries,
+                    retry_base_delay=retry_base_delay,
+                ),
+            )
+            for config in configs
+        ],
+    )
+
+
 def create_agent_chat_model_from_settings(settings: Any) -> tuple[Any, str]:
     """Create an agent-compatible chat model from the generic LLM provider."""
-    config = resolve_chat_completions_config(settings, require_provider=True)
+    cascade_configs = resolve_chat_completions_cascade(settings)
+    config = (
+        cascade_configs[0]
+        if cascade_configs
+        else resolve_chat_completions_config(settings, require_provider=True)
+    )
     if config is None:
         provider = _selected_provider(settings)
         if not provider:
@@ -552,24 +761,33 @@ def create_agent_chat_model_from_settings(settings: Any) -> tuple[Any, str]:
         )
         raise RuntimeError(msg) from exc
 
-    provider = LLMProvider(
-        base_url=config.base_url,
-        api_key=config.api_key,
-        chat_model=config.chat_model,
-        embedding_model=config.embedding_model,
-        timeout=getattr(settings, "llm_timeout_seconds", _DEFAULT_TIMEOUT),
-        max_retries=getattr(settings, "llm_max_retries", _MAX_RETRIES),
-        retry_base_delay=getattr(settings, "llm_retry_base_delay", _RETRY_BASE_DELAY),
-    )
+    provider = create_provider_from_settings(settings)
+    if provider is None:
+        msg = "No complete LLM provider configuration is available."
+        raise RuntimeError(msg)
 
     class ProviderChatModel(BaseChatModel):
-        provider: LLMProvider
+        provider: Any
         temperature: float
         max_tokens: int
+        _bound_tools: list[Any] | None = None
 
         @property
         def _llm_type(self) -> str:
             return "materials-kg-chat-completions"
+
+        def bind_tools(
+            self,
+            tools: list[Any],
+            **kwargs: Any,
+        ) -> "ProviderChatModel":
+            model = ProviderChatModel(
+                provider=self.provider,
+                temperature=self.temperature,
+                max_tokens=self.max_tokens,
+            )
+            model._bound_tools = list(tools)
+            return model
 
         @staticmethod
         def _message_to_dict(message: BaseMessage) -> dict[str, str]:
@@ -619,10 +837,16 @@ def create_agent_chat_model_from_settings(settings: Any) -> tuple[Any, str]:
         temperature=getattr(settings, "llm_temperature", 0.7),
         max_tokens=getattr(settings, "llm_max_tokens", 4096),
     )
-    return model, f"{config.provider}:{config.chat_model}"
+    label = (
+        "cascade:"
+        + ">".join(f"{item.provider}:{item.chat_model}" for item in cascade_configs)
+        if cascade_configs
+        else f"{config.provider}:{config.chat_model}"
+    )
+    return model, label
 
 
-def create_provider_from_env() -> LLMProvider | None:
+def create_provider_from_env() -> Any | None:
     """Create provider from global settings if API key is available."""
     from kg_engine.config.settings import settings
 

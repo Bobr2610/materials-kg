@@ -88,7 +88,55 @@ def test_scanned_pdf_uses_ocr_without_vlm_when_text_is_actionable(tmp_path) -> N
     assert blocks[1].page == 1
 
 
-def test_weak_ocr_falls_back_to_vlm(tmp_path) -> None:
+def test_scanned_pdf_ocr_compaction_removes_repeated_margins_and_digit_noise(tmp_path) -> None:
+    source = tmp_path / "scan.pdf"
+    source.write_bytes(b"%PDF fake")
+    image_1 = tmp_path / "page-1.png"
+    image_2 = tmp_path / "page-2.png"
+    image_1.write_bytes(b"png")
+    image_2.write_bytes(b"png")
+
+    class PageAwareOcrEngine:
+        def recognize(self, image_path: Path) -> OcrResult:
+            page_number = "1" if image_path == image_1 else "2"
+            return OcrResult(
+                "\n".join(
+                    [
+                        "Internal flotation report",
+                        f"Page {page_number}",
+                        "1234567890",
+                        f"CuCrZr aging 480 C page {page_number} conductivity 82 %IACS",
+                        "Confidential footer",
+                    ]
+                ),
+                0.93,
+            )
+
+    parser = DocumentBlockParser(
+        markitdown=FakeMarkItDown({".pdf": ""}),
+        pdf_renderer=FakeRenderer(
+            [
+                PageImage(page=1, image_path=image_1),
+                PageImage(page=2, image_path=image_2),
+            ]
+        ),
+        ocr_engine=PageAwareOcrEngine(),
+        settings=DocumentParseSettings(enable_ocr=True, enable_vision=False),
+    )
+
+    blocks = parser.parse(source)
+    ocr_blocks = [block for block in blocks if block.block_type == "ocr_text"]
+
+    assert len(ocr_blocks) == 2
+    assert all("CuCrZr" in block.text for block in ocr_blocks)
+    assert all("82 %IACS" in block.text for block in ocr_blocks)
+    assert all("Internal flotation report" not in block.text for block in ocr_blocks)
+    assert all("Confidential footer" not in block.text for block in ocr_blocks)
+    assert all("1234567890" not in block.text for block in ocr_blocks)
+    assert all(block.metadata["text_compaction"]["removed_lines"] >= 3 for block in ocr_blocks)
+
+
+def test_weak_pdf_ocr_does_not_fall_back_to_vlm(tmp_path) -> None:
     source = tmp_path / "scan.pdf"
     source.write_bytes(b"%PDF fake")
     image = tmp_path / "page.png"
@@ -105,8 +153,8 @@ def test_weak_ocr_falls_back_to_vlm(tmp_path) -> None:
 
     blocks = parser.parse(source)
 
-    assert vision.calls == [image]
-    assert "image_interpretation" in [block.block_type for block in blocks]
+    assert vision.calls == []
+    assert [block.block_type for block in blocks] == ["image"]
 
 
 def test_placeholders_and_duplicate_lines_do_not_consume_extraction_tokens(tmp_path) -> None:
@@ -156,7 +204,7 @@ def test_markitdown_documents_become_source_blocks(tmp_path) -> None:
     assert "Ti-6Al-4V" in blocks[0].text
 
 
-def test_scanned_pdf_creates_page_image_blocks_without_direct_vl_pdf_call(tmp_path) -> None:
+def test_scanned_pdf_creates_page_image_blocks_without_vl_call(tmp_path) -> None:
     source = tmp_path / "book.pdf"
     source.write_bytes(b"%PDF fake")
     page_image = tmp_path / "book-page-001.png"
@@ -174,10 +222,9 @@ def test_scanned_pdf_creates_page_image_blocks_without_direct_vl_pdf_call(tmp_pa
     blocks = parser.parse(source)
 
     assert renderer.calls == [source]
-    assert vision.calls == [page_image]
+    assert vision.calls == []
     assert all(block.image_path != source for block in blocks)
-    assert [block.block_type for block in blocks] == ["image", "image_interpretation"]
-    assert blocks[1].metadata["interpretation_of_block_id"] == blocks[0].block_id
+    assert [block.block_type for block in blocks] == ["image"]
 
 
 def test_text_pdf_becomes_page_level_blocks_before_markitdown(tmp_path) -> None:
@@ -318,7 +365,7 @@ def test_vision_messages_are_chat_completions_image_payload(tmp_path) -> None:
     assert base64.b64decode(url.split(",", 1)[1]) == b"image bytes"
 
 
-def test_missing_pdf_renderer_fails_before_vl_receives_pdf(tmp_path) -> None:
+def test_missing_pdf_renderer_fails_without_vl_pdf_fallback(tmp_path) -> None:
     source = tmp_path / "scan.pdf"
     source.write_bytes(b"%PDF fake")
     converter = FakeMarkItDown({".pdf": ""})
@@ -337,6 +384,7 @@ def test_missing_pdf_renderer_fails_before_vl_receives_pdf(tmp_path) -> None:
 
     with pytest.raises(RuntimeError, match="PDF page renderer"):
         parser.parse(source)
+    assert vision.calls == []
 
 
 def test_document_loader_accepts_parser_backed_formats(tmp_path) -> None:
@@ -560,12 +608,13 @@ def test_grobid_empty_response_falls_back_to_scanned_pdf_path(tmp_path) -> None:
 
     blocks = parser.parse(source)
 
-    # GROBID failed → should fall back to page rendering + VL
+    # GROBID failed -> should fall back to page rendering and local OCR only.
     grobid_client.process_fulltext_document.assert_called_once()
     assert renderer.calls == [source]
     assert any(b.block_type == "image" for b in blocks)
-    assert any(b.block_type == "image_interpretation" for b in blocks)
-    # Verify scanned PDF is NOT sent as raw PDF to VL — it's rendered to images first
+    assert not any(b.parser == "vl_conductor" for b in blocks)
+    assert vision.calls == []
+    # Verify scanned PDF is NOT sent as raw PDF to VL.
     image_blocks = [b for b in blocks if b.block_type == "image"]
     assert all(b.image_path != source for b in image_blocks)
 

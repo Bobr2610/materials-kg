@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
 import hashlib
 import logging
@@ -32,6 +33,11 @@ _UNIT_PATTERN = re.compile(
     r"vol\.?%|ppm|nm|um|µm|mm|cm|m/s|kg|g|mg|mol|c|°c|kwh|v|a)\b|[%℃°]"
 )
 _NUMBER_PATTERN = re.compile(r"\d+(?:[.,]\d+)?")
+_PAGE_NUMBER_PATTERN = re.compile(
+    r"(?i)^\s*(?:page|p\.?|стр\.?|страница)?\s*\d{1,4}\s*(?:[/\\|-]\s*\d{1,4})?\s*$"
+)
+_SEPARATOR_PATTERN = re.compile(r"^[\W_]{3,}$")
+_WORD_PATTERN = re.compile(r"[A-Za-zА-Яа-яЁё]")
 _MATERIAL_PATTERN = re.compile(
     r"\b(?:[A-Z][a-z]?\d*){2,}\b|"
     r"\b(?:Ti-?6Al-?4V|CuCrZr|316L|AlSi10Mg|Inconel|NiTi|FeCrAl)\b"
@@ -108,7 +114,7 @@ class DocumentBlock(BaseModel):
 
 @dataclass(frozen=True)
 class PageImage:
-    """Rendered PDF page image used by the VL conductor."""
+    """Rendered PDF page image used by OCR and provenance blocks."""
 
     page: int | None
     image_path: Path
@@ -152,25 +158,37 @@ class TesseractOcrAdapter:
             output_type=Output.DICT,
             timeout=self.timeout_seconds,
         )
-        words: list[str] = []
+        line_words: dict[tuple[int, int, int], list[str]] = {}
+        line_order: list[tuple[int, int, int]] = []
         confidences: list[float] = []
-        for text, raw_confidence in zip(
-            data.get("text", []), data.get("conf", []), strict=False
-        ):
+        rows = zip(
+            data.get("block_num", []),
+            data.get("par_num", []),
+            data.get("line_num", []),
+            data.get("text", []),
+            data.get("conf", []),
+            strict=False,
+        )
+        for block_num, par_num, line_num, text, raw_confidence in rows:
             word = str(text).strip()
             if not word:
                 continue
-            words.append(word)
+            key = (int(block_num), int(par_num), int(line_num))
+            if key not in line_words:
+                line_words[key] = []
+                line_order.append(key)
+            line_words[key].append(word)
             try:
                 confidence = float(raw_confidence)
             except (TypeError, ValueError):
                 continue
             if confidence >= 0:
                 confidences.append(confidence)
+        lines = [" ".join(line_words[key]) for key in line_order]
         mean_confidence = (
             sum(confidences) / len(confidences) / 100.0 if confidences else 0.0
         )
-        return OcrResult(" ".join(words), min(1.0, mean_confidence))
+        return OcrResult("\n".join(lines), min(1.0, mean_confidence))
 
 
 @dataclass(frozen=True)
@@ -195,6 +213,8 @@ class DocumentParseSettings:
     grobid_url: str = ""
     grobid_timeout_seconds: float = 45.0
     grobid_min_text_chars: int = 80
+    enable_text_compaction: bool = True
+    repeated_line_min_pages: int = 2
 
 
 class GrobidClient:
@@ -260,7 +280,7 @@ class MarkItDownAdapter:
 
 
 class PdfPageRenderer:
-    """Render PDF pages to images without passing PDFs directly to VL models."""
+    """Render PDF pages to images for local OCR and provenance."""
 
     def __init__(
         self,
@@ -348,7 +368,7 @@ class DocumentBlockParser:
         grobid_blocks = self._grobid_pdf_blocks(source)
         grobid_text_len = sum(len(block.text.strip()) for block in grobid_blocks)
         if grobid_text_len >= self.settings.grobid_min_text_chars:
-            return grobid_blocks
+            return self._compact_text_blocks(grobid_blocks)
 
         page_text_blocks = self._pypdf_text_blocks(source)
         extracted_text_len = sum(
@@ -357,7 +377,7 @@ class DocumentBlockParser:
             if block.parser != "pypdf_page_placeholder"
         )
         if extracted_text_len >= self.settings.scanned_pdf_text_threshold:
-            return page_text_blocks
+            return self._compact_text_blocks(page_text_blocks)
 
         try:
             text = self.markitdown.convert(source).strip()
@@ -391,34 +411,7 @@ class DocumentBlockParser:
             ocr_block = self._ocr_text_block(source, image)
             if ocr_block is not None:
                 blocks.append(ocr_block)
-                continue
-            if self.settings.enable_vision and self.vision_conductor is not None:
-                interpretation = self.vision_conductor.analyze_image(
-                    image.image_path,
-                    prompt=self.settings.vision_prompt,
-                    metadata={
-                        "source_file": source.name,
-                        "source_path": str(source),
-                        "page": image.page,
-                        "block_id": image_block.block_id,
-                    },
-                )
-                if interpretation.strip():
-                    blocks.append(
-                        self._text_block(
-                            source,
-                            interpretation,
-                            parser="vl_conductor",
-                            page=image.page,
-                            block_type="image_interpretation",
-                            confidence=min(0.7, image.confidence),
-                            metadata={
-                                "interpretation_of_block_id": image_block.block_id,
-                                "image_path": str(image.image_path),
-                            },
-                        )
-                    )
-        return blocks
+        return self._compact_text_blocks(blocks)
 
     def _ocr_text_block(
         self,
@@ -433,11 +426,27 @@ class DocumentBlockParser:
             logger.debug("OCR failed for %s page %s", source, image.page, exc_info=True)
             return None
         text = result.text.strip()
+        compaction_stats: dict[str, int] = {}
+        original_text_chars = len(text)
+        if self.settings.enable_text_compaction:
+            text, compaction_stats = _compact_text_noise(text)
         if (
             len(text) < self.settings.ocr_min_text_chars
             or result.confidence < self.settings.ocr_min_confidence
         ):
             return None
+        metadata = {
+            "image_path": str(image.image_path),
+            "ocr_languages": self.settings.ocr_languages,
+            "vlm_skipped": True,
+            "vlm_skip_reason": "actionable_ocr",
+        }
+        if sum(compaction_stats.values()) > 0:
+            metadata["text_compaction"] = _text_compaction_metadata(
+                original_chars=original_text_chars,
+                cleaned_chars=len(text),
+                stats=compaction_stats,
+            )
         return self._text_block(
             source,
             text,
@@ -445,12 +454,7 @@ class DocumentBlockParser:
             page=image.page,
             block_type="ocr_text",
             confidence=result.confidence,
-            metadata={
-                "image_path": str(image.image_path),
-                "ocr_languages": self.settings.ocr_languages,
-                "vlm_skipped": True,
-                "vlm_skip_reason": "actionable_ocr",
-            },
+            metadata=metadata,
         )
 
     def _grobid_pdf_blocks(self, source: Path) -> list[DocumentBlock]:
@@ -528,6 +532,14 @@ class DocumentBlockParser:
             logger.debug("pypdf PDF parsing failed for %s", source, exc_info=True)
             return []
         return blocks
+
+    def _compact_text_blocks(self, blocks: list[DocumentBlock]) -> list[DocumentBlock]:
+        if not self.settings.enable_text_compaction:
+            return blocks
+        return _compact_document_text_blocks(
+            blocks,
+            repeated_line_min_pages=self.settings.repeated_line_min_pages,
+        )
 
     def _image_blocks(self, source: Path) -> list[DocumentBlock]:
         image_block = self._image_block(
@@ -779,6 +791,159 @@ def _semantic_line_score(line: str, index: int) -> int:
 
 def _compact_line(line: str) -> str:
     return " ".join(line.strip().split())
+
+
+def _compact_text_noise(
+    text: str,
+    *,
+    repeated_line_keys: set[str] | None = None,
+) -> tuple[str, dict[str, int]]:
+    repeated_line_keys = repeated_line_keys or set()
+    kept_lines: list[str] = []
+    removed_empty_lines = 0
+    removed_noise_lines = 0
+    removed_repeated_lines = 0
+    for raw_line in text.splitlines():
+        line = _compact_line(raw_line)
+        if not line:
+            removed_empty_lines += 1
+            continue
+        key = _noise_line_key(line)
+        if key in repeated_line_keys:
+            removed_repeated_lines += 1
+            continue
+        if _is_digital_noise_line(line):
+            removed_noise_lines += 1
+            continue
+        kept_lines.append(line)
+    return "\n".join(kept_lines), {
+        "removed_empty_lines": removed_empty_lines,
+        "removed_noise_lines": removed_noise_lines,
+        "removed_repeated_lines": removed_repeated_lines,
+    }
+
+
+def _compact_document_text_blocks(
+    blocks: list[DocumentBlock],
+    *,
+    repeated_line_min_pages: int = 2,
+) -> list[DocumentBlock]:
+    repeated_line_keys = _repeated_edge_line_keys(
+        blocks,
+        min_pages=max(2, repeated_line_min_pages),
+    )
+    compacted: list[DocumentBlock] = []
+    for block in blocks:
+        if not block.text.strip() or block.block_type == "page_placeholder":
+            compacted.append(block)
+            continue
+        cleaned_text, stats = _compact_text_noise(
+            block.text,
+            repeated_line_keys=repeated_line_keys,
+        )
+        if cleaned_text == block.text:
+            compacted.append(block)
+            continue
+        metadata = dict(block.metadata)
+        existing_stats = metadata.get("text_compaction")
+        metadata["text_compaction"] = _text_compaction_metadata(
+            original_chars=len(block.text),
+            cleaned_chars=len(cleaned_text),
+            stats=stats,
+            existing=existing_stats if isinstance(existing_stats, dict) else None,
+        )
+        compacted.append(
+            block.model_copy(
+                update={
+                    "text": cleaned_text,
+                    "metadata": metadata,
+                }
+            )
+        )
+    return compacted
+
+
+def _repeated_edge_line_keys(
+    blocks: list[DocumentBlock],
+    *,
+    min_pages: int,
+) -> set[str]:
+    page_keys: dict[int, set[str]] = {}
+    for block in blocks:
+        if block.page is None or not block.text.strip():
+            continue
+        lines = [_compact_line(line) for line in block.text.splitlines()]
+        lines = [line for line in lines if line]
+        if not lines:
+            continue
+        edge_lines = lines[:3] + lines[-3:]
+        keys = {
+            key
+            for line in edge_lines
+            if (key := _noise_line_key(line)) and _is_repeatable_margin_line(line)
+        }
+        if keys:
+            page_keys.setdefault(block.page, set()).update(keys)
+    counts = Counter(key for keys in page_keys.values() for key in keys)
+    return {key for key, count in counts.items() if count >= min_pages}
+
+
+def _text_compaction_metadata(
+    *,
+    original_chars: int,
+    cleaned_chars: int,
+    stats: dict[str, int],
+    existing: dict[str, Any] | None = None,
+) -> dict[str, int | str]:
+    existing = existing or {}
+    merged = {
+        "removed_empty_lines": int(existing.get("removed_empty_lines", 0))
+        + stats.get("removed_empty_lines", 0),
+        "removed_noise_lines": int(existing.get("removed_noise_lines", 0))
+        + stats.get("removed_noise_lines", 0),
+        "removed_repeated_lines": int(existing.get("removed_repeated_lines", 0))
+        + stats.get("removed_repeated_lines", 0),
+    }
+    return {
+        "method": "deterministic_pdf_noise_filter_v1",
+        "original_chars": int(existing.get("original_chars", original_chars)),
+        "cleaned_chars": cleaned_chars,
+        "removed_lines": sum(merged.values()),
+        **merged,
+    }
+
+
+def _noise_line_key(line: str) -> str:
+    line = _compact_line(line).casefold()
+    line = re.sub(r"\d+", "#", line)
+    line = re.sub(r"\s+", " ", line)
+    return line
+
+
+def _is_repeatable_margin_line(line: str) -> bool:
+    if _semantic_line_score(line, 0) >= 7:
+        return False
+    return len(line) <= 160
+
+
+def _is_digital_noise_line(line: str) -> bool:
+    compact = _compact_line(line)
+    if not compact:
+        return True
+    if _PAGE_NUMBER_PATTERN.match(compact):
+        return True
+    if _SEPARATOR_PATTERN.match(compact):
+        return True
+    if _UNIT_PATTERN.search(compact) or _MATERIAL_PATTERN.search(compact):
+        return False
+    letters = len(_WORD_PATTERN.findall(compact))
+    digits = sum(ch.isdigit() for ch in compact)
+    meaningful_chars = sum(ch.isalnum() for ch in compact)
+    if meaningful_chars == 0:
+        return True
+    if letters == 0 and digits > 0:
+        return True
+    return digits >= 5 and digits / max(meaningful_chars, 1) >= 0.75
 
 
 def _truncate_text(text: str, max_chars: int) -> str:

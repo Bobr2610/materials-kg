@@ -451,6 +451,24 @@ def _validate_relationship(
     )
 
 
+def _normalize_llm_entity(item: dict[str, Any]) -> dict[str, Any]:
+    """Normalize entity fields from different LLM providers."""
+    result = dict(item)
+    if "name" not in result and "text" in result:
+        result["name"] = result.pop("text")
+    if "kind" not in result and "type" in result:
+        result["kind"] = result.pop("type")
+    return result
+
+
+def _normalize_llm_relationship(item: dict[str, Any]) -> dict[str, Any]:
+    """Normalize relationship fields from different LLM providers."""
+    result = dict(item)
+    if "type" not in result and "relation" in result:
+        result["type"] = result.pop("relation")
+    return result
+
+
 def _validate_extraction(raw: dict[str, Any]) -> DocumentExtractionResult:
     """Validate and normalize raw LLM extraction output into typed DTOs."""
     warnings: list[str] = []
@@ -464,7 +482,7 @@ def _validate_extraction(raw: dict[str, Any]) -> DocumentExtractionResult:
     for item in raw_entities:
         if not isinstance(item, dict):
             continue
-        entity = _validate_entity(item)
+        entity = _validate_entity(_normalize_llm_entity(item))
         if entity is None:
             name = (item.get("name") or "").strip()
             if name:
@@ -514,7 +532,7 @@ def _validate_extraction(raw: dict[str, Any]) -> DocumentExtractionResult:
     for item in raw_relationships:
         if not isinstance(item, dict):
             continue
-        rel = _validate_relationship(item, seen_names, name_index)
+        rel = _validate_relationship(_normalize_llm_relationship(item), seen_names, name_index)
         if rel is None:
             continue
         relationships.append(rel)
@@ -729,7 +747,7 @@ def _merge_phase_results(
         for item in raw_relationships:
             if not isinstance(item, dict):
                 continue
-            rel = _validate_relationship(item, known_names, name_index)
+            rel = _validate_relationship(_normalize_llm_relationship(item), known_names, name_index)
             if rel is not None:
                 relationships.append(rel)
     relationships = relationships[:_MAX_EXTRACTED_RELATIONSHIPS]

@@ -67,6 +67,23 @@ class Settings(BaseSettings):
     llm_timeout_seconds: float = 60.0
     llm_max_retries: int = 3
     llm_retry_base_delay: float = 1.0
+    llm_cascade_enabled: bool = False
+    llm_cascade_1_provider: str = ""
+    llm_cascade_1_model: str = ""
+    llm_cascade_1_base_url: str = ""
+    llm_cascade_1_api_key: str = ""
+    llm_cascade_2_provider: str = ""
+    llm_cascade_2_model: str = ""
+    llm_cascade_2_base_url: str = ""
+    llm_cascade_2_api_key: str = ""
+    llm_cascade_3_provider: str = ""
+    llm_cascade_3_model: str = ""
+    llm_cascade_3_base_url: str = ""
+    llm_cascade_3_api_key: str = ""
+    llm_cascade_4_provider: str = ""
+    llm_cascade_4_model: str = ""
+    llm_cascade_4_base_url: str = ""
+    llm_cascade_4_api_key: str = ""
 
     # Hypothesis Factory orchestration
     materials_hypothesis_engine: str = "deepagents"
@@ -84,11 +101,30 @@ class Settings(BaseSettings):
     materials_vision_provider: str = ""
     materials_vision_api_key: str = ""
     materials_vision_base_url: str = ""
+    materials_vision_cascade_enabled: bool = False
+    materials_vision_cascade_1_provider: str = ""
+    materials_vision_cascade_1_model: str = ""
+    materials_vision_cascade_1_base_url: str = ""
+    materials_vision_cascade_1_api_key: str = ""
+    materials_vision_cascade_2_provider: str = ""
+    materials_vision_cascade_2_model: str = ""
+    materials_vision_cascade_2_base_url: str = ""
+    materials_vision_cascade_2_api_key: str = ""
+    materials_vision_cascade_3_provider: str = ""
+    materials_vision_cascade_3_model: str = ""
+    materials_vision_cascade_3_base_url: str = ""
+    materials_vision_cascade_3_api_key: str = ""
+    materials_vision_cascade_4_provider: str = ""
+    materials_vision_cascade_4_model: str = ""
+    materials_vision_cascade_4_base_url: str = ""
+    materials_vision_cascade_4_api_key: str = ""
     materials_pdf_render_dpi: int = 180
     materials_pdf_max_pages: int | None = 500
     materials_grobid_url: str = ""
     materials_grobid_timeout_seconds: float = 45.0
     materials_grobid_min_text_chars: int = 80
+    materials_document_text_compaction_enabled: bool = True
+    materials_document_repeated_line_min_pages: int = 2
 
     # Ingestion limits
     materials_llm_extraction_max_chars: int = 80_000

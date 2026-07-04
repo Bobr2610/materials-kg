@@ -194,7 +194,7 @@ def _api_document_parser(
     *,
     enable_vision: bool = False,
 ):
-    """Create a DocumentBlockParser with auto-VLM for the API layer."""
+    """Create a DocumentBlockParser; VLM is only used for image inputs."""
     try:
         if settings is None:
             from kg_engine.config.settings import settings as app_settings
@@ -214,20 +214,50 @@ def _api_document_parser(
                     grobid_url=settings.materials_grobid_url,
                     grobid_timeout_seconds=settings.materials_grobid_timeout_seconds,
                     grobid_min_text_chars=settings.materials_grobid_min_text_chars,
+                    enable_text_compaction=getattr(
+                        settings,
+                        "materials_document_text_compaction_enabled",
+                        True,
+                    ),
+                    repeated_line_min_pages=getattr(
+                        settings,
+                        "materials_document_repeated_line_min_pages",
+                        2,
+                    ),
                 ),
             )
-        from kg_engine.llm_core.provider import LLMProvider, resolve_chat_completions_config
+        from kg_engine.llm_core.provider import LLMProvider
+        from kg_engine.llm_core.provider import create_provider_from_configs
+        from kg_engine.llm_core.provider import resolve_chat_completions_config
+        from kg_engine.llm_core.provider import resolve_vision_completions_cascade
         from kg_engine.llm_core.vision import VisionConductor
 
         conductor = None
 
+        vision_cascade_configs = resolve_vision_completions_cascade(settings)
         vision_provider_name = (settings.materials_vision_provider or "").strip().lower()
         vision_model = (settings.materials_vision_model or "").strip()
         vision_api_key = (settings.materials_vision_api_key or "").strip()
         vision_base_url = (settings.materials_vision_base_url or "").strip()
 
         vision_provider = None
-        if vision_provider_name and vision_model:
+        if vision_cascade_configs:
+            vision_provider = create_provider_from_configs(
+                vision_cascade_configs,
+                timeout=getattr(
+                    settings,
+                    "materials_ingestion_llm_timeout_seconds",
+                    getattr(settings, "llm_timeout_seconds", 60.0),
+                ),
+                max_retries=getattr(
+                    settings,
+                    "materials_ingestion_llm_max_retries",
+                    getattr(settings, "llm_max_retries", 3),
+                ),
+                retry_base_delay=getattr(settings, "llm_retry_base_delay", 1.0),
+            )
+            vision_model = ""
+        elif vision_provider_name and vision_model:
             if not vision_api_key:
                 vision_api_key = (settings.llm_api_key or "").strip()
             if not vision_base_url:
@@ -259,9 +289,31 @@ def _api_document_parser(
                     )
 
         if vision_provider is None:
-            return None
+            return DocumentBlockParser(
+                settings=DocumentParseSettings(
+                    enable_vision=False,
+                    enable_ocr=getattr(settings, "materials_document_ocr_enabled", True),
+                    ocr_languages=getattr(settings, "materials_ocr_languages", "eng+rus"),
+                    ocr_timeout_seconds=getattr(settings, "materials_ocr_timeout_seconds", 30.0),
+                    ocr_min_text_chars=getattr(settings, "materials_ocr_min_text_chars", 40),
+                    ocr_min_confidence=getattr(settings, "materials_ocr_min_confidence", 0.55),
+                    grobid_url=settings.materials_grobid_url,
+                    grobid_timeout_seconds=settings.materials_grobid_timeout_seconds,
+                    grobid_min_text_chars=settings.materials_grobid_min_text_chars,
+                    enable_text_compaction=getattr(
+                        settings,
+                        "materials_document_text_compaction_enabled",
+                        True,
+                    ),
+                    repeated_line_min_pages=getattr(
+                        settings,
+                        "materials_document_repeated_line_min_pages",
+                        2,
+                    ),
+                ),
+            )
 
-        conductor = VisionConductor(vision_provider, model=vision_model)
+        conductor = VisionConductor(vision_provider, model=vision_model or None)
         return DocumentBlockParser(
             vision_conductor=conductor,
             settings=DocumentParseSettings(
@@ -274,6 +326,16 @@ def _api_document_parser(
                 grobid_url=settings.materials_grobid_url,
                 grobid_timeout_seconds=settings.materials_grobid_timeout_seconds,
                 grobid_min_text_chars=settings.materials_grobid_min_text_chars,
+                enable_text_compaction=getattr(
+                    settings,
+                    "materials_document_text_compaction_enabled",
+                    True,
+                ),
+                repeated_line_min_pages=getattr(
+                    settings,
+                    "materials_document_repeated_line_min_pages",
+                    2,
+                ),
             ),
         )
     except Exception:
@@ -593,7 +655,7 @@ async def _ingest_named_contents(
             upload_record["url"] = source_url
         uploaded.append(upload_record)
 
-        # DOCX/XLSX/PDF/HTML — document block parser (MarkItDown + optional VLM)
+        # DOCX/XLSX/PDF/HTML — document block parser; PDFs never use VLM.
         if suffix in _PARSER_SUFFIXES:
             parser = _api_document_parser()
             if parser is not None:
@@ -644,7 +706,7 @@ async def _ingest_named_contents(
                 )
             continue
 
-        # PNG/JPG/etc — image block parser (VL conductor)
+        # PNG/JPG/etc — image block parser with optional VL conductor.
         if suffix in _IMAGE_SUFFIXES:
             parser = _api_document_parser()
             if parser is not None:
@@ -845,6 +907,31 @@ def _is_task_example_path(path: Path, task_dir: Path) -> bool:
     except ValueError:
         return False
     return bool(parts) and parts[0].casefold().startswith("пример")
+
+
+def _excluded_task_file_names(raw: str | None) -> set[str]:
+    if not raw:
+        return set()
+    return {
+        item.strip().replace("\\", "/").casefold()
+        for chunk in raw.splitlines()
+        for item in chunk.split(",")
+        if item.strip()
+    }
+
+
+def _is_excluded_task_file(
+    path: Path,
+    task_dir: Path,
+    excluded_files: set[str],
+) -> bool:
+    if not excluded_files:
+        return False
+    try:
+        relative_name = str(path.relative_to(task_dir)).replace("\\", "/").casefold()
+    except ValueError:
+        return False
+    return relative_name in excluded_files or path.name.casefold() in excluded_files
 
 
 def _fallback_file_document(path: Path, task_dir: Path, reason: str) -> dict:
@@ -1478,6 +1565,7 @@ def create_materials_app(
         *,
         job_id: str,
         exclude_examples: bool,
+        exclude_files: str | None,
         snapshot_path: str | None,
         enable_vision: bool | None,
         enable_llm_extraction: bool,
@@ -1515,6 +1603,8 @@ def create_materials_app(
         uploaded: list[dict] = []
         unsupported: list[str] = []
         skipped_examples: list[str] = []
+        skipped_files: list[str] = []
+        excluded_files = _excluded_task_file_names(exclude_files)
         supported_suffixes = (
             _TEXT_SUFFIXES | _STRUCTURED_SUFFIXES | _PARSER_SUFFIXES | _IMAGE_SUFFIXES
         )
@@ -1533,6 +1623,9 @@ def create_materials_app(
             if exclude_examples and _is_task_example_path(path, task_dir):
                 skipped_examples.append(relative_name)
                 continue
+            if _is_excluded_task_file(path, task_dir, excluded_files):
+                skipped_files.append(relative_name)
+                continue
             suffix = path.suffix.lower()
             if suffix not in supported_suffixes:
                 unsupported.append(relative_name)
@@ -1545,6 +1638,7 @@ def create_materials_app(
             total_files=len(candidates),
             processed_files=0,
             skipped_example_files=list(skipped_examples),
+            skipped_files=list(skipped_files),
             unsupported_files=list(unsupported),
             message=f"Parsing {len(candidates)} files",
         )
@@ -1677,6 +1771,7 @@ def create_materials_app(
             "uploaded": uploaded,
             "documents_ingested": doc_count,
             "skipped_example_files": skipped_examples,
+            "skipped_files": skipped_files,
             "unsupported_files": unsupported,
         }
         if doc_results is not None:
@@ -1733,6 +1828,10 @@ def create_materials_app(
     async def load_task_materials(
         background_tasks: BackgroundTasks,
         exclude_examples: bool = Query(default=False),
+        exclude_files: str | None = Query(
+            default=None,
+            description="Comma-separated Task 1 file names or relative paths to skip",
+        ),
         snapshot_path: str | None = Query(default=None),
         enable_vision: bool = Query(default=None),
         enable_llm_extraction: bool = Query(default=True, description="Run LLM extraction on document text units"),
@@ -1765,12 +1864,14 @@ def create_materials_app(
             "task_materials_dir": _display_path(task_dir),
             "used_fallback": used_fallback,
             "excluded_examples": exclude_examples,
+            "excluded_files": exclude_files,
             "vision_enabled": enable_vision,
             "llm_extraction_enabled": enable_llm_extraction,
             "embeddings_enabled": enable_embeddings,
             "parallel_workers": parallel_workers,
             "uploaded": [],
             "skipped_example_files": [],
+            "skipped_files": [],
             "unsupported_files": [],
             "result": None,
             "error": None,
@@ -1783,6 +1884,7 @@ def create_materials_app(
                 result = await _run_task_materials_pipeline(
                     job_id=job_id,
                     exclude_examples=exclude_examples,
+                    exclude_files=exclude_files,
                     snapshot_path=snapshot_path,
                     enable_vision=enable_vision,
                     enable_llm_extraction=enable_llm_extraction,
@@ -1927,11 +2029,14 @@ def create_materials_app(
         engine = effective_settings.materials_hypothesis_engine.strip().lower()
         if engine == "deepagents":
             from kg_engine.llm_core.provider import resolve_chat_completions_config
+            from kg_engine.llm_core.provider import resolve_chat_completions_cascade
 
-            if resolve_chat_completions_config(
+            cascade_configs = resolve_chat_completions_cascade(effective_settings)
+            single_config = resolve_chat_completions_config(
                 effective_settings,
                 require_provider=True,
-            ) is None:
+            )
+            if not cascade_configs and single_config is None:
                 _fail_hypothesis_job(
                     job_id,
                     "API key and base URL for the selected Deep Agents provider are not configured.",
