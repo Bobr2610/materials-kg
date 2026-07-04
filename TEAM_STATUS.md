@@ -112,6 +112,7 @@
 | Product / API / Export / UX | Codex Agent 2 | Task 1 product flow and exports | Добавлены `/demo/load-task-materials` с fallback на packaged `sample_sources`, `/hypotheses/export` JSON/CSV, UI загрузки Task 1, карточки гипотез с provenance IDs, сохранение expert feedback; документация синхронизирована с фактическим corpus flow; ruff OK, pytest 100 passed; локальный Uvicorn health + demo loader OK; Docker build не подтверждён из-за DNS к Docker registry | 2026-07-02 |
 | Архитектор/QA | Codex | Full Docker pipeline verification with Yandex AI Studio | Docker/Neo4j/API подняты; Task 1 corpus загружен через Yandex config; query/answer, graph/state, deterministic hypotheses and JSON/CSV export OK; исправлены resolver/tool-contract/env propagation issues; pytest 117 passed; Deep Agents runtime остаётся заблокирован tool-loop/rate-limit behavior | 2026-07-03 |
 | Системный аналитик / архитектор | Codex | Task 1 URL ingestion and API docs sync | Добавлен `POST /ingest/url` для скачивания http/https источников с сохранением URL provenance и переиспользованием upload ingestion pipeline; README и ARCHITECTURE синхронизированы; pytest 120 passed | 2026-07-04 |
+| ML / Ingestion | Codex | OCR-first PDF parsing и оптимизация LLM-токенов | Добавлен локальный Tesseract `eng+rus`, OCR-first routing с selective VLM fallback, удаление placeholder/duplicate noise, token telemetry; 148 tests passed, Docker OCR confidence 0.903, health OK | 2026-07-04 |
 
 ---
 

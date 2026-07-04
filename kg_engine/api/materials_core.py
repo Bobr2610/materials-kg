@@ -206,6 +206,11 @@ def _api_document_parser(
             return DocumentBlockParser(
                 settings=DocumentParseSettings(
                     enable_vision=False,
+                    enable_ocr=getattr(settings, "materials_document_ocr_enabled", True),
+                    ocr_languages=getattr(settings, "materials_ocr_languages", "eng+rus"),
+                    ocr_timeout_seconds=getattr(settings, "materials_ocr_timeout_seconds", 30.0),
+                    ocr_min_text_chars=getattr(settings, "materials_ocr_min_text_chars", 40),
+                    ocr_min_confidence=getattr(settings, "materials_ocr_min_confidence", 0.55),
                     grobid_url=settings.materials_grobid_url,
                     grobid_timeout_seconds=settings.materials_grobid_timeout_seconds,
                     grobid_min_text_chars=settings.materials_grobid_min_text_chars,
@@ -261,6 +266,11 @@ def _api_document_parser(
             vision_conductor=conductor,
             settings=DocumentParseSettings(
                 enable_vision=True,
+                enable_ocr=getattr(settings, "materials_document_ocr_enabled", True),
+                ocr_languages=getattr(settings, "materials_ocr_languages", "eng+rus"),
+                ocr_timeout_seconds=getattr(settings, "materials_ocr_timeout_seconds", 30.0),
+                ocr_min_text_chars=getattr(settings, "materials_ocr_min_text_chars", 40),
+                ocr_min_confidence=getattr(settings, "materials_ocr_min_confidence", 0.55),
                 grobid_url=settings.materials_grobid_url,
                 grobid_timeout_seconds=settings.materials_grobid_timeout_seconds,
                 grobid_min_text_chars=settings.materials_grobid_min_text_chars,

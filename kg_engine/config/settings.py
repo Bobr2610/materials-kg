@@ -75,6 +75,11 @@ class Settings(BaseSettings):
 
     # Document parsing / Vision-Language interpretation
     materials_document_vision_enabled: bool = False
+    materials_document_ocr_enabled: bool = True
+    materials_ocr_languages: str = "eng+rus"
+    materials_ocr_timeout_seconds: float = 30.0
+    materials_ocr_min_text_chars: int = 40
+    materials_ocr_min_confidence: float = 0.55
     materials_vision_model: str = ""
     materials_vision_provider: str = ""
     materials_vision_api_key: str = ""

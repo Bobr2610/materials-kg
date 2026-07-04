@@ -10,7 +10,8 @@ import re
 from typing import Any
 import urllib.error
 import urllib.request
-import xml.etree.ElementTree as ET
+
+from defusedxml import ElementTree
 
 from pydantic import BaseModel
 from pydantic import Field
@@ -109,10 +110,67 @@ class DocumentBlock(BaseModel):
 class PageImage:
     """Rendered PDF page image used by the VL conductor."""
 
-    page: int
+    page: int | None
     image_path: Path
     confidence: float = 1.0
     metadata: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class OcrResult:
+    """Text and normalized mean word confidence returned by local OCR."""
+
+    text: str
+    confidence: float
+
+
+class TesseractOcrAdapter:
+    """Local OCR adapter; no document content leaves the machine."""
+
+    def __init__(
+        self,
+        *,
+        languages: str = "eng+rus",
+        timeout_seconds: float = 30.0,
+        page_segmentation_mode: int = 6,
+    ) -> None:
+        self.languages = languages
+        self.timeout_seconds = timeout_seconds
+        self.page_segmentation_mode = page_segmentation_mode
+
+    def recognize(self, image_path: Path) -> OcrResult:
+        try:
+            import pytesseract
+            from pytesseract import Output
+        except ImportError as exc:
+            msg = "Local OCR requires pytesseract and the Tesseract executable."
+            raise RuntimeError(msg) from exc
+        data = pytesseract.image_to_data(
+            str(image_path),
+            lang=self.languages,
+            config=f"--psm {self.page_segmentation_mode}",
+            output_type=Output.DICT,
+            timeout=self.timeout_seconds,
+        )
+        words: list[str] = []
+        confidences: list[float] = []
+        for text, raw_confidence in zip(
+            data.get("text", []), data.get("conf", []), strict=False
+        ):
+            word = str(text).strip()
+            if not word:
+                continue
+            words.append(word)
+            try:
+                confidence = float(raw_confidence)
+            except (TypeError, ValueError):
+                continue
+            if confidence >= 0:
+                confidences.append(confidence)
+        mean_confidence = (
+            sum(confidences) / len(confidences) / 100.0 if confidences else 0.0
+        )
+        return OcrResult(" ".join(words), min(1.0, mean_confidence))
 
 
 @dataclass(frozen=True)
@@ -121,6 +179,11 @@ class DocumentParseSettings:
 
     scanned_pdf_text_threshold: int = 80
     enable_vision: bool = True
+    enable_ocr: bool = True
+    ocr_languages: str = "eng+rus"
+    ocr_timeout_seconds: float = 30.0
+    ocr_min_text_chars: int = 40
+    ocr_min_confidence: float = 0.55
     vision_prompt: str = (
         "Read the rendered materials science document page. Extract only visible "
         "materials, processing modes, properties, numeric values, units, table "
@@ -149,7 +212,7 @@ class GrobidClient:
             path=path,
             content_type="application/pdf",
         )
-        request = urllib.request.Request(
+        request = urllib.request.Request(  # noqa: S310
             f"{self.base_url}/api/processFulltextDocument",
             data=body,
             headers={
@@ -159,7 +222,7 @@ class GrobidClient:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(
+            with urllib.request.urlopen(  # noqa: S310
                 request,
                 timeout=self.timeout_seconds,
             ) as response:
@@ -243,12 +306,14 @@ class DocumentBlockParser:
         *,
         markitdown: Any | None = None,
         pdf_renderer: Any | None = None,
+        ocr_engine: Any | None = None,
         grobid_client: Any | None = None,
         vision_conductor: Any | None = None,
         settings: DocumentParseSettings | None = None,
     ) -> None:
         self.markitdown = markitdown or MarkItDownAdapter()
         self.pdf_renderer = pdf_renderer
+        self.ocr_engine = ocr_engine
         self.grobid_client = grobid_client
         self.vision_conductor = vision_conductor
         self.settings = settings or DocumentParseSettings()
@@ -256,6 +321,11 @@ class DocumentBlockParser:
             self.grobid_client = GrobidClient(
                 self.settings.grobid_url.strip(),
                 timeout_seconds=self.settings.grobid_timeout_seconds,
+            )
+        if self.ocr_engine is None and self.settings.enable_ocr:
+            self.ocr_engine = TesseractOcrAdapter(
+                languages=self.settings.ocr_languages,
+                timeout_seconds=self.settings.ocr_timeout_seconds,
             )
 
     def parse(self, path: str | Path) -> list[DocumentBlock]:
@@ -318,6 +388,10 @@ class DocumentBlockParser:
                 metadata=image.metadata or {},
             )
             blocks.append(image_block)
+            ocr_block = self._ocr_text_block(source, image)
+            if ocr_block is not None:
+                blocks.append(ocr_block)
+                continue
             if self.settings.enable_vision and self.vision_conductor is not None:
                 interpretation = self.vision_conductor.analyze_image(
                     image.image_path,
@@ -345,6 +419,39 @@ class DocumentBlockParser:
                         )
                     )
         return blocks
+
+    def _ocr_text_block(
+        self,
+        source: Path,
+        image: PageImage,
+    ) -> DocumentBlock | None:
+        if not self.settings.enable_ocr or self.ocr_engine is None:
+            return None
+        try:
+            result = self.ocr_engine.recognize(image.image_path)
+        except Exception:
+            logger.debug("OCR failed for %s page %s", source, image.page, exc_info=True)
+            return None
+        text = result.text.strip()
+        if (
+            len(text) < self.settings.ocr_min_text_chars
+            or result.confidence < self.settings.ocr_min_confidence
+        ):
+            return None
+        return self._text_block(
+            source,
+            text,
+            parser="tesseract_ocr",
+            page=image.page,
+            block_type="ocr_text",
+            confidence=result.confidence,
+            metadata={
+                "image_path": str(image.image_path),
+                "ocr_languages": self.settings.ocr_languages,
+                "vlm_skipped": True,
+                "vlm_skip_reason": "actionable_ocr",
+            },
+        )
 
     def _grobid_pdf_blocks(self, source: Path) -> list[DocumentBlock]:
         if self.grobid_client is None:
@@ -432,6 +539,13 @@ class DocumentBlockParser:
             metadata={},
         )
         blocks = [image_block]
+        ocr_block = self._ocr_text_block(
+            source,
+            PageImage(page=None, image_path=source),
+        )
+        if ocr_block is not None:
+            blocks.append(ocr_block)
+            return blocks
         if self.settings.enable_vision and self.vision_conductor is not None:
             interpretation = self.vision_conductor.analyze_image(
                 source,
@@ -510,7 +624,11 @@ def blocks_to_document_input(
     blocks: list[DocumentBlock],
 ) -> DocumentInput:
     """Convert parsed blocks into compact semantic units for graph ingestion."""
-    text_blocks = [block for block in blocks if block.text.strip()]
+    text_blocks = [
+        block
+        for block in blocks
+        if block.text.strip() and block.block_type != "page_placeholder"
+    ]
     semantic_units = [
         _semantic_text_unit(block)
         for block in text_blocks
@@ -520,13 +638,18 @@ def blocks_to_document_input(
         for content, metadata in semantic_units
     ]
     source_ref = blocks[0].source_path if blocks else document_id
+    extraction_text = "\n\n".join(
+        _block_text_for_extraction(block, content)
+        for block, (content, _metadata) in zip(
+            text_blocks, semantic_units, strict=True
+        )
+    )
+    source_text_chars = sum(len(block.text) for block in blocks)
+    saved_chars = max(source_text_chars - len(extraction_text), 0)
     return DocumentInput(
         document_id=document_id,
         title=title,
-        text="\n\n".join(
-            _block_text_for_extraction(block, content)
-            for block, (content, _metadata) in zip(text_blocks, semantic_units, strict=True)
-        ),
+        text=extraction_text,
         source_ref=source_ref,
         text_units=text_units,
         metadata={
@@ -536,6 +659,11 @@ def blocks_to_document_input(
             "semantic_text_unit_count": len(text_units),
             "text_unit_storage": "semantic_compaction",
             "parsers": sorted({block.parser for block in blocks}),
+            "source_text_chars": source_text_chars,
+            "extraction_input_chars": len(extraction_text),
+            "estimated_source_tokens": (source_text_chars + 3) // 4,
+            "estimated_extraction_tokens": (len(extraction_text) + 3) // 4,
+            "estimated_tokens_saved": saved_chars // 4,
         },
     )
 
@@ -597,6 +725,7 @@ def _semantic_text_unit(block: DocumentBlock) -> tuple[str, dict[str, Any]]:
 def _semantic_meaning(text: str) -> str:
     lines = [_compact_line(line) for line in text.splitlines()]
     lines = [line for line in lines if line]
+    lines = list(dict.fromkeys(lines))
     if not lines:
         return ""
     if len(lines) == 1:
@@ -711,7 +840,7 @@ def _make_text_block(
 _NS = {"tei": "http://www.tei-c.org/ns/1.0"}
 
 
-def _tei_text(element: ET.Element | None) -> str:
+def _tei_text(element: ElementTree.Element | None) -> str:
     """Extract all text content from a TEI element, including nested children."""
     if element is None:
         return ""
@@ -745,7 +874,8 @@ def _grobid_tei_to_blocks(
     max_pages: int | None = None,
 ) -> list[DocumentBlock]:
     """Parse GROBID TEI XML into structured DocumentBlock objects."""
-    root = ET.fromstring(tei_xml)
+    _ = max_pages
+    root = ElementTree.fromstring(tei_xml)
     body = root.find(".//tei:body", _NS)
     title_el = root.find(".//tei:titleStmt/tei:title", _NS)
     abstract_el = root.find(".//tei:abstract", _NS)
@@ -757,8 +887,6 @@ def _grobid_tei_to_blocks(
         doi = id_el.text.strip()
 
     blocks: list[DocumentBlock] = []
-    block_index = 0
-
     # --- Title block ---
     title_text = _tei_text(title_el)
     if title_text:

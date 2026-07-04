@@ -41,7 +41,7 @@ kg_engine/domain/models.py
 | `requirements_core.txt` | Minimal deps for graph-first core (fastapi, pydantic, neo4j, pytest) |
 | `packages.txt` | Optional system packages list; empty for the Docker runtime |
 | `lint.py` | Colored ruff check/format wrapper with summary |
-| `Dockerfile` | Python 3.11-slim build, exposes 8090 |
+| `Dockerfile` | Python 3.11-slim build with Tesseract `rus+eng` OCR, exposes 8090 |
 | `docker-compose.yml` | Two services: `materials-neo4j` (Neo4j 5) + `materials-api` (FastAPI) |
 | `ui/` | Static Russian UI "Фабрика гипотез": upload, graph inspection, hypothesis generation, evidence IDs, expert feedback, JSON/CSV export |
 | `.env` | Live env vars (gitignored) |
@@ -146,6 +146,7 @@ Full deps: deepagents, langchain-core, neo4j, networkx, httpx, fastapi.
 |------|---------|
 | `__init__.py` | Exports 5 adapters: `DocumentCorpusAdapter`, `ExperimentCatalogAdapter`, `ReferenceDataAdapter`, `StaffDirectoryAdapter`, `TagCatalogAdapter` |
 | `adapters.py` | **478 lines.** Normalizes raw JSON/CSV payloads → domain DTOs. Each adapter handles one source type |
+| `document_blocks.py` | OCR-first PDF/image parsing with GROBID/native-text priority, selective VLM fallback, semantic compaction, and page provenance |
 
 ---
 

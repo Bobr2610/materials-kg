@@ -84,7 +84,9 @@ def _load_tabular(path: Path) -> list[dict[str, Any]]:
 
 
 def _document_parser(*, disable_vision: bool = False) -> DocumentBlockParser:
-    vision_enabled = not disable_vision
+    vision_enabled = (
+        settings.materials_document_vision_enabled and not disable_vision
+    )
     conductor = None
     if vision_enabled:
         vision_provider = _create_vision_provider()
@@ -101,6 +103,11 @@ def _document_parser(*, disable_vision: bool = False) -> DocumentBlockParser:
         vision_conductor=conductor,
         settings=DocumentParseSettings(
             enable_vision=vision_enabled,
+            enable_ocr=settings.materials_document_ocr_enabled,
+            ocr_languages=settings.materials_ocr_languages,
+            ocr_timeout_seconds=settings.materials_ocr_timeout_seconds,
+            ocr_min_text_chars=settings.materials_ocr_min_text_chars,
+            ocr_min_confidence=settings.materials_ocr_min_confidence,
             pdf_render_dpi=settings.materials_pdf_render_dpi,
             max_pdf_pages=settings.materials_pdf_max_pages,
             grobid_url=settings.materials_grobid_url,
@@ -506,7 +513,8 @@ def main() -> None:
         default=False,
         help=(
             "Disable Vision-Language interpretation for rendered PDF/image pages. "
-            "VLM is enabled by default when an LLM provider is configured."
+            "VLM is opt-in through MATERIALS_DOCUMENT_VISION_ENABLED; local OCR "
+            "is used first."
         ),
     )
     args = parser.parse_args()

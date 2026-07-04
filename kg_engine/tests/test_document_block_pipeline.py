@@ -13,6 +13,7 @@ from kg_engine.ingestion.document_blocks import DocumentBlockParser
 from kg_engine.ingestion.document_blocks import DocumentParseSettings
 from kg_engine.ingestion.document_blocks import GrobidClient
 from kg_engine.ingestion.document_blocks import PageImage
+from kg_engine.ingestion.document_blocks import OcrResult
 from kg_engine.ingestion.document_blocks import _grobid_tei_to_blocks
 from kg_engine.ingestion.document_blocks import blocks_to_document_input
 from kg_engine.scripts.ingest_materials_kg import _load_payload
@@ -49,6 +50,94 @@ class FakeVisionConductor:
         assert metadata["page"] == 1
         assert "materials" in prompt.lower()
         return "Figure interpretation: annealing mode increases conductivity."
+
+
+class FakeOcrEngine:
+    def __init__(self, result: OcrResult) -> None:
+        self.result = result
+        self.calls: list[Path] = []
+
+    def recognize(self, image_path: Path) -> OcrResult:
+        self.calls.append(image_path)
+        return self.result
+
+
+def test_scanned_pdf_uses_ocr_without_vlm_when_text_is_actionable(tmp_path) -> None:
+    source = tmp_path / "scan.pdf"
+    source.write_bytes(b"%PDF fake")
+    image = tmp_path / "page.png"
+    image.write_bytes(b"png")
+    ocr = FakeOcrEngine(
+        OcrResult("CuCrZr aging 480 C conductivity 82 %IACS", 0.91)
+    )
+    vision = FakeVisionConductor()
+    parser = DocumentBlockParser(
+        markitdown=FakeMarkItDown({".pdf": ""}),
+        pdf_renderer=FakeRenderer([PageImage(page=1, image_path=image)]),
+        ocr_engine=ocr,
+        vision_conductor=vision,
+        settings=DocumentParseSettings(enable_ocr=True, enable_vision=True),
+    )
+
+    blocks = parser.parse(source)
+
+    assert ocr.calls == [image]
+    assert vision.calls == []
+    assert [block.block_type for block in blocks] == ["image", "ocr_text"]
+    assert blocks[1].parser == "tesseract_ocr"
+    assert blocks[1].page == 1
+
+
+def test_weak_ocr_falls_back_to_vlm(tmp_path) -> None:
+    source = tmp_path / "scan.pdf"
+    source.write_bytes(b"%PDF fake")
+    image = tmp_path / "page.png"
+    image.write_bytes(b"png")
+    ocr = FakeOcrEngine(OcrResult("x", 0.12))
+    vision = FakeVisionConductor()
+    parser = DocumentBlockParser(
+        markitdown=FakeMarkItDown({".pdf": ""}),
+        pdf_renderer=FakeRenderer([PageImage(page=1, image_path=image)]),
+        ocr_engine=ocr,
+        vision_conductor=vision,
+        settings=DocumentParseSettings(enable_ocr=True, enable_vision=True),
+    )
+
+    blocks = parser.parse(source)
+
+    assert vision.calls == [image]
+    assert "image_interpretation" in [block.block_type for block in blocks]
+
+
+def test_placeholders_and_duplicate_lines_do_not_consume_extraction_tokens(tmp_path) -> None:
+    source = str(tmp_path / "scan.pdf")
+    useful = DocumentBlock(
+        block_id="useful",
+        source_file="scan.pdf",
+        source_path=source,
+        page=2,
+        block_type="ocr_text",
+        text=("CuCrZr 82 %IACS\n" * 30) + "footer",
+        confidence=0.9,
+        parser="tesseract_ocr",
+    )
+    placeholder = DocumentBlock(
+        block_id="empty",
+        source_file="scan.pdf",
+        source_path=source,
+        page=1,
+        block_type="page_placeholder",
+        text="PDF page preserved without extracted text",
+        confidence=0.1,
+        parser="pypdf_page_placeholder",
+    )
+
+    document = blocks_to_document_input("doc", "scan", [placeholder, useful])
+
+    assert len(document.text_units) == 1
+    assert document.text.count("CuCrZr 82 %IACS") == 1
+    assert document.metadata["extraction_input_chars"] < document.metadata["source_text_chars"]
+    assert document.metadata["estimated_tokens_saved"] > 0
 
 
 def test_markitdown_documents_become_source_blocks(tmp_path) -> None:
