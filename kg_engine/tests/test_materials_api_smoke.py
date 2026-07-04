@@ -5,9 +5,11 @@ import json
 import anyio
 from fastapi.testclient import TestClient
 
+from kg_engine.agents.hypothesis_tools import create_hypothesis_tools
 from kg_engine.api import materials_core
 from kg_engine.api.materials_core import create_materials_app
 from kg_engine.config.settings import Settings
+from kg_engine.ingestion.document_blocks import DocumentBlock
 from kg_engine.repositories.memory import InMemoryMaterialsKGRepository
 from kg_engine.services.materials_kg import MaterialsKGService
 
@@ -25,11 +27,11 @@ def load_task_materials_job(client: TestClient, **params) -> dict:
     job = started.json()
     assert job["status"] in {"queued", "running"}
     assert job["job_id"]
-    for _ in range(100):
+    for _ in range(500):
         job = client.get(f"/demo/load-task-materials/jobs/{job['job_id']}").json()
         if job["status"] not in {"queued", "running"}:
             break
-        anyio.run(anyio.sleep, 0.01)
+        anyio.run(anyio.sleep, 0.02)
     assert job["status"] == "completed", job
     assert job["processed_files"] == job["total_files"]
     assert job["result"] is not None
@@ -449,6 +451,88 @@ def test_task_materials_base_loader_skips_examples_and_saves_snapshot(
     restored_counts = restored_service.load_graph_snapshot(snapshot_path)
     assert restored_counts["entities"] == body["snapshot"]["entities"]
     assert restored_service.search_evidence_units("CuCrZr", limit=5)
+
+
+def test_task_example_tailings_excel_is_navigable_for_graph_agent(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    task_dir = tmp_path / "Задача 1"
+    example_dir = task_dir / "Пример 1"
+    example_dir.mkdir(parents=True)
+    source = example_dir / "Хвосты КГМК.xlsx"
+    source.write_bytes(b"fake xlsx; parser is injected")
+
+    class TailingsExcelParser:
+        def parse(self, path):
+            text = (
+                "Комплексный анализ хвостов обогатительных фабрик. "
+                "Хвосты являются отвальными продуктами флотационного обогащения. "
+                "Породные и пирротиновые хвосты содержат потерянные элементы 28 и 29. "
+                "Классы крупности: +125; -125 +71; -71 +45; -45 +20; -20 +10; -10. "
+                "Минералогический анализ: для элемента 28 потенциально извлекаемы "
+                "раскрытый Pnt, закрытый Pnt и миллерит; для элемента 29 извлекаемы "
+                "раскрытый и закрытый Pnt/Cp."
+            )
+            return [
+                DocumentBlock(
+                    block_id="tailings-xlsx-block",
+                    source_file=path.name,
+                    source_path=str(path),
+                    page=None,
+                    block_type="text",
+                    text=text,
+                    raw_fragment=text,
+                    confidence=1.0,
+                    parser="test_excel_parser",
+                    metadata={"sheet": "analysis"},
+                )
+            ]
+
+    monkeypatch.setattr(materials_core, "_TASK_MATERIALS_DIRS", (task_dir,))
+    monkeypatch.setattr(
+        materials_core,
+        "_api_document_parser",
+        lambda *args, **kwargs: TailingsExcelParser(),
+    )
+
+    repository = InMemoryMaterialsKGRepository()
+    service = MaterialsKGService(repository)
+    app = create_materials_app(settings=deterministic_settings(), service=service)
+    client = TestClient(app)
+
+    body = load_task_materials_job(
+        client,
+        enable_llm_extraction="false",
+        enable_embeddings="false",
+    )
+    assert body["documents_ingested"] == 1
+    assert body["uploaded"][0]["name"].replace("\\", "/") == "Пример 1/Хвосты КГМК.xlsx"
+
+    graph = client.get(
+        "/graph/data",
+        params={"sources": "Пример 1/Хвосты КГМК.xlsx"},
+    )
+    assert graph.status_code == 200
+    graph_body = graph.json()
+    document_nodes = [
+        node for node in graph_body["nodes"] if node["kind"] == "document"
+    ]
+    assert document_nodes
+    assert graph_body["edges"]
+
+    tools = {tool.__name__: tool for tool in create_hypothesis_tools(service)}
+    hits = tools["kg_search_evidence"](
+        "хвосты элемент 28 Pnt крупности",
+        source_ids=["Пример 1/Хвосты КГМК.xlsx"],
+    )
+    related = tools["kg_query_related"](document_nodes[0]["id"], depth=1)
+
+    assert hits
+    assert "Pnt" in hits[0]["content"]
+    assert related["root_entity"]["kind"] == "document"
+    assert related["relations"]
+    assert related["evidence"]
 
 
 def test_metrics_api_offline_quality_flow() -> None:

@@ -27,7 +27,7 @@ from kg_engine.ingestion.document_blocks import DocumentBlockParser
 from kg_engine.ingestion.document_blocks import DocumentParseSettings
 from kg_engine.ingestion.document_blocks import parse_document_file
 from kg_engine.llm_core.provider import create_provider_from_settings
-from kg_engine.llm_core.vision import OpenAICompatibleVisionConductor
+from kg_engine.llm_core.vision import VisionConductor
 from kg_engine.repositories.factory import create_materials_repository
 from kg_engine.services.materials_kg import MaterialsKGService
 
@@ -95,7 +95,7 @@ def _document_parser(*, disable_vision: bool = False) -> DocumentBlockParser:
             vision_enabled = False
         else:
             vision_model = settings.materials_vision_model or settings.default_model or None
-            conductor = OpenAICompatibleVisionConductor(vision_provider, model=vision_model)
+            conductor = VisionConductor(vision_provider, model=vision_model)
             logger.info("VLM enabled, model: %s", vision_model or "(default)")
     return DocumentBlockParser(
         vision_conductor=conductor,
@@ -108,34 +108,21 @@ def _document_parser(*, disable_vision: bool = False) -> DocumentBlockParser:
 
 
 def _create_vision_provider():
-    """Create LLM provider for VLM. Uses dedicated VLM settings if configured,
-    otherwise falls back to the main LLM provider."""
-    from kg_engine.llm_core.provider import LLMProvider, resolve_openai_compatible_config
+    """Create LLM provider for VLM from dedicated settings or the main provider."""
+    from kg_engine.llm_core.provider import LLMProvider, resolve_chat_completions_config
 
     vision_provider_name = (settings.materials_vision_provider or "").strip().lower()
     vision_model = (settings.materials_vision_model or "").strip()
     vision_api_key = (settings.materials_vision_api_key or "").strip()
     vision_base_url = (settings.materials_vision_base_url or "").strip()
 
-    # If dedicated VLM provider is configured, use it
     if vision_provider_name:
-        # Use VLM API key if provided, otherwise fall back to main provider's key
         if not vision_api_key:
-            main_provider = (settings.default_llm_provider or "").strip().lower()
-            if vision_provider_name == main_provider:
-                # Same provider — reuse main API key
-                vision_api_key = (
-                    getattr(settings, f"{main_provider}_api_key", "")
-                    or settings.llm_api_key
-                    or ""
-                ).strip()
-            else:
-                # Different provider — need explicit key
-                vision_api_key = (
-                    getattr(settings, f"{vision_provider_name}_api_key", "")
-                    or settings.llm_api_key
-                    or ""
-                ).strip()
+            vision_api_key = (
+                getattr(settings, f"{vision_provider_name}_api_key", "")
+                or settings.llm_api_key
+                or ""
+            ).strip()
 
         if not vision_base_url:
             vision_base_url = (
@@ -145,12 +132,8 @@ def _create_vision_provider():
             ).strip()
 
         if vision_api_key or vision_base_url:
-            # If no vision model specified, use the vision provider's default
             if not vision_model:
-                # Try to get from main settings for same provider
-                main_provider = (settings.default_llm_provider or "").strip().lower()
-                if vision_provider_name == main_provider:
-                    vision_model = settings.default_model
+                vision_model = settings.default_model
 
             vision_settings_proxy = type("VisionSettings", (), {
                 "default_llm_provider": vision_provider_name,
@@ -160,7 +143,7 @@ def _create_vision_provider():
                 "llm_api_key": vision_api_key,
                 "llm_base_url": vision_base_url,
             })()
-            config = resolve_openai_compatible_config(vision_settings_proxy)
+            config = resolve_chat_completions_config(vision_settings_proxy)
             if config is not None:
                 return LLMProvider(
                     base_url=config.base_url,

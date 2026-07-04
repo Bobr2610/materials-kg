@@ -14,7 +14,7 @@ from kg_engine.ingestion.document_blocks import PageImage
 from kg_engine.ingestion.document_blocks import blocks_to_document_input
 from kg_engine.scripts.ingest_materials_kg import _load_payload
 from kg_engine.llm_core.vision import VisionRequest
-from kg_engine.llm_core.vision import build_openai_compatible_vision_messages
+from kg_engine.llm_core.vision import build_vision_messages
 
 
 class FakeMarkItDown:
@@ -206,7 +206,7 @@ def test_long_blocks_store_semantic_meaning_not_full_raw_text(tmp_path) -> None:
     assert text_unit.metadata["semantic_unit"] is True
 
 
-def test_vision_messages_are_openai_compatible_image_payload(tmp_path) -> None:
+def test_vision_messages_are_chat_completions_image_payload(tmp_path) -> None:
     image = tmp_path / "figure.png"
     image.write_bytes(b"image bytes")
     request = VisionRequest(
@@ -215,7 +215,7 @@ def test_vision_messages_are_openai_compatible_image_payload(tmp_path) -> None:
         mime_type="image/png",
     )
 
-    messages = build_openai_compatible_vision_messages(request)
+    messages = build_vision_messages(request)
 
     content = messages[0]["content"]
     assert messages[0]["role"] == "user"

@@ -206,15 +206,14 @@ class Neo4jMaterialsKGRepository:
             MATCH (source:Entity {id: $source_id})
             MATCH (target:Entity {id: $target_id})
             MERGE (source)-[r:KG_RELATION {id: $id}]->(target)
+            WITH r, source, target, coalesce(r.evidence_ids, []) AS existing_evidence_ids
             SET r += $payload
-            WITH r, source, target
-            OPTIONAL MATCH (source)-[old:KG_RELATION {id: $id}]->(target)
-            WITH r, source, target,
-                 CASE WHEN old IS NOT NULL
-                      THEN coalesce(old.evidence_ids, []) + $new_evidence_ids
-                      ELSE $new_evidence_ids
-                 END AS merged_evidence
-            SET r.evidence_ids = merged_evidence
+            WITH r, source, target, existing_evidence_ids + $new_evidence_ids AS evidence_ids
+            SET r.evidence_ids = reduce(
+                acc = [],
+                evidence_id IN evidence_ids |
+                CASE WHEN evidence_id IN acc THEN acc ELSE acc + evidence_id END
+            )
             RETURN r, source.id AS source_id, target.id AS target_id
             """,
             {
@@ -481,8 +480,14 @@ class Neo4jMaterialsKGRepository:
             MATCH (source:Entity {id: row.source_id})
             MATCH (target:Entity {id: row.target_id})
             MERGE (source)-[r:KG_RELATION {id: row.id}]->(target)
+            WITH r, row, coalesce(r.evidence_ids, []) AS existing_evidence_ids
             SET r += row.payload
-            SET r.evidence_ids = coalesce(r.evidence_ids, []) + row.new_evidence_ids
+            WITH r, existing_evidence_ids + row.new_evidence_ids AS evidence_ids
+            SET r.evidence_ids = reduce(
+                acc = [],
+                evidence_id IN evidence_ids |
+                CASE WHEN evidence_id IN acc THEN acc ELSE acc + evidence_id END
+            )
             """,
             {"batch": batch},
         )

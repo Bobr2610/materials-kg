@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import asyncio
+import inspect
 import json
 import logging
 from collections import deque
@@ -21,7 +22,6 @@ from kg_engine.domain.models import DecisionHistoryQueryResult
 from kg_engine.domain.models import DecisionTrace
 from kg_engine.domain.models import DocumentInput
 from kg_engine.domain.models import Entity
-from kg_engine.domain.models import DocumentInput
 from kg_engine.domain.models import Evidence
 from kg_engine.domain.models import EvidencePath
 from kg_engine.domain.models import ExperimentInput
@@ -38,7 +38,6 @@ from kg_engine.domain.models import QueryFilters
 from kg_engine.domain.models import ReferenceDataBatch
 from kg_engine.domain.models import RelatedEntitiesQueryResult
 from kg_engine.domain.models import Relation
-from kg_engine.domain.models import ExperimentInput
 from kg_engine.domain.models import ResearchHypothesis
 from kg_engine.domain.models import SearchTextUnit
 from kg_engine.domain.models import SourceKind
@@ -205,14 +204,14 @@ def _document_extraction_batches(
         from kg_engine.config.settings import settings
 
         batch_chars = int(
-            getattr(settings, "materials_llm_extraction_batch_chars", 6_000)
+            getattr(settings, "materials_llm_extraction_batch_chars", 25_000)
         )
         max_batches = int(
-            getattr(settings, "materials_llm_extraction_max_batches_per_document", 3)
+            getattr(settings, "materials_llm_extraction_max_batches_per_document", 4)
         )
     except Exception:
-        batch_chars = 6_000
-        max_batches = 3
+        batch_chars = 25_000
+        max_batches = 4
     batch_chars = max(1_000, min(max_chars, batch_chars))
     max_batches = max(1, max_batches)
 
@@ -1019,7 +1018,6 @@ class MaterialsKGService:
 
         def _process_one_document(document: DocumentInput) -> dict:
             """Process a single document; called through asyncio.to_thread."""
-            logger.info("Processing document: id=%s title=%s", document.document_id, document.title)
             local_evidence: list[Evidence] = []
             local_relations: list[Relation] = []
             local_traces: list[DecisionTrace] = []
@@ -1029,7 +1027,6 @@ class MaterialsKGService:
             local_llm_count = 0
 
             doc_src = document.source_ref or document.document_id
-            logger.info("Processing doc_src=%s document_id=%s title=%s", doc_src, document.document_id, document.title)
             try:
                 document_entity = self._ensure_entity(
                     "document",
@@ -1039,7 +1036,6 @@ class MaterialsKGService:
                     source_ref=doc_src,
                     properties=document.metadata,
                 )
-                logger.info("Entity created: id=%s name=%s", document_entity.id, document_entity.canonical_name)
             except Exception:
                 logger.exception("FAILED _ensure_entity for doc_src=%s document_id=%s", doc_src, document.document_id)
                 raise
@@ -1048,7 +1044,6 @@ class MaterialsKGService:
                 _SOURCE_DOCUMENT_TAG,
                 source_ref=doc_src,
             )
-            logger.info("Provenance for %s: tag_id=%s", document.document_id, source_tag.id)
             _add_document_provenance_relation(
                 document_entity=document_entity,
                 tag_entity=source_tag,
@@ -1477,8 +1472,9 @@ class MaterialsKGService:
         if not texts:
             return text_units
         try:
-            if hasattr(self._llm, "embed_async"):
-                results = await self._llm.embed_async(texts)
+            embed_async = getattr(self._llm, "embed_async", None)
+            if embed_async is not None and inspect.iscoroutinefunction(embed_async):
+                results = await embed_async(texts)
             else:
                 results = await asyncio.to_thread(self._llm.embed, texts)
             for idx, emb in zip(indices, results, strict=False):
@@ -1813,13 +1809,17 @@ class MaterialsKGService:
         hits = self._repository.search_text_units(query, limit=limit)
         if source_ids is None:
             return hits
-        source_set = set(source_ids)
+        source_set = _expand_source_set(
+            {item.strip() for item in source_ids if item and item.strip()}
+        )
         return [
             hit
             for hit in hits
-            if hit.source_entity_id in source_set
-            or hit.metadata.get("source_id") in source_set
-            or hit.metadata.get("source_file") in source_set
+            if _source_matches(hit.source_entity_id, source_set)
+            or _source_matches(hit.metadata.get("source_id"), source_set)
+            or _source_matches(hit.metadata.get("source_file"), source_set)
+            or _source_matches(hit.metadata.get("source_ref"), source_set)
+            or _source_matches(hit.metadata.get("source_path"), source_set)
         ]
 
     def _build_answer_context(
@@ -2875,10 +2875,7 @@ class MaterialsKGService:
         entities = self._repository.find_entities()
         observations = self._repository.list_observations()
         relations = self._repository.list_relations()
-        evidence_ids = [obs.evidence_id for obs in observations if obs.evidence_id]
-        evidence_all = (
-            self._repository.list_evidence(evidence_ids) if evidence_ids else []
-        )
+        evidence_all = self._repository.list_all_evidence()
         by_kind: dict[str, int] = {}
         for e in entities:
             by_kind[e.kind] = by_kind.get(e.kind, 0) + 1

@@ -129,6 +129,24 @@ def test_document_adapter_builds_findings_and_text_units() -> None:
     assert documents[0].text_units[0].content == "chunk body"
 
 
+def test_document_adapter_keeps_source_document_without_extracted_text() -> None:
+    documents = DocumentCorpusAdapter().from_payload(
+        [
+            {
+                "document_id": "task1-image",
+                "title": "Регламент.png",
+                "source_ref": "Задача 1/Регламенты/Регламент.png",
+                "text_units": [],
+            }
+        ]
+    )
+
+    assert len(documents) == 1
+    assert documents[0].document_id == "task1-image"
+    assert documents[0].text
+    assert "no text extracted" in documents[0].text
+
+
 def test_directory_and_tag_adapters_create_reference_batches() -> None:
     staff_batch = StaffDirectoryAdapter().from_payload(
         [{"name": "Lab A", "members": ["Alice", "Bob"]}]

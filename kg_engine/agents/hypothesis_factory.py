@@ -12,7 +12,7 @@ from kg_engine.config.settings import Settings
 from kg_engine.config.settings import settings as default_settings
 from kg_engine.domain.models import HypothesisGenerationResult
 from kg_engine.domain.models import HypothesisInput
-from kg_engine.llm_core.provider import create_langchain_chat_model_from_settings
+from kg_engine.llm_core.provider import create_agent_chat_model_from_settings
 from kg_engine.services.hypothesis_adjustments import EXPERT_ADJUSTMENT_SCHEMA
 from kg_engine.services.hypothesis_adjustments import apply_expert_adjustments
 from kg_engine.services.materials_kg import MaterialsKGService
@@ -32,12 +32,12 @@ AgentFactory = Callable[..., Any]
 ModelFactory = Callable[[Settings], tuple[Any, str]]
 
 
-def create_langchain_chat_model(
+def create_agent_chat_model(
     runtime_settings: Settings,
 ) -> tuple[Any, str]:
-    """Create a LangChain-compatible chat model from shared LLM settings."""
+    """Create an agent-compatible chat model from shared LLM settings."""
     try:
-        return create_langchain_chat_model_from_settings(runtime_settings)
+        return create_agent_chat_model_from_settings(runtime_settings)
     except RuntimeError as exc:
         raise DeepAgentsConfigurationError(str(exc)) from exc
 
@@ -289,7 +289,7 @@ def generate_hypotheses_with_deep_agent(
         }
     ]
     create_agent = agent_factory or _load_create_deep_agent()
-    create_model = model_factory or create_langchain_chat_model
+    create_model = model_factory or create_agent_chat_model
     model, llm_used = create_model(settings_obj)
     source_overview = service.get_source_overview()
     trace.append(

@@ -448,6 +448,36 @@ def test_hypothesis_factory_uses_literature_when_observations_are_missing() -> N
     assert result.hypotheses[0].score.final_score > 0
 
 
+def test_each_document_ingest_creates_document_entity_text_unit_and_relation() -> None:
+    service = build_service()
+
+    result = service.ingest_documents(
+        [
+            DocumentInput(
+                document_id="task1-doc",
+                title="Task 1 source",
+                text="Файл сохранен как источник: Регламенты/source.png.",
+                source_ref="Регламенты/source.png",
+            )
+        ]
+    )
+
+    document = service.repository.get_entity("task1-doc")
+    relations = service.repository.list_relations(entity_id="task1-doc")
+    text_units = service.repository.list_text_units()
+
+    assert result["documents"] == 1
+    assert document is not None
+    assert document.kind == "document"
+    assert text_units
+    assert text_units[0].source_entity_id == "task1-doc"
+    assert any(
+        relation.source_entity_id == "task1-doc"
+        and relation.relation_type == "tagged_with"
+        for relation in relations
+    )
+
+
 class TestSourceGrounding:
     """Verify that answer_question returns source-backed data, not fabricated content."""
 

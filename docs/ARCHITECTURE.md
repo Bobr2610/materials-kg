@@ -37,7 +37,7 @@ kg_engine/domain/models.py
 | `README.md` | Project overview: layer model, entity/relation types, Neo4j storage |
 | `AGENTS.md` | **Source of truth** for agent rules. Pre-flight gate, git flow, prohibited actions |
 | `TEAM_STATUS.md` | Shared task board: ML/NLP, Data Science, System Analyst tracks |
-| `pyproject.toml` | Package config: name, deps (fastapi, neo4j, langchain, pydantic), ruff settings |
+| `pyproject.toml` | Package config: name, deps (fastapi, neo4j, agent runtime, pydantic), ruff settings |
 | `requirements_core.txt` | Minimal deps for graph-first core (fastapi, pydantic, neo4j, pytest) |
 | `packages.txt` | Optional system packages list; empty for the Docker runtime |
 | `lint.py` | Colored ruff check/format wrapper with summary |
@@ -57,7 +57,7 @@ kg_engine/domain/models.py
 Exports `MaterialsKGService`. Engine with legacy RAG + graph-first core.
 
 #### `kg_engine/requirements.txt`
-Full 30-line deps: deepagents, langchain, neo4j, networkx, openai, tiktoken, fastapi.
+Full deps: deepagents, langchain-core, neo4j, networkx, httpx, fastapi.
 
 ---
 
@@ -109,7 +109,7 @@ Full 30-line deps: deepagents, langchain, neo4j, networkx, openai, tiktoken, fas
 | File | Purpose |
 |------|---------|
 | `__init__.py` | Exports `extract_and_resolve`, `resolve_relation_type`, `generate_hypotheses_with_deep_agent` |
-| `hypothesis_factory.py` | **245 lines.** Deep Agents for hypothesis generation. Read-only graph tools, LangChain model, workflow orchestration |
+| `hypothesis_factory.py` | Deep Agents for hypothesis generation. Read-only graph tools, agent-compatible model, workflow orchestration |
 | `hypothesis_tools.py` | **135 lines.** Read-only tool set for hypothesis workflow: query, search, entity lookup, gap listing. Call counting, step limits |
 | `extraction_agent.py` | **95 lines.** Deep Agents for document entity extraction. Calls `extract_entities_from_document()`, resolves to `EntityKind` |
 
@@ -138,7 +138,7 @@ Full 30-line deps: deepagents, langchain, neo4j, networkx, openai, tiktoken, fas
 | File | Purpose |
 |------|---------|
 | `__init__.py` | Docstring: "LLM integration layer for materials KG" |
-| `provider.py` | **532 lines.** `LLMProvider` + factory. OpenAI-compatible: openrouter, polza, vllm, openai, groq, mistral. Async streaming, retry, LangChain model creation |
+| `provider.py` | `LLMProvider` + factory. Provider-neutral chat-completions transport configured from env/settings. Async streaming, retry, agent-compatible model creation |
 | `extraction.py` | **550 lines.** Entity/relationship extraction from documents. `extract_entities_from_document()`, `generate_streaming_answer()`. Limits: 50 entities, 20 experiments, 30 relations |
 | `token_budget.py` | **150 lines.** Token counting (tiktoken cl100k_base), context truncation, budget fitting |
 | `fallback.py` | **178 lines.** `CircuitBreaker` + `FallbackChain` for multi-provider failover |

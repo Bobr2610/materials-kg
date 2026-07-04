@@ -14,6 +14,7 @@ from threading import Lock
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
+from fastapi import BackgroundTasks
 from fastapi import FastAPI
 from fastapi import Header
 from fastapi import HTTPException
@@ -189,8 +190,8 @@ def _api_document_parser(
             return DocumentBlockParser(
                 settings=DocumentParseSettings(enable_vision=False),
             )
-        from kg_engine.llm_core.provider import LLMProvider, resolve_openai_compatible_config
-        from kg_engine.llm_core.vision import OpenAICompatibleVisionConductor
+        from kg_engine.llm_core.provider import LLMProvider, resolve_chat_completions_config
+        from kg_engine.llm_core.vision import VisionConductor
 
         conductor = None
 
@@ -212,9 +213,6 @@ def _api_document_parser(
                     or ""
                 ).strip()
             if vision_api_key or vision_base_url:
-                extra = {}
-                if vision_provider_name == "yandex":
-                    extra["yandex_folder_id"] = getattr(settings, "yandex_folder_id", "")
                 vision_settings_proxy = type("VisionSettings", (), {
                     "default_llm_provider": vision_provider_name,
                     "default_model": vision_model,
@@ -222,9 +220,8 @@ def _api_document_parser(
                     f"{vision_provider_name}_base_url": vision_base_url,
                     "llm_api_key": "",
                     "llm_base_url": "",
-                    **extra,
                 })()
-                config = resolve_openai_compatible_config(vision_settings_proxy)
+                config = resolve_chat_completions_config(vision_settings_proxy)
                 if config is not None:
                     vision_provider = LLMProvider(
                         base_url=config.base_url,
@@ -241,13 +238,12 @@ def _api_document_parser(
                             "materials_ingestion_llm_max_retries",
                             getattr(settings, "llm_max_retries", 3),
                         ),
-                        reasoning_effort="none" if config.provider == "yandex" else None,
                     )
 
         if vision_provider is None:
             return None
 
-        conductor = OpenAICompatibleVisionConductor(vision_provider, model=vision_model)
+        conductor = VisionConductor(vision_provider, model=vision_model)
         return DocumentBlockParser(
             vision_conductor=conductor,
             settings=DocumentParseSettings(enable_vision=True),
@@ -1232,7 +1228,7 @@ def create_materials_app(
                 ExperimentCatalogAdapter().from_payload(exp_payload)
             )
         if doc_payload:
-            results["documents"] = runtime_service.ingest_documents_parallel(
+            results["documents"] = await runtime_service.ingest_documents_async(
                 DocumentCorpusAdapter().from_payload(doc_payload),
                 parallel_workers=4,
             )
@@ -1492,28 +1488,7 @@ def create_materials_app(
         doc_count = 0
         doc_results: dict | None = None
         if doc_payload:
-            import logging as _diag_log
-            _diag = _diag_log.getLogger("materials_core.ingest_diag")
-            _diag.info("doc_payload count=%d", len(doc_payload))
-            for _i, _item in enumerate(doc_payload):
-                _diag.info("  doc_payload[%d]: document_id=%s text_len=%d units=%d source_ref=%s",
-                    _i,
-                    _item.get("document_id", "MISSING"),
-                    len(_item.get("text") or ""),
-                    len(_item.get("text_units") or []),
-                    _item.get("source_ref", "NONE"),
-                )
             document_batch = DocumentCorpusAdapter().from_payload(doc_payload)
-            _diag.info("adapter produced %d documents", len(document_batch))
-            for _i, _doc in enumerate(document_batch):
-                _diag.info("  batch[%d]: document_id=%s title=%s text_len=%d units=%d source_ref=%s",
-                    _i,
-                    _doc.document_id,
-                    _doc.title,
-                    len(_doc.text or ""),
-                    len(_doc.text_units or []),
-                    _doc.source_ref or "NONE",
-                )
             _update_task_load_job(
                 job_id,
                 stage="ingesting",
@@ -1597,6 +1572,7 @@ def create_materials_app(
 
     @app.post("/demo/load-task-materials", status_code=202)
     async def load_task_materials(
+        background_tasks: BackgroundTasks,
         exclude_examples: bool = Query(default=False),
         snapshot_path: str | None = Query(default=None),
         enable_vision: bool = Query(default=None),
@@ -1661,7 +1637,7 @@ def create_materials_app(
             except Exception as exc:
                 _fail_task_load_job(job_id, str(exc))
 
-        asyncio.create_task(_worker())
+        background_tasks.add_task(_worker)
         return _get_task_load_job(job_id)
 
     @app.get("/demo/load-task-materials/jobs/{job_id}")
@@ -1763,7 +1739,13 @@ def create_materials_app(
         return result.model_dump(mode="json")
 
     @app.post("/hypotheses/generate", status_code=202)
-    async def generate_hypotheses(request: HypothesisInput) -> dict:
+    async def generate_hypotheses(
+        request: HypothesisInput,
+        background_tasks: BackgroundTasks,
+    ) -> dict:
+        from kg_engine.config.settings import settings as app_settings
+
+        effective_settings = runtime_settings or app_settings
         job_id = uuid4().hex
         now = _utc_now()
         job = {
@@ -1783,6 +1765,21 @@ def create_materials_app(
         with _hypothesis_jobs_lock:
             _hypothesis_jobs[job_id] = job
 
+        engine = effective_settings.materials_hypothesis_engine.strip().lower()
+        if engine == "deepagents":
+            from kg_engine.llm_core.provider import resolve_chat_completions_config
+
+            if resolve_chat_completions_config(
+                effective_settings,
+                require_provider=True,
+            ) is None:
+                _fail_hypothesis_job(
+                    job_id,
+                    "API key and base URL for the selected Deep Agents provider are not configured.",
+                    status_code=503,
+                )
+                return _get_hypothesis_job(job_id)
+
         async def _worker() -> None:
             try:
                 result = await asyncio.to_thread(
@@ -1800,7 +1797,7 @@ def create_materials_app(
             except Exception as exc:
                 _fail_hypothesis_job(job_id, str(exc))
 
-        asyncio.create_task(_worker())
+        background_tasks.add_task(_worker)
         return _get_hypothesis_job(job_id)
 
     @app.get("/hypotheses/jobs/{job_id}")

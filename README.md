@@ -59,9 +59,8 @@ data gaps, evidence search, and source overview, then returns the same typed
 
 LLM provider wiring is centralized in `kg_engine/llm_core/provider.py`.
 `kg_engine/agents/` does not keep its own provider list: it asks `llm_core` for
-an agent-compatible chat model. Built-in shortcuts such as `openrouter`,
-`polza`, `vllm`, `openai`, `groq`, and `mistral` keep defaults, and any other
-OpenAI-compatible provider can be connected with `<PROVIDER>_API_KEY` and
+an agent-compatible chat model. Provider choice is explicit: set
+`DEFAULT_LLM_PROVIDER`, `DEFAULT_MODEL`, and either `<PROVIDER>_API_KEY` /
 `<PROVIDER>_BASE_URL` or universal `LLM_API_KEY` / `LLM_BASE_URL`.
 
 The factory generates interpretable candidates from graph evidence:
@@ -164,13 +163,10 @@ set MATERIALS_API_ENSURE_SCHEMA=true
 set MATERIALS_HYPOTHESIS_ENGINE=deepagents
 set MATERIALS_DEEPAGENTS_ENABLED=true
 set MATERIALS_DEEPAGENTS_MAX_TOOL_STEPS=12
-set DEFAULT_LLM_PROVIDER=openrouter
+set DEFAULT_LLM_PROVIDER=my-provider
 set DEFAULT_MODEL=<provider-model>
-set OPENROUTER_API_KEY=<your-api-key>
-# For custom OpenAI-compatible providers:
-# set DEFAULT_LLM_PROVIDER=my-provider
-# set MY_PROVIDER_API_KEY=<your-api-key>
-# set MY_PROVIDER_BASE_URL=https://provider.example/v1
+set MY_PROVIDER_API_KEY=<your-api-key>
+set MY_PROVIDER_BASE_URL=https://provider.example/v1
 ```
 
 `ensure_schema()` creates Neo4j constraints for entities, relationships,

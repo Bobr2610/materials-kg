@@ -14,7 +14,6 @@ dependencies = [
     "fastapi>=0.100,<1",
     "httpx>=0.24",
     "langchain-core>=0.3",
-    "langchain-openai>=0.2",
     "langgraph>=0.2",
     "neo4j>=5.20,<6",
     "python-multipart>=0.0.6",

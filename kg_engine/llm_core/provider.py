@@ -1,4 +1,4 @@
-"""OpenAI-compatible LLM provider with async streaming and retry."""
+"""Provider-neutral OpenAI-compatible LLM client with async streaming and retry."""
 
 from __future__ import annotations
 
@@ -20,25 +20,11 @@ logger = logging.getLogger(__name__)
 _DEFAULT_TIMEOUT = 60.0
 _MAX_RETRIES = 3
 _RETRY_BASE_DELAY = 1.0
-_OPENAI_BASE_URL = "https://api.openai.com"
-_OPENROUTER_BASE_URL = "https://openrouter.ai/api"
-_POLZA_BASE_URL = "https://polza.ai/api"
-_GROQ_BASE_URL = "https://api.groq.com/openai"
-_MISTRAL_BASE_URL = "https://api.mistral.ai"
-_YANDEX_BASE_URL = "https://ai.api.cloud.yandex.net"
-_PROVIDER_DEFAULT_BASE_URLS = {
-    "openai": _OPENAI_BASE_URL,
-    "openrouter": _OPENROUTER_BASE_URL,
-    "polza": _POLZA_BASE_URL,
-    "groq": _GROQ_BASE_URL,
-    "mistral": _MISTRAL_BASE_URL,
-    "yandex": _YANDEX_BASE_URL,
-}
 
 
 @dataclass(frozen=True)
-class OpenAICompatibleConfig:
-    """Resolved OpenAI-compatible provider configuration."""
+class ChatCompletionsConfig:
+    """Resolved chat-completions provider configuration."""
 
     provider: str
     api_key: str
@@ -59,24 +45,16 @@ def _setting_or_env(settings: Any, attr: str, env_name: str) -> str:
     return _clean(getattr(settings, attr, "")) or _clean(os.getenv(env_name))
 
 
-def _openrouter_model_name(model: str) -> str:
-    """Return an OpenRouter model slug without forcing OpenAI-only models."""
-    model = _clean(model)
-    if not model or "/" in model:
-        return model
-    return f"openai/{model}"
-
-
-def _openai_compatible_root(base_url: str) -> str:
-    """Normalize OpenAI-compatible base URLs before appending /v1 paths."""
+def _chat_completions_root(base_url: str) -> str:
+    """Normalize chat-completions base URLs before appending /v1 paths."""
     base_url = _clean(base_url).rstrip("/")
     if base_url.lower().endswith("/v1"):
         return base_url[:-3].rstrip("/")
     return base_url
 
 
-def _openai_compatible_api_base(base_url: str) -> str:
-    root = _openai_compatible_root(base_url)
+def _chat_completions_api_base(base_url: str) -> str:
+    root = _chat_completions_root(base_url)
     return f"{root}/v1"
 
 
@@ -92,15 +70,15 @@ def _selected_chat_model(settings: Any) -> str:
     )
 
 
-def resolve_openai_compatible_config(
+def resolve_chat_completions_config(
     settings: Any,
     *,
     require_provider: bool = False,
-) -> OpenAICompatibleConfig | None:
+) -> ChatCompletionsConfig | None:
     """Resolve any OpenAI-compatible LLM provider from settings/env.
 
-    Known providers keep their built-in default base URLs. Provider selection is
-    explicit: no other provider or generic API key is used as a fallback.
+    Provider selection is explicit: concrete providers, base URLs, API keys, and
+    model names are supplied by Settings or environment variables.
     """
     provider = _selected_provider(settings)
     if not provider:
@@ -115,26 +93,18 @@ def resolve_openai_compatible_config(
         settings,
         f"{provider_key}_api_key",
         f"{env_prefix}_API_KEY",
-    )
+    ) or _setting_or_env(settings, "llm_api_key", "LLM_API_KEY")
     base_url = (
         _setting_or_env(settings, f"{provider_key}_base_url", f"{env_prefix}_BASE_URL")
-        or _PROVIDER_DEFAULT_BASE_URLS.get(provider_key, "")
+        or _setting_or_env(settings, "llm_base_url", "LLM_BASE_URL")
     )
     if not api_key or not base_url:
         return None
 
     chat_model = _selected_chat_model(settings)
     embedding_model = _clean(getattr(settings, "default_embedding_model", ""))
-    if provider_key == "openrouter":
-        chat_model = _openrouter_model_name(chat_model)
-        embedding_model = _openrouter_model_name(embedding_model)
-    elif provider_key == "yandex":
-        folder_id = _clean(getattr(settings, "yandex_folder_id", ""))
-        if folder_id:
-            chat_model = f"gpt://{folder_id}/{chat_model.lstrip('gpt://')}" if chat_model else ""
-            embedding_model = f"emb://{folder_id}/{embedding_model.lstrip('emb://')}" if embedding_model else ""
 
-    return OpenAICompatibleConfig(
+    return ChatCompletionsConfig(
         provider=provider,
         api_key=api_key,
         base_url=base_url,
@@ -162,7 +132,7 @@ class LLMProvider:
         retry_base_delay: float = _RETRY_BASE_DELAY,
         reasoning_effort: str | None = None,
     ) -> None:
-        self.base_url = _openai_compatible_root(base_url)
+        self.base_url = _chat_completions_root(base_url)
         self.api_key = api_key
         self.chat_model = chat_model
         self.embedding_model = embedding_model
@@ -549,10 +519,7 @@ def create_provider_from_settings(settings: Any) -> LLMProvider | None:
         ),
     }
 
-    def create_from_config(config: OpenAICompatibleConfig) -> LLMProvider:
-        reasoning_effort: str | None = None
-        if config.provider == "yandex":
-            reasoning_effort = "none"
+    def create_from_config(config: ChatCompletionsConfig) -> LLMProvider:
         return LLMProvider(
             base_url=config.base_url,
             api_key=config.api_key,
@@ -561,29 +528,19 @@ def create_provider_from_settings(settings: Any) -> LLMProvider | None:
             timeout=kwargs["timeout"],
             max_retries=kwargs["max_retries"],
             retry_base_delay=kwargs["retry_base_delay"],
-            reasoning_effort=reasoning_effort,
         )
 
     selected_provider = _selected_provider(settings)
     if selected_provider:
-        config = resolve_openai_compatible_config(settings, require_provider=True)
+        config = resolve_chat_completions_config(settings, require_provider=True)
         return create_from_config(config) if config is not None else None
 
     return None
 
 
-def create_langchain_chat_model_from_settings(settings: Any) -> tuple[Any, str]:
-    """Create a LangChain-compatible chat model from shared LLM settings."""
-    try:
-        from langchain_openai import ChatOpenAI
-    except ImportError as exc:
-        msg = (
-            "langchain-openai is required for Deep Agents. "
-            "Install kg_engine/requirements.txt before using deepagents mode."
-        )
-        raise RuntimeError(msg) from exc
-
-    config = resolve_openai_compatible_config(settings, require_provider=True)
+def create_agent_chat_model_from_settings(settings: Any) -> tuple[Any, str]:
+    """Create an agent-compatible chat model from the generic LLM provider."""
+    config = resolve_chat_completions_config(settings, require_provider=True)
     if config is None:
         provider = _selected_provider(settings)
         if not provider:
@@ -595,13 +552,85 @@ def create_langchain_chat_model_from_settings(settings: Any) -> tuple[Any, str]:
             )
         raise RuntimeError(msg)
 
-    model = ChatOpenAI(
-        model=config.chat_model,
+    try:
+        from langchain_core.language_models.chat_models import BaseChatModel
+        from langchain_core.messages import AIMessage
+        from langchain_core.messages import BaseMessage
+        from langchain_core.outputs import ChatGeneration
+        from langchain_core.outputs import ChatResult
+    except ImportError as exc:
+        msg = (
+            "langchain-core is required for Deep Agents. "
+            "Install project dependencies before using deepagents mode."
+        )
+        raise RuntimeError(msg) from exc
+
+    provider = LLMProvider(
+        base_url=config.base_url,
         api_key=config.api_key,
-        base_url=_openai_compatible_api_base(config.base_url),
-        temperature=getattr(settings, "llm_temperature", 0.7),
+        chat_model=config.chat_model,
+        embedding_model=config.embedding_model,
         timeout=getattr(settings, "llm_timeout_seconds", _DEFAULT_TIMEOUT),
         max_retries=getattr(settings, "llm_max_retries", _MAX_RETRIES),
+        retry_base_delay=getattr(settings, "llm_retry_base_delay", _RETRY_BASE_DELAY),
+    )
+
+    class ProviderChatModel(BaseChatModel):
+        provider: LLMProvider
+        temperature: float
+        max_tokens: int
+
+        @property
+        def _llm_type(self) -> str:
+            return "materials-kg-chat-completions"
+
+        @staticmethod
+        def _message_to_dict(message: BaseMessage) -> dict[str, str]:
+            role = getattr(message, "type", "user")
+            if role == "human":
+                role = "user"
+            elif role == "ai":
+                role = "assistant"
+            return {"role": role, "content": str(message.content)}
+
+        def _generate(
+            self,
+            messages: list[BaseMessage],
+            stop: list[str] | None = None,
+            run_manager: Any | None = None,
+            **kwargs: Any,
+        ) -> ChatResult:
+            _ = (stop, run_manager)
+            content = self.provider.chat(
+                [self._message_to_dict(message) for message in messages],
+                temperature=kwargs.get("temperature", self.temperature),
+                max_tokens=kwargs.get("max_tokens", self.max_tokens),
+            )
+            return ChatResult(
+                generations=[ChatGeneration(message=AIMessage(content=content))]
+            )
+
+        async def _agenerate(
+            self,
+            messages: list[BaseMessage],
+            stop: list[str] | None = None,
+            run_manager: Any | None = None,
+            **kwargs: Any,
+        ) -> ChatResult:
+            _ = (stop, run_manager)
+            content = await self.provider.chat_async(
+                [self._message_to_dict(message) for message in messages],
+                temperature=kwargs.get("temperature", self.temperature),
+                max_tokens=kwargs.get("max_tokens", self.max_tokens),
+            )
+            return ChatResult(
+                generations=[ChatGeneration(message=AIMessage(content=content))]
+            )
+
+    model = ProviderChatModel(
+        provider=provider,
+        temperature=getattr(settings, "llm_temperature", 0.7),
+        max_tokens=getattr(settings, "llm_max_tokens", 4096),
     )
     return model, f"{config.provider}:{config.chat_model}"
 

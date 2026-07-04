@@ -15,6 +15,9 @@ from kg_engine.domain.product import ExpectedEffect
 from kg_engine.domain.product import RequiredResource
 from kg_engine.domain.product import VerificationRoadmap
 
+EntityKindName = str
+RelationTypeName = str
+
 
 def utc_now() -> datetime:
     """Return a timezone-aware UTC timestamp."""
@@ -45,7 +48,7 @@ class Entity(BaseModel):
     """Canonical entity stored in the graph core."""
 
     id: str
-    kind: str
+    kind: EntityKindName
     canonical_name: str
     aliases: list[str] = Field(default_factory=list)
     properties: dict[str, Any] = Field(default_factory=dict)
@@ -73,7 +76,7 @@ class Relation(BaseModel):
     """Typed relation between canonical entities."""
 
     id: str
-    relation_type: str
+    relation_type: RelationTypeName
     source_entity_id: str
     target_entity_id: str
     evidence_ids: list[str] = Field(default_factory=list)
@@ -145,7 +148,7 @@ class DataGap(BaseModel):
 class CanonicalEntityInput(BaseModel):
     """Reference record used to seed canonical dictionaries."""
 
-    kind: str
+    kind: EntityKindName
     name: str
     canonical_id: str | None = Field(default=None)
     aliases: list[str] = Field(default_factory=list)
