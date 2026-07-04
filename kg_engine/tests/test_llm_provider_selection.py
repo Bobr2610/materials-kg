@@ -3,6 +3,7 @@ from __future__ import annotations
 from kg_engine.config.settings import Settings
 from kg_engine.llm_core.provider import create_agent_chat_model_from_settings
 from kg_engine.llm_core.provider import create_provider_from_settings
+from kg_engine.llm_core.provider import LLMProvider
 
 
 def test_configured_provider_ignores_provider_specific_env(
@@ -105,3 +106,60 @@ def test_agent_chat_model_uses_generic_provider_config(monkeypatch) -> None:
     _model, label = create_agent_chat_model_from_settings(settings)
 
     assert label == "any-provider:any-model"
+
+
+def test_agent_chat_model_supports_openai_tool_calls(monkeypatch) -> None:
+    from langchain_core.messages import HumanMessage
+
+    settings = Settings(
+        default_llm_provider="openrouter",
+        default_model="openrouter/free",
+        llm_api_key="test-key",
+        llm_base_url="https://openrouter.ai/api/v1",
+    )
+
+    def fake_completion(_self, _messages, **kwargs):
+        assert kwargs["tools"][0]["function"]["name"] == "kg_search"
+        return {
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {
+                        "name": "kg_search",
+                        "arguments": '{"query":"CuCrZr"}',
+                    },
+                }
+            ],
+        }
+
+    monkeypatch.setattr(LLMProvider, "chat_completion", fake_completion)
+    model, _label = create_agent_chat_model_from_settings(settings)
+    bound = model.bind_tools(
+        [
+            {
+                "type": "function",
+                "function": {
+                    "name": "kg_search",
+                    "description": "Search graph evidence",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"query": {"type": "string"}},
+                        "required": ["query"],
+                    },
+                },
+            }
+        ]
+    )
+
+    response = bound.invoke([HumanMessage(content="Find CuCrZr")])
+
+    assert response.tool_calls == [
+        {
+            "name": "kg_search",
+            "args": {"query": "CuCrZr"},
+            "id": "call-1",
+            "type": "tool_call",
+        }
+    ]

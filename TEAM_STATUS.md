@@ -96,6 +96,7 @@
 | Роль | Участник | Задача | Статус | Ветка | Обновлено |
 |------|----------|--------|--------|-------|-----------|
 | Product / UI | Codex | Split monolithic UI into static modules without graph regression | готово | feat/api-static-ui-split | 2026-07-04 |
+| ML / NLP / Knowledge Graphs | Codex | OpenRouter cascade and Deep Agents tool-call bridge | готово | staging | 2026-07-04 |
 
 ## История выполненных задач
 
@@ -113,6 +114,7 @@
 | Архитектор/QA | Codex | Full Docker pipeline verification with Yandex AI Studio | Docker/Neo4j/API подняты; Task 1 corpus загружен через Yandex config; query/answer, graph/state, deterministic hypotheses and JSON/CSV export OK; исправлены resolver/tool-contract/env propagation issues; pytest 117 passed; Deep Agents runtime остаётся заблокирован tool-loop/rate-limit behavior | 2026-07-03 |
 | Системный аналитик / архитектор | Codex | Task 1 URL ingestion and API docs sync | Добавлен `POST /ingest/url` для скачивания http/https источников с сохранением URL provenance и переиспользованием upload ingestion pipeline; README и ARCHITECTURE синхронизированы; pytest 120 passed | 2026-07-04 |
 | ML / Ingestion | Codex | OCR-first PDF parsing и оптимизация LLM-токенов | Добавлен локальный Tesseract `eng+rus`, OCR-first routing с selective VLM fallback, удаление placeholder/duplicate noise, token telemetry; 148 tests passed, Docker OCR confidence 0.903, health OK | 2026-07-04 |
+| ML / NLP / Knowledge Graphs | Codex | OpenRouter cascade и Deep Agents tool-call bridge | Добавлен bridge для tool-calls/assistant messages в agent chat model, сохранена совместимость с OpenRouter/Generic provider, добавлен regression test для tool-call round-trip; pytest 149 passed | 2026-07-04 |
 
 ---
 
