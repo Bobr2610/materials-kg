@@ -115,7 +115,7 @@ GROBID extracts scientific structure such as title, abstract, body sections,
 and references into provenance-rich text blocks. If GROBID is unavailable or
 returns too little text, ingestion falls back to the existing PDF path:
 page-level text extraction, MarkItDown fallback, and rendered page images for
-scanned PDFs before any VLM interpretation.
+local OCR. VLM interpretation is not used for PDF pages.
 
 ## Research Projects
 

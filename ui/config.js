@@ -25,10 +25,11 @@ var UI_CONFIG = {
   },
   taskMaterialsParams: {
     exclude_examples: "true",
+    exclude_files: "Как читать отчет института по хвостам.docx",
     enable_vision: "true",
     enable_llm_extraction: "true",
     enable_embeddings: "false",
-    parallel_workers: "8"
+    parallel_workers: "1"
   },
   graph: {
     colors: {

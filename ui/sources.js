@@ -207,8 +207,9 @@ async function loadTaskMaterials() {
     setUploadProgress(1, 1, "Task 1 загружена");
     const unsupported = data.unsupported_files?.length ? " Неподдерживаемых файлов: " + data.unsupported_files.length + "." : "";
     const skipped = data.skipped_example_files?.length ? " Примеры пропущены: " + data.skipped_example_files.length + "." : "";
+    const skippedFiles = data.skipped_files?.length ? " Файлы пропущены: " + data.skipped_files.length + "." : "";
     const warning = data.warnings?.length ? " " + data.warnings.map(escapeHtml).join(" ") : "";
-    addMsg("assistant", '<div class="bubble">Материалы Task 1 загружены из ' + escapeHtml(data.task_materials_dir) + ". Документов: " + escapeHtml(data.documents_ingested || 0) + "." + skipped + unsupported + warning + "</div>");
+    addMsg("assistant", '<div class="bubble">Материалы Task 1 загружены из ' + escapeHtml(data.task_materials_dir) + ". Документов: " + escapeHtml(data.documents_ingested || 0) + "." + skipped + skippedFiles + unsupported + warning + "</div>");
     refreshGraphIfOpen();
   } catch(e) {
     addMsg("assistant", '<div class="bubble error">' + escapeHtml(e.message) + "</div>");
