@@ -155,7 +155,7 @@ Full deps: deepagents, langchain-core, neo4j, networkx, httpx, fastapi.
 | File | Purpose |
 |------|---------|
 | `__init__.py` | Docstring: "LLM integration layer for materials KG" |
-| `provider.py` | `LLMProvider` + factory. Provider-neutral chat-completions transport configured from env/settings. Async streaming, retry, agent-compatible model creation |
+| `provider.py` | `LLMProvider` + factory. Provider-neutral chat-completions transport with streaming, retry, OpenAI tool calls, and LangChain/Deep Agents binding |
 | `extraction.py` | **550 lines.** Entity/relationship extraction from documents. `extract_entities_from_document()`, `generate_streaming_answer()`. Limits: 50 entities, 20 experiments, 30 relations |
 | `token_budget.py` | **150 lines.** Token counting (tiktoken cl100k_base), context truncation, budget fitting |
 | `fallback.py` | **178 lines.** `CircuitBreaker` + `FallbackChain` for multi-provider failover |
