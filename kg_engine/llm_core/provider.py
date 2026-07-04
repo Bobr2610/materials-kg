@@ -37,10 +37,6 @@ def _clean(value: str | None) -> str:
     return (value or "").strip()
 
 
-def _provider_env_prefix(provider: str) -> str:
-    return "".join(char if char.isalnum() else "_" for char in provider).upper()
-
-
 def _setting_or_env(settings: Any, attr: str, env_name: str) -> str:
     return _clean(getattr(settings, attr, "")) or _clean(os.getenv(env_name))
 
@@ -87,17 +83,8 @@ def resolve_chat_completions_config(
             raise ValueError(msg)
         return None
 
-    provider_key = provider.lower()
-    env_prefix = _provider_env_prefix(provider)
-    api_key = _setting_or_env(
-        settings,
-        f"{provider_key}_api_key",
-        f"{env_prefix}_API_KEY",
-    ) or _setting_or_env(settings, "llm_api_key", "LLM_API_KEY")
-    base_url = (
-        _setting_or_env(settings, f"{provider_key}_base_url", f"{env_prefix}_BASE_URL")
-        or _setting_or_env(settings, "llm_base_url", "LLM_BASE_URL")
-    )
+    api_key = _setting_or_env(settings, "llm_api_key", "LLM_API_KEY")
+    base_url = _setting_or_env(settings, "llm_base_url", "LLM_BASE_URL")
     if not api_key or not base_url:
         return None
 
@@ -548,7 +535,7 @@ def create_agent_chat_model_from_settings(settings: Any) -> tuple[Any, str]:
         else:
             msg = (
                 f"API key and base URL for provider '{provider}' are not configured. "
-                "Use provider-specific env vars for the selected provider."
+                "Use LLM_API_KEY and LLM_BASE_URL."
             )
         raise RuntimeError(msg)
 

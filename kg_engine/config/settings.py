@@ -85,7 +85,7 @@ class Settings(BaseSettings):
     # Ingestion limits
     materials_llm_extraction_max_chars: int = 80_000
     materials_llm_extraction_batch_chars: int = 25_000
-    materials_llm_extraction_max_batches_per_document: int = 4
+    materials_llm_extraction_max_batches_per_document: int = 0
     materials_ingestion_llm_timeout_seconds: float = 60.0
     materials_ingestion_llm_max_retries: int = 3
     materials_llm_extraction_chunk_size: int = 25_000

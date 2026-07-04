@@ -5,7 +5,7 @@ from kg_engine.llm_core.provider import create_agent_chat_model_from_settings
 from kg_engine.llm_core.provider import create_provider_from_settings
 
 
-def test_configured_provider_uses_matching_env_without_builtin_shortcuts(
+def test_configured_provider_ignores_provider_specific_env(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("PROVIDER_A_API_KEY", "provider-a-key")
@@ -21,8 +21,8 @@ def test_configured_provider_uses_matching_env_without_builtin_shortcuts(
     provider = create_provider_from_settings(settings)
 
     assert provider is not None
-    assert provider.base_url == "https://provider-a.example/api"
-    assert provider.api_key == "provider-a-key"
+    assert provider.base_url == "https://generic.example"
+    assert provider.api_key == "generic-key"
     assert provider.chat_model == "chat-a"
     assert provider.embedding_model == "embed-a"
     provider.close()
@@ -66,6 +66,8 @@ def test_agent_provider_alias_selects_provider_when_default_is_empty(
     monkeypatch.setenv("AGENT_DEFAULT_MODEL", "agent-chat")
     monkeypatch.setenv("PROVIDER_B_API_KEY", "provider-b-key")
     monkeypatch.setenv("PROVIDER_B_BASE_URL", "https://provider-b.example/v1")
+    monkeypatch.setenv("LLM_API_KEY", "generic-key")
+    monkeypatch.setenv("LLM_BASE_URL", "https://generic-agent.example/v1")
     settings = Settings(
         default_llm_provider="",
         default_model="",
@@ -75,8 +77,8 @@ def test_agent_provider_alias_selects_provider_when_default_is_empty(
     provider = create_provider_from_settings(settings)
 
     assert provider is not None
-    assert provider.base_url == "https://provider-b.example"
-    assert provider.api_key == "provider-b-key"
+    assert provider.base_url == "https://generic-agent.example"
+    assert provider.api_key == "generic-key"
     assert provider.chat_model == "agent-chat"
     provider.close()
 
@@ -93,8 +95,8 @@ def test_configured_provider_without_endpoint_returns_none() -> None:
 
 
 def test_agent_chat_model_uses_generic_provider_config(monkeypatch) -> None:
-    monkeypatch.setenv("ANY_PROVIDER_API_KEY", "any-key")
-    monkeypatch.setenv("ANY_PROVIDER_BASE_URL", "https://any-provider.example/v1")
+    monkeypatch.setenv("LLM_API_KEY", "any-key")
+    monkeypatch.setenv("LLM_BASE_URL", "https://any-provider.example/v1")
     settings = Settings(
         default_llm_provider="any-provider",
         default_model="any-model",

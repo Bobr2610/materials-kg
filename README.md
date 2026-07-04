@@ -60,8 +60,7 @@ data gaps, evidence search, and source overview, then returns the same typed
 LLM provider wiring is centralized in `kg_engine/llm_core/provider.py`.
 `kg_engine/agents/` does not keep its own provider list: it asks `llm_core` for
 an agent-compatible chat model. Provider choice is explicit: set
-`DEFAULT_LLM_PROVIDER`, `DEFAULT_MODEL`, and either `<PROVIDER>_API_KEY` /
-`<PROVIDER>_BASE_URL` or universal `LLM_API_KEY` / `LLM_BASE_URL`.
+`DEFAULT_LLM_PROVIDER`, `DEFAULT_MODEL`, `LLM_API_KEY`, and `LLM_BASE_URL`.
 
 The factory generates interpretable candidates from graph evidence:
 

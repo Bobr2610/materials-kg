@@ -24,6 +24,7 @@ from kg_engine.domain.models import ReferenceDataBatch
 from kg_engine.domain.models import TextUnitInput
 from kg_engine.llm_core.extraction import extract_entities_from_document
 from kg_engine.llm_core.extraction import select_extraction_strategy
+from kg_engine.llm_core.extraction import structure_upload_with_llm
 from kg_engine.repositories.memory import InMemoryMaterialsKGRepository
 from kg_engine.services.materials_kg import MaterialsKGService
 
@@ -711,7 +712,38 @@ def test_extraction_strategy_handles_empty_simple_numeric_and_long_documents() -
         select_extraction_strategy("results", "Hardness reached 36 HRC after anneal")
         == "phased"
     )
-    assert select_extraction_strategy("long", "CuCrZr " * 5000) == "chunked_phased"
+    assert select_extraction_strategy("long", "CuCrZr " * 12000) == "chunked_phased"
+
+
+def test_extraction_strategy_uses_extraction_budget_not_embedding_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from kg_engine.config.settings import settings
+
+    monkeypatch.setattr(settings, "llm_embedding_truncation_chars", 8_000)
+    monkeypatch.setattr(settings, "materials_llm_extraction_max_chars", 80_000)
+
+    assert select_extraction_strategy("medium", "CuCrZr " * 5000) == "phased"
+
+
+def test_structure_upload_uses_extraction_budget_not_embedding_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from kg_engine.config.settings import settings
+
+    marker = "TAIL_MARKER_AFTER_EMBEDDING_BUDGET"
+    provider = _QueuedJSONProvider([{"documents": []}])
+    monkeypatch.setattr(settings, "llm_embedding_truncation_chars", 1_000)
+    monkeypatch.setattr(settings, "materials_llm_extraction_max_chars", 20_000)
+
+    structure_upload_with_llm(
+        provider,  # type: ignore[arg-type]
+        "large.json",
+        "json",
+        {"payload": "A" * 5_000 + marker},
+    )
+
+    assert marker in provider.messages[0][1]["content"]
 
 
 def test_ingest_documents_writes_llm_extracted_graph_data_with_evidence() -> None:

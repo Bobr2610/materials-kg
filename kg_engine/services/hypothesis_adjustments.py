@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from kg_engine.domain.models import HypothesisScore
 from kg_engine.domain.models import ResearchHypothesis
 
 DEFAULT_RANKING_WEIGHTS: dict[str, float] = {
@@ -97,12 +96,14 @@ def apply_expert_adjustments(
         if not isinstance(adjustment, dict):
             continue
         if adjustment.get("reject"):
-            hypothesis.score = HypothesisScore(
-                novelty=0,
-                risk=1.0,
-                value=0,
-                evidence_strength=0,
-                final_score=0,
+            hypothesis.score = hypothesis.score.model_copy(
+                update={
+                    "novelty": 0,
+                    "risk": 1.0,
+                    "value": 0,
+                    "evidence_strength": 0,
+                    "final_score": 0,
+                }
             )
         else:
             new_novelty = hypothesis.score.novelty
@@ -131,12 +132,14 @@ def apply_expert_adjustments(
                     evidence_strength=new_evidence,
                     weights=ranking_weights,
                 )
-            hypothesis.score = HypothesisScore(
-                novelty=new_novelty,
-                risk=new_risk,
-                value=new_value,
-                evidence_strength=new_evidence,
-                final_score=final_score,
+            hypothesis.score = hypothesis.score.model_copy(
+                update={
+                    "novelty": new_novelty,
+                    "risk": new_risk,
+                    "value": new_value,
+                    "evidence_strength": new_evidence,
+                    "final_score": final_score,
+                }
             )
         if "note" in adjustment:
             hypothesis.expert_notes.append(str(adjustment["note"]))

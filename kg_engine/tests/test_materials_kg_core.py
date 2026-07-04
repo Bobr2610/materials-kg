@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
+import pytest
+
+from kg_engine.config.settings import settings
 from kg_engine.domain.models import CanonicalEntityInput
 from kg_engine.domain.models import CoverageRuleInput
 from kg_engine.domain.models import DocumentInput
@@ -15,11 +19,29 @@ from kg_engine.domain.models import ReferenceDataBatch
 from kg_engine.domain.models import TextUnitInput
 from kg_engine.repositories.memory import InMemoryMaterialsKGRepository
 from kg_engine.services.materials_kg import MaterialsKGService
+from kg_engine.services.materials_kg import _document_extraction_batches
 
 
 def build_service() -> MaterialsKGService:
     repository = InMemoryMaterialsKGRepository()
     return MaterialsKGService(repository)
+
+
+class _QueuedJSONProvider:
+    def __init__(self, responses: list[dict[str, Any]]) -> None:
+        self.responses = list(responses)
+        self.messages: list[list[dict[str, str]]] = []
+
+    def chat_json(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        temperature: float,
+        max_tokens: int,
+    ) -> dict[str, Any]:
+        _ = (temperature, max_tokens)
+        self.messages.append(messages)
+        return self.responses.pop(0) if self.responses else {}
 
 
 def test_graph_data_matches_relative_filter_to_absolute_source_path() -> None:
@@ -476,6 +498,161 @@ def test_each_document_ingest_creates_document_entity_text_unit_and_relation() -
         and relation.relation_type == "tagged_with"
         for relation in relations
     )
+
+
+def test_document_extraction_batches_cover_all_text_units_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "materials_llm_extraction_batch_chars", 420)
+    monkeypatch.setattr(settings, "materials_llm_extraction_max_batches_per_document", 0)
+
+    document = DocumentInput(
+        document_id="large-doc",
+        title="Large textbook",
+        text="full document text",
+        text_units=[
+            TextUnitInput(
+                content=f"semantic unit {idx} " + ("tail context " * 12),
+                metadata={"page": idx, "block_id": f"b{idx}"},
+            )
+            for idx in range(1, 8)
+        ],
+    )
+
+    batches = _document_extraction_batches(document, max_chars=25_000)
+    metadata = batches[-1][2]
+
+    assert len(batches) > 1
+    assert metadata["processed_text_units"] == 7
+    assert metadata["omitted_text_units"] == 0
+    assert metadata["llm_extraction_truncated"] is False
+    assert all(batch[2]["coverage_scope"] == "full_document" for batch in batches)
+
+
+def test_document_extraction_batches_report_explicit_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "materials_llm_extraction_batch_chars", 420)
+    monkeypatch.setattr(settings, "materials_llm_extraction_max_batches_per_document", 2)
+
+    document = DocumentInput(
+        document_id="capped-doc",
+        title="Capped textbook",
+        text="full document text",
+        text_units=[
+            TextUnitInput(
+                content=f"semantic unit {idx} " + ("context " * 90),
+                metadata={"page": idx},
+            )
+            for idx in range(1, 8)
+        ],
+    )
+
+    batches = _document_extraction_batches(document, max_chars=25_000)
+    metadata = batches[-1][2]
+
+    assert len(batches) == 2
+    assert metadata["processed_text_units"] < metadata["total_text_units"]
+    assert metadata["omitted_text_units"] > 0
+    assert metadata["llm_extraction_truncated"] is True
+
+
+def test_document_extraction_batches_cover_raw_text_without_storing_full_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "materials_llm_extraction_batch_chars", 1_000)
+    monkeypatch.setattr(settings, "materials_llm_extraction_max_batches_per_document", 0)
+    monkeypatch.setattr(settings, "materials_llm_extraction_chunk_overlap", 100)
+
+    document = DocumentInput(
+        document_id="raw-doc",
+        title="Raw textbook",
+        text="A" * 2_700,
+    )
+
+    batches = _document_extraction_batches(document, max_chars=25_000)
+
+    assert len(batches) == 3
+    assert batches[0][2]["source_char_start"] == 0
+    assert batches[-1][2]["source_char_end"] == 2_700
+    assert batches[-1][2]["omitted_chars"] == 0
+    assert batches[-1][2]["llm_extraction_truncated"] is False
+
+
+def test_ingest_documents_extracts_graph_facts_from_tail_text_unit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "materials_llm_extraction_batch_chars", 1_000)
+    monkeypatch.setattr(settings, "materials_llm_extraction_max_batches_per_document", 0)
+
+    provider = _QueuedJSONProvider(
+        [
+            {"entities": [{"kind": "material", "name": "HeadMaterial"}]},
+            {"relationships": []},
+            {"experiments": []},
+            {
+                "entities": [
+                    {"kind": "material", "name": "TailMaterial"},
+                    {"kind": "process", "name": "TailProcess"},
+                ]
+            },
+            {
+                "relationships": [
+                    {
+                        "source": "TailMaterial",
+                        "target": "TailProcess",
+                        "type": "uses_process",
+                    }
+                ]
+            },
+            {"experiments": []},
+            {"experiments": []},
+        ]
+    )
+    service = MaterialsKGService(
+        InMemoryMaterialsKGRepository(),
+        llm_provider=provider,  # type: ignore[arg-type]
+    )
+
+    result = service.ingest_documents(
+        [
+            DocumentInput(
+                document_id="tail-doc",
+                title="Tail coverage report",
+                text="head context\n\ntail context",
+                source_ref="tail-doc.pdf",
+                text_units=[
+                    TextUnitInput(
+                        content=(
+                            "HeadMaterial appears in the first page. "
+                            + ("introductory context " * 42)
+                        ),
+                        metadata={"page": 1, "block_id": "head"},
+                    ),
+                    TextUnitInput(
+                        content=(
+                            "TailMaterial uses TailProcess in the final page. "
+                            "This is the relation that used to be missed. "
+                            + ("tail source context " * 42)
+                        ),
+                        metadata={"page": 200, "block_id": "tail"},
+                    ),
+                ],
+            )
+        ]
+    )
+
+    related = service.query_related("TailMaterial", relation_filters=["uses_process"])
+
+    assert result["llm_extraction_errors"] == []
+    assert len(provider.messages) == 6
+    assert "final page" in provider.messages[3][1]["content"]
+    assert related.relations
+    evidence = service.repository.list_evidence(related.relations[0].evidence_ids)
+    assert evidence[0].metadata["extraction_batch"]["page_end"] == 200
+    assert evidence[0].metadata["source_pages"] == [200]
+    assert evidence[0].metadata["page_end"] == 200
+    assert evidence[0].metadata["source_file"] == "tail-doc.pdf"
 
 
 class TestSourceGrounding:

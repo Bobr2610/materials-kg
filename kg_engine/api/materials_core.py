@@ -218,23 +218,15 @@ def _api_document_parser(
         vision_provider = None
         if vision_provider_name and vision_model:
             if not vision_api_key:
-                vision_api_key = (
-                    getattr(settings, f"{vision_provider_name}_api_key", "")
-                    or ""
-                ).strip()
+                vision_api_key = (settings.llm_api_key or "").strip()
             if not vision_base_url:
-                vision_base_url = (
-                    getattr(settings, f"{vision_provider_name}_base_url", "")
-                    or ""
-                ).strip()
+                vision_base_url = (settings.llm_base_url or "").strip()
             if vision_api_key or vision_base_url:
                 vision_settings_proxy = type("VisionSettings", (), {
                     "default_llm_provider": vision_provider_name,
                     "default_model": vision_model,
-                    f"{vision_provider_name}_api_key": vision_api_key,
-                    f"{vision_provider_name}_base_url": vision_base_url,
-                    "llm_api_key": "",
-                    "llm_base_url": "",
+                    "llm_api_key": vision_api_key,
+                    "llm_base_url": vision_base_url,
                 })()
                 config = resolve_chat_completions_config(vision_settings_proxy)
                 if config is not None:
@@ -1536,7 +1528,7 @@ def create_materials_app(
 
         shared_parser = _api_document_parser(
             runtime_settings,
-            enable_vision=False,
+            enable_vision=enable_vision,
         )
         if shared_parser is not None and max_pdf_pages is not None:
             from dataclasses import replace

@@ -538,14 +538,22 @@ def select_extraction_strategy(title: str, text: str) -> str:
     stripped = text.strip()
     if not stripped:
         return "empty"
-    try:
-        from kg_engine.config.settings import settings
-        budget = int(getattr(settings, "llm_embedding_truncation_chars", 25000))
-    except Exception:
-        budget = 25000
+    budget = _get_extraction_prompt_budget()
     if len(stripped) > budget:
         return "chunked_phased"
     return "phased"
+
+
+def _get_extraction_prompt_budget() -> int:
+    try:
+        from kg_engine.config.settings import settings
+
+        return max(
+            1_000,
+            int(getattr(settings, "materials_llm_extraction_max_chars", 80_000)),
+        )
+    except Exception:
+        return 80_000
 
 
 def _json_messages(role: str, prompt: str) -> list[dict[str, str]]:
@@ -845,9 +853,7 @@ def extract_entities_from_document(
     experiments without material_name, and relationships referencing unknown
     entities are silently dropped with warnings.
     """
-    from kg_engine.config.settings import settings
-
-    budget = settings.llm_embedding_truncation_chars
+    budget = _get_extraction_prompt_budget()
     truncated = text[:budget] if len(text) > budget else text
     if len(text) > budget:
         logger.info(
@@ -960,10 +966,8 @@ def structure_upload_with_llm(
     parsed_content: Any,
 ) -> dict[str, Any]:
     """Use the LLM to route arbitrary uploaded data into graph ingestion payloads."""
-    from kg_engine.config.settings import settings
-
     content = json.dumps(parsed_content, ensure_ascii=False, indent=2, default=str)
-    budget = settings.llm_embedding_truncation_chars
+    budget = _get_extraction_prompt_budget()
     truncated = content[:budget] if len(content) > budget else content
     messages = [
         {

@@ -221,7 +221,7 @@ def _document_extraction_batches(
     document: DocumentInput,
     max_chars: int,
 ) -> list[tuple[str, str, dict[str, Any]]]:
-    """Split large semantic documents into bounded agent extraction prompts."""
+    """Split documents into extraction prompts without silently dropping context."""
     try:
         from kg_engine.config.settings import settings
 
@@ -229,17 +229,22 @@ def _document_extraction_batches(
             getattr(settings, "materials_llm_extraction_batch_chars", 25_000)
         )
         max_batches = int(
-            getattr(settings, "materials_llm_extraction_max_batches_per_document", 4)
+            getattr(settings, "materials_llm_extraction_max_batches_per_document", 0)
+        )
+        overlap = int(
+            getattr(settings, "materials_llm_extraction_chunk_overlap", 2_000)
         )
     except Exception:
         batch_chars = 25_000
-        max_batches = 4
+        max_batches = 0
+        overlap = 2_000
     batch_chars = max(1_000, min(max_chars, batch_chars))
-    max_batches = max(1, max_batches)
+    max_batches = max(0, max_batches)
+    overlap = max(0, min(batch_chars - 1, overlap))
 
     if not document.text:
         return []
-    if len(document.text) <= batch_chars:
+    if not document.text_units and len(document.text) <= batch_chars:
         return [
             (
                 document.title,
@@ -248,27 +253,51 @@ def _document_extraction_batches(
                     "batch_index": 1,
                     "batch_count": 1,
                     "batch_source": "document_text",
+                    "coverage_scope": "full_document",
+                    "source_char_start": 0,
+                    "source_char_end": len(document.text),
                 },
             )
         ]
     if not document.text_units:
-        compact_text, compact_metadata = _compact_document_text_for_storage(
-            document.text,
-            document_id=document.document_id,
-        )
-        if not compact_text:
-            return []
+        batches: list[tuple[str, str, dict[str, Any]]] = []
+        start = 0
+        while start < len(document.text):
+            if max_batches and len(batches) >= max_batches:
+                break
+            end = min(start + batch_chars, len(document.text))
+            batch_number = len(batches) + 1
+            batches.append(
+                (
+                    f"{document.title} text batch {batch_number}",
+                    document.text[start:end],
+                    {
+                        "batch_index": batch_number,
+                        "batch_source": "document_text",
+                        "coverage_scope": "full_document",
+                        "source_char_start": start,
+                        "source_char_end": end,
+                    },
+                )
+            )
+            if end == len(document.text):
+                break
+            start = end - overlap if overlap else end
+        batch_count = len(batches)
+        omitted_chars = max(len(document.text) - (batches[-1][2]["source_char_end"] if batches else 0), 0)
         return [
             (
-                f"{document.title} semantic fallback",
-                compact_text,
+                title,
+                text,
                 {
-                    **compact_metadata,
-                    "batch_index": 1,
-                    "batch_count": 1,
-                    "batch_source": "compacted_document_text",
+                    **metadata,
+                    "batch_count": batch_count,
+                    "total_source_chars": len(document.text),
+                    "omitted_chars": omitted_chars,
+                    "llm_extraction_truncated": omitted_chars > 0,
                 },
             )
+            for title, text, metadata in batches
         ]
 
     batches: list[tuple[str, str, dict[str, Any]]] = []
@@ -282,7 +311,7 @@ def _document_extraction_batches(
 
     def flush() -> None:
         nonlocal current_parts, current_pages, current_chars
-        if not current_parts or len(batches) >= max_batches:
+        if not current_parts:
             return
         pages = sorted(set(current_pages))
         batch_number = len(batches) + 1
@@ -291,7 +320,7 @@ def _document_extraction_batches(
             "batch_index": batch_number,
             "batch_source": "semantic_text_units",
             "text_units": len(current_parts),
-            "llm_extraction_scope": "bounded_semantic_sample",
+            "coverage_scope": "full_document",
         }
         if pages:
             metadata["pages"] = pages
@@ -303,7 +332,7 @@ def _document_extraction_batches(
         current_chars = 0
 
     for index, text_unit in enumerate(document.text_units, start=1):
-        if len(batches) >= max_batches:
+        if max_batches and len(batches) >= max_batches:
             break
         metadata = text_unit.metadata
         page = metadata.get("page")
@@ -316,7 +345,7 @@ def _document_extraction_batches(
         part = f"{prefix}\n{text_unit.content}"
         if current_parts and current_chars + len(part) > target_chars:
             flush()
-            if len(batches) >= max_batches:
+            if max_batches and len(batches) >= max_batches:
                 break
         if len(part) > target_chars:
             part = part[: target_chars - 3].rstrip() + "..."
@@ -338,10 +367,57 @@ def _document_extraction_batches(
                 "total_text_units": total_units,
                 "processed_text_units": min(processed_units, total_units),
                 "omitted_text_units": max(total_units - processed_units, 0),
+                "llm_extraction_truncated": processed_units < total_units,
             },
         )
         for title, text, metadata in batches
     ]
+
+
+def _document_extraction_coverage_warnings(
+    document_id: str,
+    batches: list[tuple[str, str, dict[str, Any]]],
+) -> list[str]:
+    if not batches:
+        return []
+    metadata = batches[-1][2]
+    if not metadata.get("llm_extraction_truncated"):
+        return []
+    omitted_units = int(metadata.get("omitted_text_units") or 0)
+    omitted_chars = int(metadata.get("omitted_chars") or 0)
+    if omitted_units:
+        return [
+            f"{document_id}: LLM extraction capped; omitted {omitted_units} text units"
+        ]
+    if omitted_chars:
+        return [
+            f"{document_id}: LLM extraction capped; omitted {omitted_chars} source chars"
+        ]
+    return [f"{document_id}: LLM extraction capped"]
+
+
+def _build_extraction_context(
+    *,
+    source_file: str,
+    agent_trace: list[dict[str, Any]],
+    batch_metadata: dict[str, Any],
+) -> dict[str, Any]:
+    context: dict[str, Any] = {
+        "source_file": source_file,
+        "agent_trace": agent_trace,
+        "extraction_batch": batch_metadata,
+    }
+    if "pages" in batch_metadata:
+        context["source_pages"] = batch_metadata["pages"]
+    if "page_start" in batch_metadata:
+        context["page_start"] = batch_metadata["page_start"]
+    if "page_end" in batch_metadata:
+        context["page_end"] = batch_metadata["page_end"]
+    if "source_char_start" in batch_metadata:
+        context["source_char_start"] = batch_metadata["source_char_start"]
+    if "source_char_end" in batch_metadata:
+        context["source_char_end"] = batch_metadata["source_char_end"]
+    return context
 
 
 def _entity_matches_sources(entity: Entity, source_set: set[str]) -> bool:
@@ -713,6 +789,12 @@ class MaterialsKGService:
                 if self._llm and enable_llm_extraction
                 else []
             )
+            llm_extraction_errors.extend(
+                _document_extraction_coverage_warnings(
+                    document.document_id,
+                    extraction_batches,
+                )
+            )
 
             if extraction_batches:
                 try:
@@ -728,11 +810,11 @@ class MaterialsKGService:
                             self._llm, batch_title, batch_text
                         )
                         extraction_method = extraction.extraction_engine
-                        extraction_context = {
-                            "source_file": doc_src,
-                            "agent_trace": extraction.agent_trace,
-                            "extraction_batch": batch_metadata,
-                        }
+                        extraction_context = _build_extraction_context(
+                            source_file=doc_src,
+                            agent_trace=extraction.agent_trace,
+                            batch_metadata=batch_metadata,
+                        )
 
                         name_to_id: dict[str, str] = {}
                         for ent in extraction.entities:
@@ -1082,6 +1164,12 @@ class MaterialsKGService:
                 if self._llm and enable_llm_extraction
                 else []
             )
+            local_errors.extend(
+                _document_extraction_coverage_warnings(
+                    document.document_id,
+                    extraction_batches,
+                )
+            )
 
             if extraction_batches:
                 try:
@@ -1090,11 +1178,11 @@ class MaterialsKGService:
                             self._llm, batch_title, batch_text
                         )
                         extraction_method = extraction.extraction_engine
-                        extraction_context = {
-                            "source_file": doc_src,
-                            "agent_trace": extraction.agent_trace,
-                            "extraction_batch": batch_metadata,
-                        }
+                        extraction_context = _build_extraction_context(
+                            source_file=doc_src,
+                            agent_trace=extraction.agent_trace,
+                            batch_metadata=batch_metadata,
+                        )
 
                         name_to_id: dict[str, str] = {}
                         for ent in extraction.entities:
