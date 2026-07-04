@@ -6,12 +6,16 @@ import csv
 import asyncio
 import io
 import json
+import mimetypes
 import tempfile
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
 from threading import Lock
 from typing import TYPE_CHECKING
+from typing import Any
+from urllib.parse import unquote
+from urllib.parse import urlparse
 from uuid import uuid4
 
 from fastapi import BackgroundTasks
@@ -68,6 +72,7 @@ _STRUCTURED_SUFFIXES = {".json", ".jsonl", ".csv", ".tsv"}
 _PARSER_SUFFIXES = {".docx", ".xlsx", ".xls", ".pdf", ".html", ".htm"}
 _IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff", ".bmp"}
 _MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50 MB
+_URL_DOWNLOAD_TIMEOUT_SECONDS = 30.0
 _SAMPLE_DATA_DIR = Path(__file__).resolve().parents[2] / "kg_engine" / "tests" / "data"
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _TASK_MATERIALS_DIRS = (
@@ -97,6 +102,14 @@ _EXPERIMENT_KEYS = {
     "observations",
 }
 _DOCUMENT_KEYS = {"document_id", "text", "content", "body"}
+
+
+class UrlIngestRequest(BaseModel):
+    """URL source requested for ingestion."""
+
+    url: str = Field(min_length=1)
+    filename: str | None = Field(default=None, max_length=240)
+    max_bytes: int = Field(default=_MAX_UPLOAD_SIZE, gt=0, le=_MAX_UPLOAD_SIZE)
 
 
 class _TemporaryProviderTimeout:
@@ -254,15 +267,24 @@ def _api_document_parser(
         return None
 
 
-def _mark_uploaded_from(payload: object, name: str) -> None:
+def _mark_uploaded_from(
+    payload: object,
+    name: str,
+    *,
+    source_ref: str | None = None,
+) -> None:
     if isinstance(payload, dict):
         payload["_uploaded_from"] = name
+        if source_ref:
+            payload.setdefault("source_ref", source_ref)
         metadata = payload.setdefault("metadata", {})
         if isinstance(metadata, dict):
             metadata.setdefault("source_file", name)
+            if source_ref:
+                metadata.setdefault("source_url", source_ref)
     elif isinstance(payload, list):
         for item in payload:
-            _mark_uploaded_from(item, name)
+            _mark_uploaded_from(item, name, source_ref=source_ref)
 
 
 def _looks_like_reference_record(item: dict) -> bool:
@@ -312,6 +334,7 @@ def _append_llm_structured_payload(
     *,
     structured: dict,
     name: str,
+    source_ref: str | None = None,
     ref_payload: dict,
     exp_payload: list,
     doc_payload: list,
@@ -323,19 +346,19 @@ def _append_llm_structured_payload(
             values = reference.get(key)
             if isinstance(values, list) and values:
                 for item in values:
-                    _mark_uploaded_from(item, name)
+                    _mark_uploaded_from(item, name, source_ref=source_ref)
                 ref_payload.setdefault(key, []).extend(values)
                 added = True
     experiments = structured.get("experiments")
     if isinstance(experiments, list) and experiments:
         for item in experiments:
-            _mark_uploaded_from(item, name)
+            _mark_uploaded_from(item, name, source_ref=source_ref)
         exp_payload.extend(experiments)
         added = True
     documents = structured.get("documents")
     if isinstance(documents, list) and documents:
         for item in documents:
-            _mark_uploaded_from(item, name)
+            _mark_uploaded_from(item, name, source_ref=source_ref)
         doc_payload.extend(documents)
         added = True
     return added
@@ -346,6 +369,7 @@ def _append_as_searchable_documents(
     parsed: object,
     name: str,
     doc_payload: list,
+    source_ref: str | None = None,
 ) -> None:
     items = parsed if isinstance(parsed, list) else [parsed]
     for item_index, item in enumerate(items):
@@ -356,8 +380,8 @@ def _append_as_searchable_documents(
                 "document_id": f"{name}#row-{item_index}",
                 "title": f"{Path(name).stem} #row-{item_index}",
                 "text": json.dumps(item, ensure_ascii=False, default=str),
-                "source_ref": name,
-                "metadata": {"source_file": name},
+                "source_ref": source_ref or name,
+                "metadata": _metadata_for_source(name, source_ref),
             }
         )
 
@@ -370,12 +394,13 @@ def _append_parsed_payload_without_llm(
     ref_payload: dict,
     exp_payload: list,
     doc_payload: list,
+    source_ref: str | None = None,
 ) -> None:
     if suffix in _TEXT_SUFFIXES:
         items = parsed if isinstance(parsed, list) else [parsed]
         for item in items:
             if isinstance(item, dict):
-                _mark_uploaded_from(item, name)
+                _mark_uploaded_from(item, name, source_ref=source_ref)
                 doc_payload.append(item)
         return
     if isinstance(parsed, dict):
@@ -383,33 +408,34 @@ def _append_parsed_payload_without_llm(
             values = parsed.get(key)
             if isinstance(values, list):
                 for item in values:
-                    _mark_uploaded_from(item, name)
+                    _mark_uploaded_from(item, name, source_ref=source_ref)
                 ref_payload.setdefault(key, []).extend(values)
         experiments = parsed.get("experiments")
         if isinstance(experiments, list):
             for item in experiments:
-                _mark_uploaded_from(item, name)
+                _mark_uploaded_from(item, name, source_ref=source_ref)
             exp_payload.extend(experiments)
         documents = parsed.get("documents")
         if isinstance(documents, list):
             for item in documents:
-                _mark_uploaded_from(item, name)
+                _mark_uploaded_from(item, name, source_ref=source_ref)
             doc_payload.extend(documents)
         if not any(key in parsed for key in _REFERENCE_KEYS | {"experiments"}):
             if _looks_like_reference_record(parsed):
-                _mark_uploaded_from(parsed, name)
+                _mark_uploaded_from(parsed, name, source_ref=source_ref)
                 ref_payload.setdefault("entities", []).append(parsed)
             elif _looks_like_experiment_record(parsed):
-                _mark_uploaded_from(parsed, name)
+                _mark_uploaded_from(parsed, name, source_ref=source_ref)
                 exp_payload.append(parsed)
             elif _looks_like_document_record(parsed):
-                _mark_uploaded_from(parsed, name)
+                _mark_uploaded_from(parsed, name, source_ref=source_ref)
                 doc_payload.append(parsed)
             else:
                 _append_as_searchable_documents(
                     parsed=parsed,
                     name=name,
                     doc_payload=doc_payload,
+                    source_ref=source_ref,
                 )
         return
     if isinstance(parsed, list):
@@ -417,13 +443,13 @@ def _append_parsed_payload_without_llm(
             if not isinstance(item, dict):
                 continue
             if _looks_like_reference_record(item):
-                _mark_uploaded_from(item, name)
+                _mark_uploaded_from(item, name, source_ref=source_ref)
                 ref_payload.setdefault("entities", []).append(item)
             elif _looks_like_experiment_record(item):
-                _mark_uploaded_from(item, name)
+                _mark_uploaded_from(item, name, source_ref=source_ref)
                 exp_payload.append(item)
             elif _looks_like_document_record(item):
-                _mark_uploaded_from(item, name)
+                _mark_uploaded_from(item, name, source_ref=source_ref)
                 doc_payload.append(item)
             else:
                 doc_payload.append(
@@ -431,9 +457,353 @@ def _append_parsed_payload_without_llm(
                         "document_id": f"{name}#row-{item_index}",
                         "title": f"{Path(name).stem} #row-{item_index}",
                         "text": json.dumps(item, ensure_ascii=False),
-                        "metadata": {"source_file": name},
+                        "source_ref": source_ref or name,
+                        "metadata": _metadata_for_source(name, source_ref),
                     }
                 )
+
+
+def _metadata_for_source(name: str, source_ref: str | None = None) -> dict[str, str]:
+    metadata = {"source_file": name}
+    if source_ref:
+        metadata["source_url"] = source_ref
+    return metadata
+
+
+def _fallback_document_payload(
+    *,
+    name: str,
+    content: bytes,
+    source_ref: str | None,
+    message: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "document_id": name,
+        "title": Path(name).stem,
+        "text": message or content.decode("utf-8", errors="replace"),
+        "source_ref": source_ref or name,
+        "metadata": _metadata_for_source(name, source_ref),
+    }
+
+
+async def _download_url_bytes(url: str, max_bytes: int) -> tuple[bytes, str | None]:
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        message = "Only absolute http/https URLs are supported"
+        raise ValueError(message)
+
+    import httpx
+
+    async with httpx.AsyncClient(
+        follow_redirects=True,
+        timeout=_URL_DOWNLOAD_TIMEOUT_SECONDS,
+    ) as client:
+        response = await client.get(url)
+        response.raise_for_status()
+        content = response.content
+    if len(content) > max_bytes:
+        limit_mb = max_bytes // (1024 * 1024)
+        message = f"Downloaded source exceeds {limit_mb} MB limit"
+        raise ValueError(message)
+    return content, response.headers.get("content-type")
+
+
+def _filename_from_url(
+    url: str,
+    content_type: str | None,
+    explicit_filename: str | None,
+) -> str:
+    if explicit_filename:
+        candidate = explicit_filename.strip()
+    else:
+        path_name = Path(unquote(urlparse(url).path)).name
+        candidate = path_name.strip() or "downloaded-source"
+    candidate = candidate.replace("\\", "/").split("/")[-1]
+    candidate = "".join(
+        char if char.isalnum() or char in {" ", ".", "_", "-"} else "_"
+        for char in candidate
+    ).strip(" .")
+    if not candidate:
+        candidate = "downloaded-source"
+    if Path(candidate).suffix:
+        return candidate
+
+    media_type = (content_type or "").split(";", 1)[0].strip().lower()
+    extension = {
+        "text/markdown": ".md",
+        "text/x-markdown": ".md",
+        "application/json": ".json",
+        "application/pdf": ".pdf",
+        "text/html": ".html",
+        "text/plain": ".txt",
+    }.get(media_type)
+    if extension is None:
+        extension = mimetypes.guess_extension(media_type) if media_type else None
+    return f"{candidate}{extension or '.txt'}"
+
+
+async def _ingest_named_contents(
+    *,
+    runtime_service: MaterialsKGService,
+    sources: list[dict[str, Any]],
+) -> dict:
+    ref_payload: dict = {}
+    exp_payload: list = []
+    doc_payload: list = []
+    uploaded: list[dict] = []
+    ingestion_status = {
+        "llm_provider_enabled": runtime_service.llm_provider is not None,
+        "llm_structured_files": [],
+        "searchable_fallback_files": [],
+        "fallback_reasons": {},
+        "text_document_files": [],
+    }
+    for source in sources:
+        name = source["name"]
+        content = source["content"]
+        source_ref = source.get("source_ref")
+        source_url = source.get("url")
+        if len(content) > _MAX_UPLOAD_SIZE:
+            limit_mb = _MAX_UPLOAD_SIZE // (1024 * 1024)
+            raise HTTPException(
+                status_code=413,
+                detail=f"File '{name}' exceeds {limit_mb} MB limit",
+            )
+        parsed = _parse_uploaded_file(name, content)
+        suffix = Path(name).suffix.lower()
+        upload_record = {
+            "name": name,
+            "size": len(content),
+            "type": suffix.lstrip(".") or "unknown",
+        }
+        if source_url:
+            upload_record["url"] = source_url
+        uploaded.append(upload_record)
+
+        # DOCX/XLSX/PDF/HTML — document block parser (MarkItDown + optional VLM)
+        if suffix in _PARSER_SUFFIXES:
+            parser = _api_document_parser()
+            if parser is not None:
+                tmp_path = None
+                try:
+                    with tempfile.NamedTemporaryFile(
+                        suffix=suffix,
+                        delete=False,
+                    ) as tmp:
+                        tmp.write(content)
+                        tmp_path = Path(tmp.name)
+                    from kg_engine.ingestion.document_blocks import parse_document_file
+
+                    document = parse_document_file(tmp_path, parser=parser)
+                    document_payload = document.model_dump(mode="json")
+                    document_payload["document_id"] = name
+                    document_payload["title"] = Path(name).stem
+                    document_payload["source_ref"] = source_ref or name
+                    metadata = document_payload.setdefault("metadata", {})
+                    if isinstance(metadata, dict):
+                        metadata.update(_metadata_for_source(name, source_ref))
+                    doc_payload.append(document_payload)
+                    ingestion_status["llm_structured_files"].append(name)
+                except Exception:
+                    ingestion_status["searchable_fallback_files"].append(name)
+                    ingestion_status["fallback_reasons"][name] = (
+                        "document_parser_failed"
+                    )
+                    doc_payload.append(
+                        _fallback_document_payload(
+                            name=name,
+                            content=content,
+                            source_ref=source_ref,
+                        )
+                    )
+                finally:
+                    if tmp_path is not None:
+                        tmp_path.unlink(missing_ok=True)
+            else:
+                ingestion_status["searchable_fallback_files"].append(name)
+                ingestion_status["fallback_reasons"][name] = "no_parser_available"
+                doc_payload.append(
+                    _fallback_document_payload(
+                        name=name,
+                        content=content,
+                        source_ref=source_ref,
+                    )
+                )
+            continue
+
+        # PNG/JPG/etc — image block parser (VL conductor)
+        if suffix in _IMAGE_SUFFIXES:
+            parser = _api_document_parser()
+            if parser is not None:
+                tmp_path = None
+                try:
+                    with tempfile.NamedTemporaryFile(
+                        suffix=suffix,
+                        delete=False,
+                    ) as tmp:
+                        tmp.write(content)
+                        tmp_path = Path(tmp.name)
+                    from kg_engine.ingestion.document_blocks import parse_document_file
+
+                    document = parse_document_file(tmp_path, parser=parser)
+                    document_payload = document.model_dump(mode="json")
+                    document_payload["document_id"] = name
+                    document_payload["title"] = Path(name).stem
+                    document_payload["source_ref"] = source_ref or name
+                    metadata = document_payload.setdefault("metadata", {})
+                    if isinstance(metadata, dict):
+                        metadata.update(_metadata_for_source(name, source_ref))
+                    if document.text.strip() or document.text_units:
+                        doc_payload.append(document_payload)
+                        ingestion_status["llm_structured_files"].append(name)
+                    else:
+                        doc_payload.append(
+                            _fallback_document_payload(
+                                name=name,
+                                content=content,
+                                source_ref=source_ref,
+                                message=(
+                                    f"Image {name} processed but no text extracted."
+                                ),
+                            )
+                        )
+                        ingestion_status["searchable_fallback_files"].append(name)
+                except Exception:
+                    ingestion_status["searchable_fallback_files"].append(name)
+                    ingestion_status["fallback_reasons"][name] = "image_parser_failed"
+                    doc_payload.append(
+                        _fallback_document_payload(
+                            name=name,
+                            content=content,
+                            source_ref=source_ref,
+                            message=f"Image {name} could not be processed.",
+                        )
+                    )
+                finally:
+                    if tmp_path is not None:
+                        tmp_path.unlink(missing_ok=True)
+            else:
+                ingestion_status["searchable_fallback_files"].append(name)
+                ingestion_status["fallback_reasons"][name] = "no_parser_available"
+                doc_payload.append(
+                    _fallback_document_payload(
+                        name=name,
+                        content=content,
+                        source_ref=source_ref,
+                        message=f"Image {name} — no VL parser available.",
+                    )
+                )
+            continue
+
+        # TXT/MD — raw text documents
+        if suffix in _TEXT_SUFFIXES:
+            ingestion_status["text_document_files"].append(name)
+            if parsed is None:
+                doc_payload.append(
+                    _fallback_document_payload(
+                        name=name,
+                        content=content,
+                        source_ref=source_ref,
+                    )
+                )
+            else:
+                items = parsed if isinstance(parsed, list) else [parsed]
+                for item in items:
+                    if isinstance(item, dict):
+                        _mark_uploaded_from(item, name, source_ref=source_ref)
+                if isinstance(parsed, list):
+                    doc_payload.extend(items)
+                else:
+                    doc_payload.append(parsed)
+            continue
+
+        # JSON/CSV/TSV — structured data with LLM structuring
+        if suffix in _STRUCTURED_SUFFIXES:
+            structured_added = False
+            if runtime_service.llm_provider and parsed is not None:
+                try:
+                    from kg_engine.llm_core.extraction import structure_upload_with_llm
+
+                    structured = structure_upload_with_llm(
+                        runtime_service.llm_provider,
+                        name,
+                        suffix.lstrip(".") or "structured",
+                        parsed,
+                    )
+                    structured_added = _append_llm_structured_payload(
+                        structured=structured,
+                        name=name,
+                        source_ref=source_ref,
+                        ref_payload=ref_payload,
+                        exp_payload=exp_payload,
+                        doc_payload=doc_payload,
+                    )
+                except Exception:
+                    structured_added = False
+            if structured_added:
+                ingestion_status["llm_structured_files"].append(name)
+            else:
+                ingestion_status["searchable_fallback_files"].append(name)
+                ingestion_status["fallback_reasons"][name] = (
+                    "llm_unavailable_or_empty_payload"
+                    if runtime_service.llm_provider
+                    else "llm_provider_disabled"
+                )
+                if parsed is not None:
+                    _append_as_searchable_documents(
+                        parsed=parsed,
+                        name=name,
+                        doc_payload=doc_payload,
+                        source_ref=source_ref,
+                    )
+                else:
+                    doc_payload.append(
+                        _fallback_document_payload(
+                            name=name,
+                            content=content,
+                            source_ref=source_ref,
+                        )
+                    )
+            continue
+
+        if parsed is not None:
+            _append_parsed_payload_without_llm(
+                parsed=parsed,
+                name=name,
+                suffix=suffix,
+                ref_payload=ref_payload,
+                exp_payload=exp_payload,
+                doc_payload=doc_payload,
+                source_ref=source_ref,
+            )
+        else:
+            doc_payload.append(
+                _fallback_document_payload(
+                    name=name,
+                    content=content,
+                    source_ref=source_ref,
+                )
+            )
+
+    results = {}
+    if ref_payload:
+        results["reference"] = runtime_service.ingest_reference_data(
+            ReferenceDataAdapter().from_payload(ref_payload)
+        )
+    if exp_payload:
+        results["experiments"] = runtime_service.ingest_experiments(
+            ExperimentCatalogAdapter().from_payload(exp_payload)
+        )
+    if doc_payload:
+        results["documents"] = await runtime_service.ingest_documents_async(
+            DocumentCorpusAdapter().from_payload(doc_payload),
+            parallel_workers=4,
+        )
+    results["ingestion"] = ingestion_status
+    results["uploaded"] = uploaded
+    results["overview"] = runtime_service.get_source_overview()
+    results["suggested_questions"] = runtime_service.get_suggested_questions()
+    return results
 
 
 def _find_task_materials_dir() -> tuple[Path | None, bool, list[str]]:
@@ -972,308 +1342,45 @@ def create_materials_app(
 
     @app.post("/ingest/upload")
     async def ingest_upload(files: list[UploadFile]) -> dict:
-        ref_payload: dict = {}
-        exp_payload: list = []
-        doc_payload: list = []
-        uploaded: list[dict] = []
-        ingestion_status = {
-            "llm_provider_enabled": runtime_service.llm_provider is not None,
-            "llm_structured_files": [],
-            "searchable_fallback_files": [],
-            "fallback_reasons": {},
-            "text_document_files": [],
-        }
+        sources: list[dict[str, Any]] = []
         for upload in files:
             name = upload.filename or "unnamed"
             content = await upload.read()
-            if len(content) > _MAX_UPLOAD_SIZE:
-                raise HTTPException(
-                    status_code=413,
-                    detail=f"File '{name}' exceeds {_MAX_UPLOAD_SIZE // (1024 * 1024)} MB limit",
-                )
-            parsed = _parse_uploaded_file(name, content)
-            suffix = Path(name).suffix.lower()
-            uploaded.append(
+            sources.append({"name": name, "content": content})
+        results = await _ingest_named_contents(
+            runtime_service=runtime_service,
+            sources=sources,
+        )
+        _source_files.extend(results["uploaded"])
+        return results
+
+    @app.post("/ingest/url")
+    async def ingest_url(request: UrlIngestRequest) -> dict:
+        try:
+            content, content_type = await _download_url_bytes(
+                request.url,
+                request.max_bytes,
+            )
+            name = _filename_from_url(request.url, content_type, request.filename)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Failed to download URL: {exc}",
+            ) from exc
+        results = await _ingest_named_contents(
+            runtime_service=runtime_service,
+            sources=[
                 {
                     "name": name,
-                    "size": len(content),
-                    "type": suffix.lstrip(".") or "unknown",
+                    "content": content,
+                    "url": request.url,
+                    "source_ref": request.url,
                 }
-            )
-
-            # 1. DOCX/XLSX/PDF/HTML — document block parser (MarkItDown + VLM)
-            if suffix in _PARSER_SUFFIXES:
-                parser = _api_document_parser()
-                if parser is not None:
-                    tmp_path = None
-                    try:
-                        import tempfile
-
-                        with tempfile.NamedTemporaryFile(
-                            suffix=suffix, delete=False
-                        ) as tmp:
-                            tmp.write(content)
-                            tmp_path = Path(tmp.name)
-                        from kg_engine.ingestion.document_blocks import (
-                            parse_document_file,
-                        )
-
-                        document = parse_document_file(tmp_path, parser=parser)
-                        doc_payload.append(document.model_dump(mode="json"))
-                        ingestion_status["llm_structured_files"].append(name)
-                    except Exception:
-                        ingestion_status["searchable_fallback_files"].append(name)
-                        ingestion_status["fallback_reasons"][name] = (
-                            "document_parser_failed"
-                        )
-                        doc_payload.append(
-                            {
-                                "document_id": name,
-                                "title": Path(name).stem,
-                                "text": content.decode("utf-8", errors="replace"),
-                                "metadata": {"source_file": name},
-                            }
-                        )
-                    finally:
-                        if tmp_path is not None:
-                            tmp_path.unlink(missing_ok=True)
-                else:
-                    ingestion_status["searchable_fallback_files"].append(name)
-                    ingestion_status["fallback_reasons"][name] = "no_parser_available"
-                    doc_payload.append(
-                        {
-                            "document_id": name,
-                            "title": Path(name).stem,
-                            "text": content.decode("utf-8", errors="replace"),
-                            "metadata": {"source_file": name},
-                        }
-                    )
-                continue
-
-            # 1b. PNG/JPG/etc — image block parser (VL conductor)
-            if suffix in _IMAGE_SUFFIXES:
-                parser = _api_document_parser()
-                if parser is not None:
-                    tmp_path = None
-                    try:
-                        import tempfile
-
-                        with tempfile.NamedTemporaryFile(
-                            suffix=suffix, delete=False
-                        ) as tmp:
-                            tmp.write(content)
-                            tmp_path = Path(tmp.name)
-                        from kg_engine.ingestion.document_blocks import (
-                            parse_document_file,
-                        )
-
-                        document = parse_document_file(tmp_path, parser=parser)
-                        if document.text.strip() or document.text_units:
-                            doc_payload.append(document.model_dump(mode="json"))
-                            ingestion_status["llm_structured_files"].append(name)
-                        else:
-                            doc_payload.append(
-                                {
-                                    "document_id": name,
-                                    "title": Path(name).stem,
-                                    "text": f"Image {name} processed but no text extracted.",
-                                    "metadata": {"source_file": name},
-                                }
-                            )
-                            ingestion_status["searchable_fallback_files"].append(name)
-                    except Exception:
-                        ingestion_status["searchable_fallback_files"].append(name)
-                        ingestion_status["fallback_reasons"][name] = (
-                            "image_parser_failed"
-                        )
-                        doc_payload.append(
-                            {
-                                "document_id": name,
-                                "title": Path(name).stem,
-                                "text": f"Image {name} could not be processed.",
-                                "metadata": {"source_file": name},
-                            }
-                        )
-                    finally:
-                        if tmp_path is not None:
-                            tmp_path.unlink(missing_ok=True)
-                else:
-                    ingestion_status["searchable_fallback_files"].append(name)
-                    ingestion_status["fallback_reasons"][name] = "no_parser_available"
-                    doc_payload.append(
-                        {
-                            "document_id": name,
-                            "title": Path(name).stem,
-                            "text": f"Image {name} — no VL parser available.",
-                            "metadata": {"source_file": name},
-                        }
-                    )
-                continue
-
-            # 2. TXT/MD — raw text documents
-            if suffix in _TEXT_SUFFIXES:
-                ingestion_status["text_document_files"].append(name)
-                if parsed is None:
-                    doc_payload.append(
-                        {
-                            "document_id": name,
-                            "title": Path(name).stem,
-                            "text": content.decode("utf-8", errors="replace"),
-                            "metadata": {"source_file": name},
-                        }
-                    )
-                else:
-                    items = parsed if isinstance(parsed, list) else [parsed]
-                    for item in items:
-                        if isinstance(item, dict):
-                            _mark_uploaded_from(item, name)
-                    if isinstance(parsed, list):
-                        doc_payload.extend(items)
-                    else:
-                        doc_payload.append(parsed)
-                continue
-
-            # 3. JSON/CSV/TSV — structured data with LLM structuring
-            if suffix in _STRUCTURED_SUFFIXES:
-                structured_added = False
-                if runtime_service.llm_provider and parsed is not None:
-                    try:
-                        from kg_engine.llm_core.extraction import (
-                            structure_upload_with_llm,
-                        )
-
-                        structured = structure_upload_with_llm(
-                            runtime_service.llm_provider,
-                            name,
-                            suffix.lstrip(".") or "structured",
-                            parsed,
-                        )
-                        structured_added = _append_llm_structured_payload(
-                            structured=structured,
-                            name=name,
-                            ref_payload=ref_payload,
-                            exp_payload=exp_payload,
-                            doc_payload=doc_payload,
-                        )
-                    except Exception:
-                        structured_added = False
-                if structured_added:
-                    ingestion_status["llm_structured_files"].append(name)
-                else:
-                    ingestion_status["searchable_fallback_files"].append(name)
-                    ingestion_status["fallback_reasons"][name] = (
-                        "llm_unavailable_or_empty_payload"
-                        if runtime_service.llm_provider
-                        else "llm_provider_disabled"
-                    )
-                    if parsed is not None:
-                        _append_as_searchable_documents(
-                            parsed=parsed,
-                            name=name,
-                            doc_payload=doc_payload,
-                        )
-                    else:
-                        doc_payload.append(
-                            {
-                                "document_id": name,
-                                "title": Path(name).stem,
-                                "text": content.decode("utf-8", errors="replace"),
-                                "metadata": {"source_file": name},
-                            }
-                        )
-                continue
-
-            # 4. Fallback — treat as searchable document
-            if parsed is not None:
-                for key in (
-                    "entities",
-                    "materials",
-                    "equipment",
-                    "properties",
-                    "modes",
-                    "teams",
-                    "documents",
-                    "tags",
-                    "coverage_rules",
-                ):
-                    if key in parsed and isinstance(parsed[key], list):
-                        for item in parsed[key]:
-                            _mark_uploaded_from(item, name)
-                        ref_payload.setdefault(key, []).extend(parsed[key])
-                if "experiments" in parsed and isinstance(parsed["experiments"], list):
-                    for item in parsed["experiments"]:
-                        _mark_uploaded_from(item, name)
-                    exp_payload.extend(parsed["experiments"])
-                if "documents" in parsed and isinstance(parsed["documents"], list):
-                    for item in parsed["documents"]:
-                        _mark_uploaded_from(item, name)
-                    doc_payload.extend(parsed["documents"])
-                if not any(
-                    k in parsed
-                    for k in ("entities", "materials", "experiments", "documents")
-                ):
-                    if (
-                        parsed.get("kind")
-                        or parsed.get("entity_kind")
-                        or parsed.get("type")
-                    ):
-                        _mark_uploaded_from(parsed, name)
-                        ref_payload.setdefault("entities", []).append(parsed)
-                    else:
-                        doc_payload.append(
-                            {
-                                "document_id": name,
-                                "title": Path(name).stem,
-                                "text": json.dumps(parsed, ensure_ascii=False),
-                                "metadata": {"source_file": name},
-                            }
-                        )
-            elif isinstance(parsed, list):
-                for item_index, item in enumerate(parsed):
-                    if not isinstance(item, dict):
-                        continue
-                    if item.get("kind") or item.get("entity_kind") or item.get("type"):
-                        _mark_uploaded_from(item, name)
-                        ref_payload.setdefault("entities", []).append(item)
-                    elif (item.get("experiment_id") or item.get("id")) and (
-                        item.get("material_name") or item.get("material")
-                    ):
-                        _mark_uploaded_from(item, name)
-                        exp_payload.append(item)
-                    elif (
-                        item.get("document_id")
-                        or item.get("text")
-                        or item.get("content")
-                    ):
-                        doc_payload.append(item)
-                    else:
-                        doc_payload.append(
-                            {
-                                "document_id": f"{name}#row-{item_index}",
-                                "title": f"{Path(name).stem} #row-{item_index}",
-                                "text": json.dumps(item, ensure_ascii=False),
-                                "metadata": {"source_file": name},
-                            }
-                        )
-        results = {}
-        if ref_payload:
-            results["reference"] = runtime_service.ingest_reference_data(
-                ReferenceDataAdapter().from_payload(ref_payload)
-            )
-        if exp_payload:
-            results["experiments"] = runtime_service.ingest_experiments(
-                ExperimentCatalogAdapter().from_payload(exp_payload)
-            )
-        if doc_payload:
-            results["documents"] = await runtime_service.ingest_documents_async(
-                DocumentCorpusAdapter().from_payload(doc_payload),
-                parallel_workers=4,
-            )
-        results["ingestion"] = ingestion_status
-        results["uploaded"] = uploaded
-        results["overview"] = runtime_service.get_source_overview()
-        results["suggested_questions"] = runtime_service.get_suggested_questions()
-        _source_files.extend(uploaded)
+            ],
+        )
+        _source_files.extend(results["uploaded"])
         return results
 
     @app.post("/demo/load-sample")

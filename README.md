@@ -104,12 +104,12 @@ These entrypoints support three complementary flows:
   and unknown rows/files are preserved as source documents instead of being guessed
   from filenames.
 
-The product ingestion API also accepts TXT, Markdown, PDF, DOCX, XLSX, PNG,
-JPEG, and TIFF through `POST /ingestion/jobs`. Each file is isolated from other
-batch failures, deduplicated by SHA-256, and stored as a `ParsedSource` with
-page, paragraph, sheet, row, table, or VL image provenance. Use
-`GET /ingestion/jobs/{id}` for status and
-`GET /sources/{checksum}/fragments` to inspect extracted fragments.
+The product ingestion API accepts TXT, Markdown, PDF, DOCX, XLSX, PNG, JPEG,
+and TIFF through `POST /ingest/upload`. It also accepts remote articles and
+reports through `POST /ingest/url` with a JSON body such as
+`{"url": "https://example.org/report.pdf"}`. Downloaded sources preserve both
+the resolved filename and original URL provenance, so graph views and source
+filters can scope queries to the URL.
 
 ## Research Projects
 

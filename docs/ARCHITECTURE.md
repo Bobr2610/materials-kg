@@ -120,7 +120,7 @@ Full deps: deepagents, langchain-core, neo4j, networkx, httpx, fastapi.
 | File | Purpose |
 |------|---------|
 | `__init__.py` | Docstring: "API entry points for the materials core API" |
-| `materials_core.py` | FastAPI app factory `create_materials_app()`. Endpoints: health, ingest (reference/experiments/documents/canonical/upload), demo sample + Task 1 materials loader, query (material-mode-property/search), hypotheses (deterministic+agent), JSON/CSV hypothesis export, metrics, expert feedback, adjustments, decision traces, coverage rules, destructive wipe, UI |
+| `materials_core.py` | FastAPI app factory `create_materials_app()`. Endpoints: health, ingest (reference/experiments/documents/canonical/upload/URL), demo sample + Task 1 materials loader, query (material-mode-property/search), hypotheses (deterministic+agent), JSON/CSV hypothesis export, metrics, expert feedback, adjustments, decision traces, coverage rules, destructive wipe, UI |
 
 ---
 
